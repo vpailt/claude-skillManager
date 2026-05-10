@@ -4,7 +4,8 @@ Desktop app that manages [Claude Code](https://claude.com/claude-code) skills an
 installed locally and lets you browse a GitHub-hosted marketplace, install/update plugins,
 and (admin) submit new skills or new versions back via GitHub PR.
 
-Ships as a single-file Windows `.exe` — **no Python, git, gh, or Claude CLI required at runtime.**
+Built with **Tauri 2 + React + Tailwind + shadcn/ui**. Ships as a single `.exe`
+(~6 MB) — **no Python, git, gh, or Claude CLI required at runtime.**
 
 ## What it does
 
@@ -17,26 +18,28 @@ Ships as a single-file Windows `.exe` — **no Python, git, gh, or Claude CLI re
   - **Not installed** — grey
   - **Local only** — blue (installed locally but not in the remote marketplace)
 - One-click install / update / uninstall, single plugin or whole marketplace.
-- Inline editor for `SKILL.md` (frontmatter + body).
-- Admin tab: create a new skill or bump a plugin version on a marketplace you own —
-  done via a GitHub branch + Contents API + PR (no git binary needed).
+- SKILL.md preview in the Skills tab.
+- Admin tab: create a new skill, bump a plugin version, add/remove plugins on a marketplace
+  you own — all via a GitHub branch + Contents API + PR (no git binary needed).
 
-## Run from source (development)
+## Prerequisites
 
+| Tool | Install |
+|---|---|
+| Rust 1.77+ | `winget install Rustlang.Rustup` |
+| MSVC linker | `winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"` |
+| Node.js 20+ | required for the Vite frontend |
+
+## Commands
+
+```pwsh
+.\build.ps1 -Dev          # hot-reload dev (Vite + Tauri)
+.\build.ps1 -NoBundle     # just the .exe (~5 min on first build, cached after)
+.\build.ps1               # .exe + NSIS installer
 ```
-python -m pip install -r requirements.txt
-python run.py
-```
 
-## Build the standalone .exe
-
-```
-.\build.ps1
-```
-
-This produces `dist\SkillManager.exe` (~50–80 MB, single file).
-The exe writes user settings to `%APPDATA%\SkillManager\settings.json` — nothing
-is written next to the executable, so you can copy it anywhere.
+Output: `src-tauri\target\release\skillmanager.exe`. Bundles land in
+`src-tauri\target\release\bundle\`.
 
 ## First-time setup
 
@@ -45,18 +48,18 @@ is written next to the executable, so you can copy it anywhere.
 3. Paste a GitHub Personal Access Token. Required scopes:
    - `repo` (full repo access) if you want admin uploads (branch + PR)
    - public read works without a token but is heavily rate-limited
-4. For each marketplace listed, fill the `owner/repo` field. Tick **Owned** for
-   marketplaces where you want admin upload to be available.
+4. For each marketplace, fill the `owner/repo` field. The Admin tab auto-shows
+   marketplaces where the token has push access (detected via
+   `/repos/{repo}/permissions`).
 5. Save → the catalog refreshes with remote info.
 
-## How the install mechanism works
+## How install works
 
-`install_from_github` does the same thing the official `claude plugin install` does, but
-in pure Python:
+The Rust `installer` does the same thing the official `claude plugin install` does:
 
-1. Downloads the repo zipball at the configured ref/branch via the GitHub API.
+1. Downloads the plugin's source repo zipball at the configured ref/branch via the GitHub API.
 2. Extracts it to `%USERPROFILE%\.claude\plugins\cache\<marketplace>\<plugin>\<version>\`,
-   stripping the top-level commit folder added by GitHub.
+   stripping the top-level commit folder GitHub adds.
 3. Patches `installed_plugins.json` with a new install record (scope, installPath,
    version, gitCommitSha, timestamps).
 
@@ -65,7 +68,7 @@ downloaded.
 
 ## How admin upload works
 
-`admin.submit_changes` makes a branch + PR via the GitHub REST API:
+`admin::submit_changes` makes a branch + PR via the GitHub REST API:
 
 1. `POST /git/refs` to create `refs/heads/skillmanager/<slug>-<timestamp>` from the
    default branch.
@@ -75,30 +78,62 @@ downloaded.
 
 No git CLI, no gh CLI — just HTTPS calls.
 
+## Admin wizards
+
+| Wizard | Trigger | What it does |
+|---|---|---|
+| **Add plugin** | "Add plugin" on a marketplace | Fetches `manifest.json` from the source repo, prepares a registry update, optionally creates the missing tag, opens a PR. |
+| **Bump plugin** | "Bump" on a plugin row | Suggests patch/minor/major bumps, optionally creates a tag on the plugin's source repo, opens a registry-bump PR. |
+| **Remove plugin** | "Remove" on a plugin row | Drops the entry from `marketplace.json`, opens a PR. |
+| **Upload skill** | "Upload skill" on a plugin row, or "Upgrade" on a remote skill row | Picks a local folder (auto-listed from `~/.claude/skills/`), validates SKILL.md frontmatter, optionally bumps version + companion marketplace PR, opens the skill PR. |
+| **Delete remote skill** | "Trash" on a remote skill row | Lists files under `skills/<name>/`, opens a deletion PR. |
+
+Every wizard funnels into a single `<DiffPreviewDialog>` that shows per-file unified
+diffs (via `react-diff-viewer-continued`), validation problems, conflicts (open PRs
+touching the same paths), a tag-creation prompt when needed, and an "Open PR"
+button that surfaces the resulting URL via toast.
+
 ## Project layout
 
 ```
 SkillManager/
-├── run.py                        # dev entry point
-├── SkillManager.spec             # PyInstaller spec (--onefile, windowed)
-├── build.ps1                     # one-shot build script
-├── requirements.txt              # build-time deps (PySide6, requests, PyInstaller)
-└── src/
-    ├── main.py                   # QApplication entry
-    ├── config.py                 # paths, settings.json
-    ├── models.py                 # domain types
-    ├── frontmatter.py            # tiny YAML-frontmatter parser
-    ├── _frontmatter_util.py      # editor save helper
-    ├── local_scanner.py          # ~/.claude scan
-    ├── github_client.py          # REST API client
-    ├── marketplace_remote.py     # remote-catalog fetch + local/remote merge
-    ├── installer.py              # install / update / uninstall
-    ├── admin.py                  # branch + PR
-    └── ui/
-        ├── main_window.py        # QMainWindow, refresh worker, detail panel
-        ├── plugins_tree.py       # tree grouping mp -> plugin -> skill
-        ├── skill_editor.py       # SKILL.md editor dialog
-        ├── settings_dialog.py    # token + marketplace config
-        ├── admin_dialog.py       # new skill / bump version
-        └── common.py             # state colors, busy cursor
+├── build.ps1                 # one-shot build script (dev / nobundle / full bundle)
+├── package.json              # Vite + React + shadcn/ui deps
+├── vite.config.ts            # Vite config (port 1420 for Tauri)
+├── tailwind.config.ts
+├── tsconfig.json
+├── index.html
+├── src/                      # React + TypeScript frontend
+│   ├── App.tsx
+│   ├── main.tsx
+│   ├── pages/                # Overview, Plugins, Skills, Admin, Settings
+│   ├── components/           # shadcn/ui primitives + app components
+│   ├── hooks/                # TanStack Query bridges
+│   ├── lib/                  # api.ts (invoke wrappers), types.ts
+│   ├── stores/               # Zustand: theme, app selection
+│   └── styles.css
+└── src-tauri/                # Rust backend
+    ├── Cargo.toml
+    ├── tauri.conf.json
+    ├── capabilities/default.json
+    ├── icons/
+    └── src/
+        ├── main.rs           # binary entry
+        ├── lib.rs            # tauri::generate_handler!
+        ├── commands/         # #[tauri::command] handlers
+        ├── models.rs         # domain types
+        ├── config.rs         # paths, settings.json
+        ├── frontmatter.rs    # tiny YAML-frontmatter parser
+        ├── github_client.rs  # REST API client
+        ├── plugin_state.rs   # ~/.claude/settings.json patch
+        ├── installer.rs      # install / update / uninstall
+        ├── marketplace_installer.rs
+        ├── marketplace_remote.rs
+        ├── local_scanner.rs  # ~/.claude scan
+        ├── registry.rs
+        ├── admin.rs          # branch + PR
+        ├── admin_drafts.rs
+        ├── pr_history.rs
+        ├── pending_prs.rs
+        └── error.rs
 ```

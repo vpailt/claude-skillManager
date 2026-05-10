@@ -1,24 +1,18 @@
-# PyInstaller / build artifacts
-build/
+# Node
+node_modules/
 dist/
-*.spec.bak
+.vite/
+*.tsbuildinfo
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-.eggs/
-
-# Virtual environments
-.venv/
-venv/
-env/
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/
 
 # IDE / editor
 .vscode/
 .idea/
 *.swp
+*.local
 
 # OS
 Thumbs.db
