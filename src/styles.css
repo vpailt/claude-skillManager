@@ -83,8 +83,13 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
   width: 4px; height: 100%; margin-inline: -1px;
 }
 
+/* Radix ScrollArea wraps children in a <div style="display:table;min-width:100%"> so
+   that wide intrinsic children (long URLs, code blocks) push the viewport sideways
+   instead of wrapping. Force block layout so content respects the available width. */
+[data-radix-scroll-area-viewport] > div { display: block !important; min-width: 0 !important; max-width: 100% !important; }
+
 /* Markdown body */
-.prose-skill { color: hsl(var(--foreground)); font-size: 0.875rem; line-height: 1.5; }
+.prose-skill { color: hsl(var(--foreground)); font-size: 0.875rem; line-height: 1.5; min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .prose-skill h1, .prose-skill h2, .prose-skill h3, .prose-skill h4 { font-weight: 600; margin-top: 1.1em; margin-bottom: 0.4em; }
 .prose-skill h1 { font-size: 1.25rem; }
 .prose-skill h2 { font-size: 1.1rem; }
@@ -93,9 +98,10 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
 .prose-skill ul, .prose-skill ol { margin-block: 0.5em; padding-inline-start: 1.5em; }
 .prose-skill li { margin-block: 0.2em; }
 .prose-skill code { background-color: hsl(var(--muted)); padding: 0.1em 0.35em; border-radius: 0.25rem; font-size: 0.85em; }
-.prose-skill pre { background-color: hsl(var(--muted)); padding: 0.7em 0.9em; border-radius: 0.4rem; overflow-x: auto; }
-.prose-skill pre code { background: transparent; padding: 0; }
+.prose-skill pre { background-color: hsl(var(--muted)); padding: 0.7em 0.9em; border-radius: 0.4rem; overflow-x: auto; max-width: 100%; }
+.prose-skill pre code { background: transparent; padding: 0; overflow-wrap: normal; word-break: normal; white-space: pre; }
 .prose-skill blockquote { border-inline-start: 3px solid hsl(var(--border)); padding-inline-start: 0.75em; color: hsl(var(--muted-foreground)); margin-block: 0.5em; }
 .prose-skill a { color: hsl(var(--primary)); text-decoration: underline; }
-.prose-skill table { border-collapse: collapse; margin-block: 0.5em; }
+.prose-skill table { border-collapse: collapse; margin-block: 0.5em; display: block; max-width: 100%; overflow-x: auto; }
 .prose-skill th, .prose-skill td { border: 1px solid hsl(var(--border)); padding: 0.3em 0.55em; }
+.prose-skill img { max-width: 100%; height: auto; }

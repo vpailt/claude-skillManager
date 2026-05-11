@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/stores/ui";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { HelpDialog } from "@/components/HelpDialog";
 
@@ -43,8 +43,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
     patch({ theme: THEME_CYCLE[(idx + 1) % THEME_CYCLE.length] });
   };
 
-  const refreshState = qc.getQueryState(["refresh"]);
-  const isRefreshing = refreshState?.fetchStatus === "fetching";
+  const isRefreshing = useIsFetching({ queryKey: ["refresh"] }) > 0;
 
   const rate = useQuery({
     queryKey: ["github-rate"],
@@ -193,6 +192,11 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           )}
         </Button>
       </div>
+      {!collapsed && (
+        <div className="px-3 pb-2 text-center text-[10px] text-muted-foreground/60">
+          Designed by Valentin
+        </div>
+      )}
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </aside>
   );

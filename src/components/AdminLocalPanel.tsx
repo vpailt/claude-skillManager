@@ -30,8 +30,11 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import { useApp } from "@/stores/app";
+import { useNotifications } from "@/stores/notifications";
 import type { InstallState, Marketplace, Plugin } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 // ============================================================
 // Helpers
@@ -271,6 +274,110 @@ function UninstallMarketplaceDialog({
 }
 
 // ============================================================
+// Delete-marketplace confirmation dialog
+//
+// Unlike "Uninstall" (local files only), this does a full removal: it uninstalls
+// the marketplace folder + entry in `known_marketplaces.json` (no-op if not
+// installed) AND forgets it from the app's `marketplaces.json`. Without the
+// uninstall step, an installed marketplace immediately reappears via the
+// orphan-detection logic in `local_scanner::build_marketplaces_from_settings`.
+// ============================================================
+
+function DeleteMarketplaceDialog({
+  marketplace,
+  installed,
+  installedPluginCount,
+  open,
+  onOpenChange,
+}: {
+  marketplace: string | null;
+  installed: boolean;
+  installedPluginCount: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const qc = useQueryClient();
+  const [error, setError] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!marketplace) return;
+      // Cascade-delete: uninstall plugins + marketplace folder + forget settings.
+      // Doing this in one Rust command keeps the operation atomic and avoids
+      // the orphan-resurrection problem where any leftover plugin entry in
+      // installed_plugins.json would re-surface the marketplace.
+      await api.deleteMarketplaceCompletely(marketplace);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["refresh"] });
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      setError("");
+      onOpenChange(false);
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+  });
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) setError("");
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete marketplace “{marketplace ?? ""}”</DialogTitle>
+          <DialogDescription>
+            {installed ? (
+              <>
+                Removes the entry from <code>known_marketplaces.json</code>, deletes
+                the folder under{" "}
+                <code>~/.claude/plugins/marketplaces/{marketplace ?? ""}/</code>,
+                {installedPluginCount > 0 ? (
+                  <>
+                    {" "}uninstalls{" "}
+                    <strong>
+                      {installedPluginCount} installed plugin
+                      {installedPluginCount > 1 ? "s" : ""}
+                    </strong>{" "}
+                    from it,
+                  </>
+                ) : null}{" "}
+                and forgets it from this app's settings.
+              </>
+            ) : (
+              <>
+                Removes this marketplace from this app's settings. No local files
+                are touched (nothing was installed for it).
+              </>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        {error && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
+            {error}
+          </div>
+        )}
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline">Cancel</Button>
+          </DialogClose>
+          <Button
+            variant="destructive"
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+            Delete
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============================================================
 // Marketplaces table row
 // ============================================================
 
@@ -280,6 +387,7 @@ function MarketplaceRow({
   selected,
   onSelect,
   onUninstallRequest,
+  onDeleteRequest,
   onCheckOne,
   status,
 }: {
@@ -288,10 +396,12 @@ function MarketplaceRow({
   selected: boolean;
   onSelect: () => void;
   onUninstallRequest: () => void;
+  onDeleteRequest: () => void;
   onCheckOne: () => void;
   status: "idle" | "checking" | "updated" | "ok" | "error";
 }) {
   const qc = useQueryClient();
+  const notify = useNotifications((s) => s.push);
   const install = useMutation({
     mutationFn: async () => {
       const cfg = await api.loadAppSettings().then((s) =>
@@ -303,14 +413,24 @@ function MarketplaceRow({
       if (!repo) throw new Error("No GitHub repo configured for this marketplace");
       return api.installMarketplace(mp.name, repo, branch, auto);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["refresh"] }),
-  });
-  const forget = useMutation({
-    mutationFn: () => api.settingsRemoveMarketplace(mp.name),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["app-settings"] });
       qc.invalidateQueries({ queryKey: ["refresh"] });
+      notify({
+        kind: "success",
+        title: "Marketplace installed",
+        body: mp.name,
+      });
     },
+    // Without explicit onError, React Query swallows install failures and the
+    // button looks like a no-op. The most common cause for public-marketplace
+    // installs is "missing token + private repo" or rate-limit on unauth
+    // requests — surface the backend error verbatim so the user sees it.
+    onError: (e) =>
+      notify({
+        kind: "error",
+        title: `Install failed: ${mp.name}`,
+        body: errMsg(e),
+      }),
   });
   const toggleAuto = useMutation({
     mutationFn: async (next: boolean) => {
@@ -327,6 +447,12 @@ function MarketplaceRow({
       qc.invalidateQueries({ queryKey: ["app-settings"] });
       qc.invalidateQueries({ queryKey: ["refresh"] });
     },
+    onError: (e) =>
+      notify({
+        kind: "error",
+        title: `Auto-update toggle failed: ${mp.name}`,
+        body: errMsg(e),
+      }),
   });
 
   const f = freshness(mp);
@@ -436,8 +562,12 @@ function MarketplaceRow({
             size="sm"
             variant="ghost"
             className="h-7 w-7 p-0 text-destructive"
-            onClick={() => forget.mutate()}
-            title="Forget this marketplace from the app's settings (does not delete local files)"
+            onClick={onDeleteRequest}
+            title={
+              mp.installed
+                ? "Delete this marketplace (uninstall local files and forget from settings)"
+                : "Delete this marketplace from the app's settings"
+            }
           >
             <Trash2 className="h-3 w-3" />
           </Button>
@@ -463,9 +593,19 @@ function PluginsTable({
   setChecked: (s: Set<string>) => void;
 }) {
   const qc = useQueryClient();
+  const notify = useNotifications((s) => s.push);
   const updateOne = useMutation({
     mutationFn: (p: Plugin) => api.installPlugin(p),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["refresh"] }),
+    onSuccess: (_, p) => {
+      qc.invalidateQueries({ queryKey: ["refresh"] });
+      notify({ kind: "success", title: "Plugin updated", body: p.name });
+    },
+    onError: (e, p) =>
+      notify({
+        kind: "error",
+        title: `Update failed: ${p.name}`,
+        body: errMsg(e),
+      }),
   });
 
   const plugins = useMemo(() => {
@@ -591,6 +731,11 @@ export function AdminLocalPanel() {
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [uninstallTarget, setUninstallTarget] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    name: string;
+    installed: boolean;
+    installedPluginCount: number;
+  } | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [updateStatus, setUpdateStatus] = useState<
     Record<string, "idle" | "checking" | "updated" | "ok" | "error">
@@ -694,6 +839,10 @@ export function AdminLocalPanel() {
       }
       qc.invalidateQueries({ queryKey: ["refresh"] });
     },
+    // The mutationFn already swallows per-plugin errors into `failures`, so this
+    // only fires on unexpected throws (e.g. the "Pick a marketplace" guard).
+    onError: (e) =>
+      setBottomMsg({ text: errMsg(e), ok: false }),
   });
 
   const updateOutdated = useMutation({
@@ -731,6 +880,9 @@ export function AdminLocalPanel() {
       }
       qc.invalidateQueries({ queryKey: ["refresh"] });
     },
+    // Per-plugin errors are already captured in `failures`; this fires only on
+    // unexpected throws (e.g. the no-marketplace guard).
+    onError: (e) => setBottomMsg({ text: errMsg(e), ok: false }),
   });
 
   const onSelect = (name: string) => {
@@ -809,6 +961,13 @@ export function AdminLocalPanel() {
                     selected={selected?.name === mp.name}
                     onSelect={() => onSelect(mp.name)}
                     onUninstallRequest={() => setUninstallTarget(mp.name)}
+                    onDeleteRequest={() =>
+                      setDeleteTarget({
+                        name: mp.name,
+                        installed: mp.installed,
+                        installedPluginCount: pluginsInstalled(mp),
+                      })
+                    }
                     onCheckOne={() => checkAll.mutate(mp.name)}
                     status={updateStatus[mp.name] ?? "idle"}
                   />
@@ -908,6 +1067,13 @@ export function AdminLocalPanel() {
         marketplace={uninstallTarget}
         open={uninstallTarget !== null}
         onOpenChange={(v) => !v && setUninstallTarget(null)}
+      />
+      <DeleteMarketplaceDialog
+        marketplace={deleteTarget?.name ?? null}
+        installed={deleteTarget?.installed ?? false}
+        installedPluginCount={deleteTarget?.installedPluginCount ?? 0}
+        open={deleteTarget !== null}
+        onOpenChange={(v) => !v && setDeleteTarget(null)}
       />
     </div>
   );

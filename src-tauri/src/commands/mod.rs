@@ -193,6 +193,46 @@ pub async fn uninstall_marketplace_cmd(name: String) -> Result<()> {
     marketplace_installer::uninstall_marketplace(&name)
 }
 
+/// Full removal of a marketplace from the app's view.
+///
+/// `uninstall_marketplace` only touches `known_marketplaces.json` and the
+/// marketplace folder — `installed_plugins.json` still has `"<plugin>@<mp>"`
+/// keys, and the orphan-detection in `build_marketplaces_from_settings` would
+/// resurrect the marketplace from those keys alone. So a real "delete"
+/// cascades: uninstall every plugin recorded under this marketplace, then the
+/// marketplace itself, then forget it from the app's settings.
+///
+/// Per-plugin failures are non-fatal — we always continue and report them in
+/// the log, because partial cleanup is still better than nothing.
+#[tauri::command]
+pub async fn delete_marketplace_completely(name: String) -> Result<Settings> {
+    tracing::info!("delete_marketplace_completely: {}", name);
+    let plugins = local_scanner::installed_plugins_by_marketplace()
+        .remove(&name)
+        .unwrap_or_default();
+    for plugin in plugins {
+        if let Err(e) = installer::uninstall(&plugin) {
+            tracing::warn!(
+                "delete_marketplace_completely: failed to uninstall plugin '{}' from '{}': {}",
+                plugin.name,
+                name,
+                e
+            );
+        }
+    }
+    if let Err(e) = marketplace_installer::uninstall_marketplace(&name) {
+        tracing::warn!(
+            "delete_marketplace_completely: uninstall_marketplace('{}') failed: {}",
+            name,
+            e
+        );
+    }
+    let mut s = config::load_settings();
+    s.marketplaces.retain(|m| m.name != name);
+    config::save_settings(&s)?;
+    Ok(s)
+}
+
 #[tauri::command]
 pub async fn set_marketplace_auto_update(name: String, value: bool) -> Result<bool> {
     tracing::info!("set_marketplace_auto_update: {} -> {}", name, value);
@@ -277,6 +317,134 @@ pub async fn list_skill_files(folder: PathBuf) -> Result<Vec<String>> {
 #[tauri::command]
 pub async fn read_text_file(path: PathBuf) -> Result<String> {
     std::fs::read_to_string(&path).map_err(crate::error::Error::from)
+}
+
+/// Open a URL or filesystem path through the Windows shell (or platform
+/// equivalent). Bypasses `tauri-plugin-opener`'s scope system, which silently
+/// drops unscoped `file://` and `https://` targets in v2.
+#[tauri::command]
+pub async fn open_in_shell(target: String) -> Result<()> {
+    let t = target.trim();
+    if t.is_empty() {
+        return Err(crate::error::Error::Invalid("empty target".into()));
+    }
+    #[cfg(windows)]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let target_wide: Vec<u16> = OsStr::new(t)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let verb_wide: Vec<u16> = OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        #[link(name = "shell32")]
+        extern "system" {
+            fn ShellExecuteW(
+                hwnd: *mut core::ffi::c_void,
+                lp_operation: *const u16,
+                lp_file: *const u16,
+                lp_parameters: *const u16,
+                lp_directory: *const u16,
+                n_show_cmd: i32,
+            ) -> isize;
+        }
+        const SW_SHOWNORMAL: i32 = 1;
+        // ShellExecuteW returns >32 on success; any value <=32 is an error
+        // code in the legacy HINSTANCE convention.
+        let rc = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb_wide.as_ptr(),
+                target_wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if rc > 32 {
+            tracing::debug!("ShellExecuteW opened: {}", t);
+            Ok(())
+        } else {
+            tracing::warn!(
+                "ShellExecuteW failed for '{}' (code={})",
+                t,
+                rc
+            );
+            Err(crate::error::Error::Invalid(format!(
+                "ShellExecuteW failed (code {rc})"
+            )))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Err(crate::error::Error::Invalid(format!(
+            "open_in_shell not implemented on this platform for: {t}"
+        )))
+    }
+}
+
+/// Launches VS Code with the given path opened as a folder/file.
+///
+/// Goes through `cmd /C code` on Windows because the VS Code launcher is
+/// `code.cmd`, which Rust's `Command::new` won't pick up from PATH directly
+/// (it searches for `.exe` only). `CREATE_NO_WINDOW` keeps the helper console
+/// from flashing on screen. On other OSes we just call `code` directly.
+///
+/// We *don't* wait for the child — VS Code keeps running after this returns.
+#[tauri::command]
+pub async fn open_in_vscode(path: String) -> Result<()> {
+    let p = path.trim();
+    if p.is_empty() {
+        return Err(crate::error::Error::Invalid("empty path".into()));
+    }
+    if !std::path::Path::new(p).exists() {
+        return Err(crate::error::Error::Invalid(format!(
+            "path does not exist: {p}"
+        )));
+    }
+    tracing::info!("open_in_vscode: {}", p);
+
+    let spawn_result = {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            std::process::Command::new("cmd")
+                .args(["/C", "code", p])
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+        }
+        #[cfg(not(windows))]
+        {
+            std::process::Command::new("code").arg(p).spawn()
+        }
+    };
+
+    spawn_result.map(|_| ()).map_err(|e| {
+        tracing::warn!("open_in_vscode failed for '{}': {}", p, e);
+        crate::error::Error::Invalid(format!(
+            "Failed to launch VS Code: {e}. Make sure the `code` CLI is on \
+             your PATH — in VS Code run the command 'Shell Command: Install \
+             code command in PATH'."
+        ))
+    })
+}
+
+/// Last-modified timestamp for a file or directory, as an RFC3339 UTC string.
+/// Returns `None` when the path doesn't exist or the FS doesn't expose mtime.
+#[tauri::command]
+pub async fn file_mtime(path: PathBuf) -> Option<String> {
+    let meta = std::fs::metadata(&path).ok()?;
+    let modified = meta.modified().ok()?;
+    let dur = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let secs = dur.as_secs() as i64;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, dur.subsec_nanos())
+        .map(|dt| dt.to_rfc3339())
 }
 
 #[tauri::command]

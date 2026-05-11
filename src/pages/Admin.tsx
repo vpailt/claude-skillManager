@@ -26,7 +26,10 @@ import {
 } from "@/components/AdminWizards";
 import { AdminLocalPanel } from "@/components/AdminLocalPanel";
 import { useApp } from "@/stores/app";
+import { useNotifications } from "@/stores/notifications";
 import type { Plugin } from "@/lib/types";
+
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function statusVariant(status: string) {
   if (status === "merged") return "success" as const;
@@ -298,6 +301,7 @@ function PluginAdminCard({
 
 function PrHistorySection() {
   const qc = useQueryClient();
+  const notify = useNotifications((s) => s.push);
   const history = useQuery({ queryKey: ["pr-history"], queryFn: api.prHistoryList });
   const pending = useQuery({ queryKey: ["pending-prs"], queryFn: api.pendingPrsList });
 
@@ -305,15 +309,33 @@ function PrHistorySection() {
     mutationFn: ({ repo, number }: { repo: string; number: number }) =>
       api.prHistoryRefreshStatus(repo, number),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-history"] }),
+    onError: (e, vars) =>
+      notify({
+        kind: "error",
+        title: `Refresh PR #${vars.number} failed`,
+        body: errMsg(e),
+      }),
   });
   const removeRecord = useMutation({
     mutationFn: ({ repo, number }: { repo: string; number: number }) =>
       api.prHistoryRemove(repo, number),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-history"] }),
+    onError: (e, vars) =>
+      notify({
+        kind: "error",
+        title: `Remove PR #${vars.number} failed`,
+        body: errMsg(e),
+      }),
   });
   const clearAll = useMutation({
     mutationFn: api.prHistoryClear,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-history"] }),
+    onError: (e) =>
+      notify({
+        kind: "error",
+        title: "Clear PR history failed",
+        body: errMsg(e),
+      }),
   });
 
   return (

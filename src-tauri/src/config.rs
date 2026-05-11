@@ -165,6 +165,24 @@ pub struct UiPrefs {
     pub theme: String,
     #[serde(default)]
     pub sidebar_collapsed: bool,
+    /// Start the app hidden in the tray instead of opening the window.
+    #[serde(default)]
+    pub start_minimized: bool,
+    /// Hide to tray when the window is closed instead of quitting.
+    #[serde(default = "default_close_to_tray")]
+    pub close_to_tray: bool,
+    /// Whether the app may raise Windows notification-area toasts (e.g. on PR
+    /// status changes). When off, only the in-app toast is shown.
+    #[serde(default = "default_true")]
+    pub native_notifications_enabled: bool,
+}
+
+fn default_close_to_tray() -> bool {
+    true
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for UiPrefs {
@@ -175,6 +193,9 @@ impl Default for UiPrefs {
             density: default_ui_density(),
             theme: default_theme(),
             sidebar_collapsed: false,
+            start_minimized: false,
+            close_to_tray: true,
+            native_notifications_enabled: true,
         }
     }
 }
@@ -232,6 +253,9 @@ const PROP_POLLING_INTERVAL: &str = "polling.interval.seconds";
 const PROP_UI_THEME: &str = "ui.theme";
 const PROP_UI_DENSITY: &str = "ui.density";
 const PROP_UI_SIDEBAR: &str = "ui.sidebar.collapsed";
+const PROP_UI_START_MINIMIZED: &str = "ui.tray.start.minimized";
+const PROP_UI_CLOSE_TO_TRAY: &str = "ui.tray.close.to.tray";
+const PROP_UI_NATIVE_NOTIFICATIONS: &str = "ui.notifications.native.enabled";
 
 const PROPS_SECTIONS: &[(&str, &[&str])] = &[
     ("GitHub credentials", &["github."]),
@@ -252,6 +276,10 @@ fn settings_from_properties_and_marketplaces(
             density: props.get_or(PROP_UI_DENSITY, &default_ui_density()),
             theme: props.get_or(PROP_UI_THEME, &default_theme()),
             sidebar_collapsed: props.get_bool(PROP_UI_SIDEBAR, false),
+            start_minimized: props.get_bool(PROP_UI_START_MINIMIZED, false),
+            close_to_tray: props.get_bool(PROP_UI_CLOSE_TO_TRAY, true),
+            native_notifications_enabled: props
+                .get_bool(PROP_UI_NATIVE_NOTIFICATIONS, true),
         },
     }
 }
@@ -264,6 +292,9 @@ fn settings_to_properties(s: &Settings) -> Properties {
     p.set(PROP_UI_THEME, &s.ui.theme);
     p.set(PROP_UI_DENSITY, &s.ui.density);
     p.set_bool(PROP_UI_SIDEBAR, s.ui.sidebar_collapsed);
+    p.set_bool(PROP_UI_START_MINIMIZED, s.ui.start_minimized);
+    p.set_bool(PROP_UI_CLOSE_TO_TRAY, s.ui.close_to_tray);
+    p.set_bool(PROP_UI_NATIVE_NOTIFICATIONS, s.ui.native_notifications_enabled);
     p
 }
 

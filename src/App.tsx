@@ -5,10 +5,13 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationStack } from "@/components/NotificationStack";
 import { useRefresh } from "@/hooks/useRefresh";
 import { usePrPolling } from "@/hooks/usePrPolling";
+import { useTrayEvents } from "@/hooks/useTrayEvents";
 import { useUi } from "@/stores/ui";
+import { useNotifications } from "@/stores/notifications";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { createLogger, setFrontendLogLevel } from "@/lib/logger";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { OverviewPage } from "@/pages/Overview";
 import { PluginsPage } from "@/pages/Plugins";
 import { SkillsPage } from "@/pages/Skills";
@@ -22,16 +25,49 @@ export default function App() {
   useRefresh();
   // Background PR status polling (driven by Settings → PR polling toggle).
   usePrPolling();
+  // Tray menu → frontend bridge (refresh, open settings).
+  useTrayEvents();
+
+  // Track window visibility so notifications can prefer native toasts when
+  // the window is hidden in the tray.
+  const setWindowHidden = useNotifications((s) => s.setWindowHidden);
+  useEffect(() => {
+    const w = getCurrentWindow();
+    let unlistenFocus: (() => void) | undefined;
+    w.isVisible()
+      .then((v) => setWindowHidden(!v))
+      .catch(() => {});
+    w.onFocusChanged(({ payload: focused }) => {
+      if (focused) setWindowHidden(false);
+    })
+      .then((fn) => {
+        unlistenFocus = fn;
+      })
+      .catch(() => {});
+    const onVis = () => {
+      if (document.visibilityState === "hidden") setWindowHidden(true);
+      else setWindowHidden(false);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      unlistenFocus?.();
+    };
+  }, [setWindowHidden]);
 
   // Sync persisted UI prefs into the local zustand store.
   const setUi = useUi((s) => s.setUi);
+  const setNativeEnabled = useNotifications((s) => s.setNativeEnabled);
   const settings = useQuery({
     queryKey: ["app-settings"],
     queryFn: api.loadAppSettings,
   });
   useEffect(() => {
-    if (settings.data?.ui) setUi(settings.data.ui);
-  }, [settings.data?.ui, setUi]);
+    if (settings.data?.ui) {
+      setUi(settings.data.ui);
+      setNativeEnabled(settings.data.ui.nativeNotificationsEnabled);
+    }
+  }, [settings.data?.ui, setUi, setNativeEnabled]);
 
   // Pull current log level so the FE logger filters in sync with the backend.
   const logCfg = useQuery({

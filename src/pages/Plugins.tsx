@@ -17,11 +17,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { useApp, type Selection } from "@/stores/app";
+import { useNotifications } from "@/stores/notifications";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { ResizableSplit } from "@/components/ResizableSplit";
 import { SkillMarkdown } from "@/components/SkillMarkdown";
 import type { InstallState, Marketplace, Plugin, Skill } from "@/lib/types";
+
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 const STATE_LABEL: Record<InstallState, string> = {
   not_installed: "not installed",
@@ -214,13 +217,32 @@ function DetailPanel({ selection }: { selection: Selection }) {
   const findMarketplace = useApp((s) => s.findMarketplace);
   const qc = useQueryClient();
 
+  const notify = useNotifications((s) => s.push);
   const installMutation = useMutation({
     mutationFn: api.installPlugin,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["refresh"] }),
+    onSuccess: (_, plugin) => {
+      qc.invalidateQueries({ queryKey: ["refresh"] });
+      notify({ kind: "success", title: "Plugin installed", body: plugin.name });
+    },
+    onError: (e, plugin) =>
+      notify({
+        kind: "error",
+        title: `Install failed: ${plugin.name}`,
+        body: errMsg(e),
+      }),
   });
   const uninstallMutation = useMutation({
     mutationFn: api.uninstallPlugin,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["refresh"] }),
+    onSuccess: (_, plugin) => {
+      qc.invalidateQueries({ queryKey: ["refresh"] });
+      notify({ kind: "success", title: "Plugin uninstalled", body: plugin.name });
+    },
+    onError: (e, plugin) =>
+      notify({
+        kind: "error",
+        title: `Uninstall failed: ${plugin.name}`,
+        body: errMsg(e),
+      }),
   });
   const enableMutation = useMutation({
     mutationFn: ({
@@ -233,6 +255,12 @@ function DetailPanel({ selection }: { selection: Selection }) {
       value: boolean;
     }) => api.setPluginEnabled(plugin, marketplace, value),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["refresh"] }),
+    onError: (e, vars) =>
+      notify({
+        kind: "error",
+        title: `Toggle failed: ${vars.plugin}`,
+        body: errMsg(e),
+      }),
   });
 
   const selectedSkill =
@@ -453,7 +481,7 @@ export function PluginsPage() {
   );
 
   return (
-    <div className="h-full min-h-0">
+    <div className="h-full min-h-0 w-full min-w-0 flex-1">
       <ResizableSplit storageId="plugins" left={left} right={right} defaultLeftSize={28} />
     </div>
   );

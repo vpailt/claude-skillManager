@@ -28,6 +28,9 @@ export function usePrPolling() {
     refetchOnWindowFocus: false,
   });
 
+  // No onError here on purpose: polling fires every 15s+ for every open PR, so
+  // a flaky network would spam the user with toasts. The per-call failure is
+  // logged below via `log.warn` and that's enough.
   const pollOne = useMutation({
     mutationFn: ({ repo, number }: { repo: string; number: number }) =>
       api.prHistoryRefreshStatus(repo, number),
@@ -65,11 +68,14 @@ export function usePrPolling() {
             log.info(
               `PR #${it.number} ${it.repo} status: ${it.status} → ${newStatus}`
             );
-            push({
-              kind: newStatus === "merged" ? "success" : "info",
-              title: `PR #${it.number} ${newStatus}`,
-              body: `${it.repo} — ${it.title}`,
-            });
+            push(
+              {
+                kind: newStatus === "merged" ? "success" : "info",
+                title: `PR #${it.number} ${newStatus}`,
+                body: `${it.repo} — ${it.title}`,
+              },
+              { native: true }
+            );
           }
         } catch (err) {
           log.warn(`polling PR #${it.number} failed:`, err);

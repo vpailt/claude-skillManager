@@ -9,6 +9,7 @@ import {
   Trash2,
   RefreshCw,
   FolderOpen,
+  Bell,
 } from "lucide-react";
 import {
   save as saveDialog,
@@ -36,6 +37,9 @@ const DEFAULT_UI: UiPrefs = {
   density: "comfortable",
   theme: "auto",
   sidebarCollapsed: false,
+  startMinimized: false,
+  closeToTray: true,
+  nativeNotificationsEnabled: true,
 };
 
 const LEVELS: LogLevel[] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
@@ -81,6 +85,8 @@ export function SettingsPage() {
     if (loggingQuery.data) setLogCfg(loggingQuery.data);
   }, [loggingQuery.data]);
 
+  const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
   const setTokenMutation = useMutation({
     mutationFn: api.settingsSetToken,
     onSuccess: (s) => {
@@ -89,6 +95,8 @@ export function SettingsPage() {
       qc.invalidateQueries({ queryKey: ["github-rate"] });
       push({ kind: "success", title: "GitHub token saved" });
     },
+    onError: (e) =>
+      push({ kind: "error", title: "Save token failed", body: errMsg(e) }),
   });
 
   const setUiMutation = useMutation({
@@ -96,6 +104,12 @@ export function SettingsPage() {
     onSuccess: (s) => {
       qc.setQueryData<SettingsType>(["app-settings"], s);
     },
+    onError: (e) =>
+      push({
+        kind: "error",
+        title: "Save UI preferences failed",
+        body: errMsg(e),
+      }),
   });
 
   const setLoggingMutation = useMutation({
@@ -109,6 +123,12 @@ export function SettingsPage() {
         body: `Level: ${cfg.level} (changes apply on next start for the file)`,
       });
     },
+    onError: (e) =>
+      push({
+        kind: "error",
+        title: "Save logging config failed",
+        body: errMsg(e),
+      }),
   });
 
   const purgeMutation = useMutation({
@@ -132,6 +152,8 @@ export function SettingsPage() {
   const tailMutation = useMutation({
     mutationFn: () => api.loggingTail(64 * 1024),
     onSuccess: (text) => setLogTail(text),
+    onError: (e) =>
+      push({ kind: "error", title: "Read log tail failed", body: errMsg(e) }),
   });
 
   const exportMutation = useMutation({
@@ -243,7 +265,7 @@ export function SettingsPage() {
                 size="sm"
                 variant="ghost"
                 className="h-6 px-2 text-[11px]"
-                onClick={() => openExternal(`file:///${paths.configDir.replace(/\\/g, "/")}`)}
+                onClick={() => openExternal(paths.configDir)}
               >
                 <FolderOpen className="mr-1 h-3 w-3" /> Open
               </Button>
@@ -255,7 +277,7 @@ export function SettingsPage() {
                 size="sm"
                 variant="ghost"
                 className="h-6 px-2 text-[11px]"
-                onClick={() => openExternal(`file:///${paths.logsDir.replace(/\\/g, "/")}`)}
+                onClick={() => openExternal(paths.logsDir)}
               >
                 <FolderOpen className="mr-1 h-3 w-3" /> Open
               </Button>
@@ -343,6 +365,97 @@ export function SettingsPage() {
                 </Button>
               ))}
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>System tray</CardTitle>
+          <CardDescription>
+            SkillManager lives in the Windows notification area (bottom-right,
+            near the clock). Right-click the icon for the menu, left-click to
+            show or hide the window.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <label className="flex cursor-pointer items-center gap-3">
+            <Switch
+              checked={ui.closeToTray}
+              onCheckedChange={(v) => updateUi({ closeToTray: v })}
+            />
+            <span>
+              Close window to tray
+              <span className="ml-2 text-xs text-muted-foreground">
+                (use the tray menu to actually quit)
+              </span>
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-3">
+            <Switch
+              checked={ui.startMinimized}
+              onCheckedChange={(v) => updateUi({ startMinimized: v })}
+            />
+            <span>
+              Start minimized in tray
+              <span className="ml-2 text-xs text-muted-foreground">
+                (useful if added to Windows startup)
+              </span>
+            </span>
+          </label>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bell className="h-4 w-4" />
+            Notifications Windows
+          </CardTitle>
+          <CardDescription>
+            Toasts natives qui apparaissent dans le Centre de notifications
+            (bas-droite). Utilisé pour les changements de statut de PR quand le
+            polling est actif, et pour les événements que l'app jugerait
+            important même fenêtre cachée.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <label className="flex cursor-pointer items-center gap-3">
+            <Switch
+              checked={ui.nativeNotificationsEnabled}
+              onCheckedChange={(v) =>
+                updateUi({ nativeNotificationsEnabled: v })
+              }
+            />
+            <span>Activer les notifications natives</span>
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                push(
+                  {
+                    kind: "info",
+                    title: "SkillManager",
+                    body: "Notification de test — si tu vois ceci en bas à droite, Windows autorise les toasts.",
+                  },
+                  { force: true }
+                )
+              }
+            >
+              <Bell className="mr-1 h-3 w-3" />
+              Tester une notification
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Force une toast indépendamment du toggle ci-dessus, utile pour
+              vérifier la permission Windows.
+            </span>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Si rien ne s'affiche : vérifie <em>Paramètres Windows → Système →
+            Notifications</em> et autorise SkillManager (et que le mode « Ne
+            pas déranger » est désactivé).
           </div>
         </CardContent>
       </Card>

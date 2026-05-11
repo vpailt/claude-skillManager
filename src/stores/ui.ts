@@ -9,6 +9,9 @@ export const DEFAULT_UI: UiPrefs = {
   density: "comfortable",
   theme: "auto",
   sidebarCollapsed: false,
+  startMinimized: false,
+  closeToTray: true,
+  nativeNotificationsEnabled: true,
 };
 
 interface UiState {

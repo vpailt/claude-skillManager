@@ -31,6 +31,8 @@ export const api = {
     invoke<Settings>("settings_upsert_marketplace", { cfg }),
   settingsRemoveMarketplace: (name: string) =>
     invoke<Settings>("settings_remove_marketplace", { name }),
+  deleteMarketplaceCompletely: (name: string) =>
+    invoke<Settings>("delete_marketplace_completely", { name }),
   settingsSetToken: (token: string) =>
     invoke<Settings>("settings_set_token", { token }),
   settingsSetUi: (ui: UiPrefs) =>
@@ -92,6 +94,11 @@ export const api = {
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   writeTextFile: (path: string, content: string) =>
     invoke<void>("write_text_file", { path, content }),
+  fileMtime: (path: string) => invoke<string | null>("file_mtime", { path }),
+  openInShell: (target: string) =>
+    invoke<void>("open_in_shell", { target }),
+  openInVsCode: (path: string) =>
+    invoke<void>("open_in_vscode", { path }),
   parseSkillMd: (text: string) =>
     invoke<{ fields: Record<string, string>; body: string }>("parse_skill_md", {
       text,

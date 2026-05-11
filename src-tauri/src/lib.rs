@@ -16,13 +16,16 @@ pub mod logger;
 pub mod marketplace_installer;
 pub mod marketplace_remote;
 pub mod models;
+pub mod notification_setup;
 pub mod pending_prs;
 pub mod plugin_state;
 pub mod pr_history;
 pub mod properties;
 pub mod registry;
+pub mod tray;
 
 use commands::*;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,8 +36,56 @@ pub fn run() {
     );
 
     tauri::Builder::default()
+        // Single-instance must be registered first so the callback fires before
+        // any other setup runs. When a second process launches we surface the
+        // existing window (in case it was hidden to tray) and let the new
+        // process exit on its own.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            tracing::info!("second instance launched — focusing existing window");
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .on_window_event(|window, event| {
+            // Intercept close: if "close to tray" is enabled, hide instead.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
+                let close_to_tray = config::load_settings().ui.close_to_tray;
+                if close_to_tray {
+                    api.prevent_close();
+                    if let Err(e) = window.hide() {
+                        tracing::warn!("failed to hide window on close: {}", e);
+                    } else {
+                        tracing::debug!("window hidden to tray on close request");
+                    }
+                }
+            }
+        })
+        .setup(|app| {
+            // Register the AppUserModelID so Windows accepts our toast
+            // notifications. No-op on non-Windows.
+            let identifier = app.config().identifier.clone();
+            notification_setup::register_aumid(&identifier, "SkillManager");
+
+            tray::setup_tray(app.handle())?;
+
+            // Honor `start_minimized`: hide the main window on startup.
+            let prefs = config::load_settings().ui;
+            if prefs.start_minimized {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.hide();
+                    tracing::info!("startup: hidden to tray (start_minimized=true)");
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             load_app_settings,
             save_app_settings,
@@ -43,6 +94,7 @@ pub fn run() {
             uninstall_plugin_cmd,
             install_marketplace_cmd,
             uninstall_marketplace_cmd,
+            delete_marketplace_completely,
             set_marketplace_auto_update,
             check_marketplace_updates,
             parse_marketplace_url,
@@ -50,6 +102,9 @@ pub fn run() {
             list_skill_files,
             read_text_file,
             write_text_file,
+            file_mtime,
+            open_in_shell,
+            open_in_vscode,
             parse_skill_md,
             github_auth_check,
             github_rate_limit,
@@ -95,6 +150,8 @@ pub fn run() {
             archive_user_skill,
             list_archived_skills,
             restore_archived_skill,
+            tray::show_main_window,
+            tray::hide_main_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

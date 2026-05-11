@@ -1,8 +1,10 @@
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useApp } from "@/stores/app";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { Activity, Package, Sparkles, Globe } from "lucide-react";
 
 function StatCard({
@@ -10,14 +12,35 @@ function StatCard({
   label,
   value,
   hint,
+  onClick,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: React.ReactNode;
   hint?: string;
+  onClick?: () => void;
 }) {
+  const clickable = !!onClick;
   return (
-    <Card>
+    <Card
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick?.();
+              }
+            }
+          : undefined
+      }
+      className={cn(
+        clickable &&
+          "cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      )}
+    >
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="text-sm font-medium">{label}</CardTitle>
         <Icon className="h-4 w-4 text-muted-foreground" />
@@ -31,8 +54,10 @@ function StatCard({
 }
 
 export function OverviewPage() {
+  const navigate = useNavigate();
   const marketplaces = useApp((s) => s.marketplaces);
   const localOnly = useApp((s) => s.localOnly);
+  const setSelection = useApp((s) => s.setSelection);
 
   const totalPlugins = marketplaces.reduce((acc, m) => acc + m.plugins.length, 0);
   const installedPlugins = marketplaces
@@ -53,6 +78,11 @@ export function OverviewPage() {
     staleTime: 60_000,
   });
 
+  const goToMarketplace = (name: string) => {
+    setSelection({ kind: "marketplace", marketplace: name });
+    navigate("/plugins");
+  };
+
   return (
     <div className="h-full overflow-auto p-6">
       <header className="mb-6">
@@ -67,14 +97,30 @@ export function OverviewPage() {
           label="Marketplaces"
           value={marketplaces.length}
           hint={`${marketplaces.filter((m) => m.installed).length} installed`}
+          onClick={() => {
+            setSelection(null);
+            navigate("/plugins");
+          }}
         />
         <StatCard
           icon={Package}
           label="Plugins"
           value={installedPlugins}
           hint={`${totalPlugins} known`}
+          onClick={() => {
+            setSelection(null);
+            navigate("/plugins");
+          }}
         />
-        <StatCard icon={Sparkles} label="Skills" value={totalSkills} />
+        <StatCard
+          icon={Sparkles}
+          label="Skills"
+          value={totalSkills}
+          onClick={() => {
+            setSelection(null);
+            navigate("/skills");
+          }}
+        />
         <StatCard
           icon={Activity}
           label="GitHub"
@@ -92,6 +138,7 @@ export function OverviewPage() {
               ? `rate-limit: ${rate.data[0]}/${rate.data[1]}`
               : undefined
           }
+          onClick={() => navigate("/settings")}
         />
       </div>
 
@@ -99,7 +146,19 @@ export function OverviewPage() {
         <h2 className="mb-3 text-lg font-semibold">Marketplaces</h2>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {marketplaces.map((m) => (
-            <Card key={m.name}>
+            <Card
+              key={m.name}
+              role="button"
+              tabIndex={0}
+              onClick={() => goToMarketplace(m.name)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  goToMarketplace(m.name);
+                }
+              }}
+              className="cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base">{m.name}</CardTitle>

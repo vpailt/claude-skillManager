@@ -10,7 +10,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternal } from "@/lib/utils";
 import {
   Dialog,
   DialogClose,
@@ -55,7 +55,7 @@ function PRSubmittedToast({
         variant="ghost"
         size="sm"
         className="h-auto justify-start p-0 text-xs"
-        onClick={() => openUrl(result.prUrl)}
+        onClick={() => openExternal(result.prUrl)}
       >
         <ExternalLink className="mr-1 h-3 w-3" />
         {result.prUrl}
@@ -65,7 +65,7 @@ function PRSubmittedToast({
           variant="ghost"
           size="sm"
           className="h-auto justify-start p-0 text-xs"
-          onClick={() => openUrl(companion.prUrl)}
+          onClick={() => openExternal(companion.prUrl)}
         >
           <ExternalLink className="mr-1 h-3 w-3" />
           {companion.prUrl}

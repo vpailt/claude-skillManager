@@ -77,6 +77,9 @@ export interface UiPrefs {
   density: UiDensity;
   theme: ThemePref;
   sidebarCollapsed: boolean;
+  startMinimized: boolean;
+  closeToTray: boolean;
+  nativeNotificationsEnabled: boolean;
 }
 
 export interface LoggingConfig {

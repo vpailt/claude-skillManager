@@ -13,9 +13,11 @@ import {
   Tag,
   ChevronDown,
   ChevronRight,
+  Columns2,
+  Rows2,
 } from "lucide-react";
 import ReactDiffViewer from "react-diff-viewer-continued";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternal } from "@/lib/utils";
 import {
   Dialog,
   DialogClose,
@@ -46,7 +48,13 @@ function ActionIcon({ action }: { action: string }) {
   return <Pencil className="h-3 w-3 text-amber-500" />;
 }
 
-function FileDiff({ entry }: { entry: AdminDraft["entries"][number] }) {
+function FileDiff({
+  entry,
+  splitView,
+}: {
+  entry: AdminDraft["entries"][number];
+  splitView: boolean;
+}) {
   const [open, setOpen] = useState(true);
   const theme = useUi((s) => s.ui.theme);
   const resolvedTheme =
@@ -82,7 +90,9 @@ function FileDiff({ entry }: { entry: AdminDraft["entries"][number] }) {
             <ReactDiffViewer
               oldValue={entry.oldContent ?? ""}
               newValue={entry.newContent ?? ""}
-              splitView={false}
+              splitView={splitView}
+              leftTitle={splitView ? "Remote (current)" : undefined}
+              rightTitle={splitView ? "Local (proposed)" : undefined}
               hideLineNumbers={false}
               useDarkTheme={resolvedTheme === "dark"}
               styles={{
@@ -108,6 +118,7 @@ export function DiffPreviewDialog({
 }: Props) {
   const [tagCreated, setTagCreated] = useState(false);
   const [tagError, setTagError] = useState<string | null>(null);
+  const [splitView, setSplitView] = useState(true);
 
   const createTagMutation = useMutation({
     mutationFn: ({ repo, tag }: { repo: string; tag: string }) =>
@@ -151,7 +162,11 @@ export function DiffPreviewDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl">
+      <DialogContent
+        className={
+          splitView ? "max-w-[95vw] xl:max-w-[1400px]" : "max-w-4xl"
+        }
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <GitBranch className="h-4 w-4" />
@@ -241,7 +256,7 @@ export function DiffPreviewDialog({
                           size="sm"
                           variant="ghost"
                           className="ml-auto h-6 px-2"
-                          onClick={() => openUrl(c.url)}
+                          onClick={() => openExternal(c.url)}
                         >
                           <ExternalLink className="h-3 w-3" />
                         </Button>
@@ -276,12 +291,46 @@ export function DiffPreviewDialog({
             )}
 
             <div>
-              <div className="mb-2 text-sm font-medium">
-                {draft.entries.length} file change(s)
+              <div className="mb-2 flex items-center gap-2">
+                <span className="text-sm font-medium">
+                  {draft.entries.length} file change(s)
+                </span>
+                <div className="ml-auto inline-flex overflow-hidden rounded-md border text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setSplitView(true)}
+                    className={`flex items-center gap-1 px-2 py-1 transition-colors ${
+                      splitView
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background hover:bg-accent"
+                    }`}
+                    title="Side-by-side: remote (left) vs local (right)"
+                  >
+                    <Columns2 className="h-3 w-3" />
+                    Côte à côte
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSplitView(false)}
+                    className={`flex items-center gap-1 border-l px-2 py-1 transition-colors ${
+                      !splitView
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background hover:bg-accent"
+                    }`}
+                    title="Unified inline diff"
+                  >
+                    <Rows2 className="h-3 w-3" />
+                    Unifié
+                  </button>
+                </div>
               </div>
               <div className="space-y-2">
                 {draft.entries.map((e, i) => (
-                  <FileDiff key={`${e.path}-${i}`} entry={e} />
+                  <FileDiff
+                    key={`${e.path}-${i}`}
+                    entry={e}
+                    splitView={splitView}
+                  />
                 ))}
               </div>
             </div>

@@ -30,7 +30,7 @@ export function NotificationStack() {
           <div
             key={n.id}
             className={cn(
-              "pointer-events-auto flex items-start gap-2 rounded-md border bg-card p-3 text-sm shadow-lg",
+              "pointer-events-auto flex items-start gap-2 rounded-md border bg-card/75 p-3 text-sm shadow-lg backdrop-blur-md supports-[backdrop-filter]:bg-card/60",
               TONES[n.kind]
             )}
           >
