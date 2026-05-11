@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Package,
   Sparkles,
+  BookOpen,
   Globe,
   Download,
   Trash2,
@@ -77,12 +78,17 @@ function PluginRow({ marketplace, plugin }: { marketplace: string; plugin: Plugi
             <ChevronRight className="h-3 w-3" />
           )}
         </Button>
-        <Package className="h-4 w-4 text-muted-foreground" />
-        <span className="truncate font-medium">{plugin.name}</span>
-        <Badge variant={stateVariant(plugin.installState)}>
+        <Package className="h-4 w-4 shrink-0 text-amber-400/80" />
+        <Badge
+          variant={stateVariant(plugin.installState)}
+          className="shrink-0"
+        >
           {STATE_LABEL[plugin.installState]}
         </Badge>
-        <span className="ml-auto text-xs text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {plugin.name}
+        </span>
+        <span className="shrink-0 text-xs text-muted-foreground">
           {plugin.installedVersion || plugin.latestVersion || ""}
         </span>
       </div>
@@ -128,13 +134,13 @@ function SkillRow({
         setSelection({ kind: "skill", marketplace, plugin, skill: skill.name })
       }
     >
-      <Sparkles className="h-3 w-3 text-muted-foreground" />
-      <span className="truncate">{skill.name}</span>
+      <BookOpen className="h-3.5 w-3.5 shrink-0 text-violet-400/80" />
       {!skill.folder && skill.remotePresent && (
-        <Badge variant="outline" className="text-[10px]">
+        <Badge variant="outline" className="shrink-0 text-[10px]">
           remote
         </Badge>
       )}
+      <span className="min-w-0 flex-1 truncate">{skill.name}</span>
     </div>
   );
 }
@@ -171,9 +177,13 @@ function MarketplaceBlock({ marketplace }: { marketplace: Marketplace }) {
             <ChevronRight className="h-3 w-3" />
           )}
         </Button>
-        <Globe className="h-4 w-4 text-muted-foreground" />
-        <span className="truncate">{marketplace.name}</span>
-        {marketplace.installed && <Badge variant="success">installed</Badge>}
+        <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />
+        {marketplace.installed && (
+          <Badge variant="success" className="shrink-0">
+            installed
+          </Badge>
+        )}
+        <span className="min-w-0 flex-1 truncate">{marketplace.name}</span>
       </div>
       {open && (
         <div className="ml-2 border-l border-border/60 pl-2">
