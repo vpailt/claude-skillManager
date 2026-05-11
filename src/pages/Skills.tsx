@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   BookOpen,
   ChevronDown,
@@ -12,6 +13,7 @@ import {
   Search,
   Sparkles,
   Filter,
+  X,
 } from "lucide-react";
 import { useApp } from "@/stores/app";
 import { Input } from "@/components/ui/input";
@@ -347,15 +349,38 @@ export function SkillsPage() {
   const push = useNotifications((s) => s.push);
   const marketplaces = useApp((s) => s.marketplaces);
   const localOnly = useApp((s) => s.localOnly);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [origin, setOrigin] = useState<Origin>("all");
   const [marketplaceFilter, setMarketplaceFilter] = useState<string>("all");
+  const [pluginFilter, setPluginFilter] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selection>(null);
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set());
   const [showDescription, setShowDescription] = useState(true);
 
   const localName = localOnly?.name ?? "(local skills)";
+
+  // Honour ?marketplace=...&plugin=... when navigated to from the Plugins page.
+  // We do this on every searchParams change so a second click from Plugins
+  // re-applies the filter even when the user has cleared it manually.
+  useEffect(() => {
+    const mp = searchParams.get("marketplace");
+    const pl = searchParams.get("plugin");
+    if (mp) setMarketplaceFilter(mp);
+    if (pl) setPluginFilter(pl);
+  }, [searchParams]);
+
+  const clearPluginFilter = () => {
+    setPluginFilter(null);
+    setMarketplaceFilter("all");
+    if (searchParams.has("plugin") || searchParams.has("marketplace")) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("plugin");
+      next.delete("marketplace");
+      setSearchParams(next, { replace: true });
+    }
+  };
 
   const all = useMemo<SkillEntry[]>(() => {
     const out: SkillEntry[] = [];
@@ -401,13 +426,14 @@ export function SkillsPage() {
         s.marketplaceNameSafe !== marketplaceFilter
       )
         return false;
+      if (pluginFilter && s.pluginNameSafe !== pluginFilter) return false;
       if (origin === "local" && !isLocal(s, localName)) return false;
       if (origin === "plugin" && (isLocal(s, localName) || !s.folder))
         return false;
       if (origin === "remote" && (s.folder || !s.remotePresent)) return false;
       return true;
     });
-  }, [all, query, origin, marketplaceFilter, localName]);
+  }, [all, query, origin, marketplaceFilter, pluginFilter, localName]);
 
   const marketplaceNames = useMemo(() => {
     const set = new Set<string>();
@@ -548,6 +574,22 @@ export function SkillsPage() {
             </Button>
           ))}
         </div>
+        {pluginFilter && (
+          <div className="flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px]">
+            <Sparkles className="h-3 w-3 text-primary" />
+            <span className="truncate">
+              Plugin: <span className="font-medium">{pluginFilter}</span>
+            </span>
+            <button
+              onClick={clearPluginFilter}
+              className="ml-auto grid h-4 w-4 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label="Clear plugin filter"
+              title="Clear plugin filter"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
         {marketplaceNames.length > 1 && (
           <select
             className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs"

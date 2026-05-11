@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ChevronRight,
   ChevronDown,
@@ -215,6 +216,7 @@ function DetailPanel({ selection }: { selection: Selection }) {
   const findPlugin = useApp((s) => s.findPlugin);
   const findSkill = useApp((s) => s.findSkill);
   const findMarketplace = useApp((s) => s.findMarketplace);
+  const navigate = useNavigate();
   const qc = useQueryClient();
 
   const notify = useNotifications((s) => s.push);
@@ -353,6 +355,23 @@ function DetailPanel({ selection }: { selection: Selection }) {
               >
                 <Trash2 className="mr-1 h-3 w-3" />
                 Uninstall
+              </Button>
+            )}
+            {p.skills.length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                title={`Open Skills tab filtered on ${p.name}`}
+                onClick={() =>
+                  navigate(
+                    `/skills?marketplace=${encodeURIComponent(
+                      p.marketplaceName
+                    )}&plugin=${encodeURIComponent(p.name)}`
+                  )
+                }
+              >
+                <Sparkles className="mr-1 h-3 w-3" />
+                View skills ({p.skills.length})
               </Button>
             )}
             {p.installState !== "not_installed" && (
