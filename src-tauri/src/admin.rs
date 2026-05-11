@@ -49,13 +49,24 @@ pub fn submit_changes(
     branch_prefix: &str,
     deletions: &[String],
 ) -> Result<UploadResult> {
+    tracing::info!(
+        "admin.submit_changes: repo={} base={} prefix={} files={} deletions={} title={:?}",
+        repo,
+        base_branch,
+        branch_prefix,
+        changes.len(),
+        deletions.len(),
+        pr_title
+    );
     if changes.is_empty() && deletions.is_empty() {
+        tracing::warn!("submit_changes called with no file changes");
         return Err(Error::Invalid("No file changes provided".into()));
     }
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
     let title_slug: String = safe_slug(pr_title).chars().take(40).collect();
     let new_branch = format!("{branch_prefix}/{title_slug}-{timestamp}");
     gh.create_branch(repo, &new_branch, base_branch)?;
+    tracing::info!("created branch {} on {}", new_branch, repo);
 
     for change in changes {
         let existing = gh.get_file_sha_or_none(repo, &change.path, &new_branch);
@@ -105,6 +116,12 @@ pub fn submit_changes(
         kind: branch_prefix.to_string(),
     });
 
+    tracing::info!(
+        "admin.submit_changes ok: PR #{} {} (branch={})",
+        result.pr_number,
+        result.pr_url,
+        result.branch
+    );
     Ok(result)
 }
 

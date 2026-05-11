@@ -566,10 +566,65 @@ pub fn find_duplicate_skills() -> Vec<DuplicateSkill> {
     out
 }
 
-/// Removes a local user skill folder. Refuses anything not under
-/// `~/.claude/skills/<name>/` so misuse (or a stray bug in the frontend) can't
-/// wipe arbitrary paths.
-pub fn delete_user_skill_folder(folder: &Path) -> crate::error::Result<()> {
+/// Marker used in archive folder names — `<basename>__archived-<YYYYMMDDTHHMMSSZ>`.
+/// Picked because skill folder names typically use dashes, so a double-underscore
+/// + literal prefix is unambiguous to parse back out.
+const ARCHIVE_SUFFIX_MARKER: &str = "__archived-";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivedSkill {
+    pub name: String,
+    pub original_name: String,
+    pub folder: PathBuf,
+    pub skill_md_path: Option<PathBuf>,
+    pub description: String,
+    pub archived_at: String,
+    pub version: String,
+}
+
+fn make_archive_dirname(basename: &str, ts: &DateTime<Utc>) -> String {
+    format!(
+        "{basename}{ARCHIVE_SUFFIX_MARKER}{}",
+        ts.format("%Y%m%dT%H%M%SZ")
+    )
+}
+
+/// Returns `(original_basename, iso8601_archived_at)` parsed from an archive
+/// folder name. Returns `None` if the folder name doesn't match the encoding.
+fn parse_archive_dirname(name: &str) -> Option<(String, String)> {
+    let idx = name.rfind(ARCHIVE_SUFFIX_MARKER)?;
+    let original = name[..idx].to_string();
+    let mut tail = &name[idx + ARCHIVE_SUFFIX_MARKER.len()..];
+    // Collision suffix "-N" — strip before parsing the timestamp.
+    if let Some(dash_idx) = tail.rfind('-') {
+        let candidate = &tail[..dash_idx];
+        if candidate.len() == 16 && tail[dash_idx + 1..].chars().all(|c| c.is_ascii_digit()) {
+            tail = candidate;
+        }
+    }
+    if tail.len() != 16 {
+        return None;
+    }
+    let bytes = tail.as_bytes();
+    if bytes[8] != b'T' || bytes[15] != b'Z' {
+        return None;
+    }
+    let iso = format!(
+        "{}-{}-{}T{}:{}:{}Z",
+        &tail[0..4],
+        &tail[4..6],
+        &tail[6..8],
+        &tail[9..11],
+        &tail[11..13],
+        &tail[13..15],
+    );
+    Some((original, iso))
+}
+
+/// Moves a local user skill folder into `~/.claude/skills_archive/`. Returns the
+/// new path. Refuses anything that isn't a direct child of `~/.claude/skills/`.
+pub fn archive_user_skill_folder(folder: &Path) -> crate::error::Result<PathBuf> {
     use crate::error::Error;
     let root = config::claude_user_skills_dir();
     let canon_root = fs::canonicalize(&root)
@@ -578,20 +633,138 @@ pub fn delete_user_skill_folder(folder: &Path) -> crate::error::Result<()> {
         .map_err(|e| Error::NotFound(format!("folder not accessible: {e}")))?;
     if !canon_target.starts_with(&canon_root) {
         return Err(Error::Invalid(format!(
-            "Refusing to delete '{}' — not under {}",
+            "Refusing to archive '{}' — not under {}",
             canon_target.display(),
             canon_root.display()
         )));
     }
-    // Direct child only (no `~/.claude/skills/` itself, no nested files).
     if canon_target.parent().map(|p| p != canon_root).unwrap_or(true) {
         return Err(Error::Invalid(format!(
-            "Refusing to delete '{}' — not a direct child of {}",
+            "Refusing to archive '{}' — not a direct child of {}",
             canon_target.display(),
             canon_root.display()
         )));
     }
-    crate::installer::rmtree_robust(&canon_target)
+    let basename = canon_target
+        .file_name()
+        .ok_or_else(|| Error::Invalid("folder has no name".into()))?
+        .to_string_lossy()
+        .into_owned();
+    let archive_root = config::claude_skills_archive_dir();
+    fs::create_dir_all(&archive_root)?;
+    let now = Utc::now();
+    let base_dirname = make_archive_dirname(&basename, &now);
+    let mut dest = archive_root.join(&base_dirname);
+    let mut counter = 2;
+    while dest.exists() {
+        dest = archive_root.join(format!("{base_dirname}-{counter}"));
+        counter += 1;
+    }
+    fs::rename(&canon_target, &dest)?;
+    Ok(dest)
+}
+
+/// Moves an archived skill back into `~/.claude/skills/`. Refuses anything that
+/// isn't a direct child of `~/.claude/skills_archive/`.
+pub fn restore_archived_skill_folder(folder: &Path) -> crate::error::Result<PathBuf> {
+    use crate::error::Error;
+    let archive_root = config::claude_skills_archive_dir();
+    let canon_archive_root = fs::canonicalize(&archive_root)
+        .map_err(|e| Error::Invalid(format!("archive dir not accessible: {e}")))?;
+    let canon_target = fs::canonicalize(folder)
+        .map_err(|e| Error::NotFound(format!("folder not accessible: {e}")))?;
+    if !canon_target.starts_with(&canon_archive_root) {
+        return Err(Error::Invalid(format!(
+            "Refusing to restore '{}' — not under {}",
+            canon_target.display(),
+            canon_archive_root.display()
+        )));
+    }
+    if canon_target
+        .parent()
+        .map(|p| p != canon_archive_root)
+        .unwrap_or(true)
+    {
+        return Err(Error::Invalid(format!(
+            "Refusing to restore '{}' — not a direct child of {}",
+            canon_target.display(),
+            canon_archive_root.display()
+        )));
+    }
+    let folder_name = canon_target
+        .file_name()
+        .ok_or_else(|| Error::Invalid("folder has no name".into()))?
+        .to_string_lossy()
+        .into_owned();
+    let basename = parse_archive_dirname(&folder_name)
+        .map(|(b, _)| b)
+        .unwrap_or(folder_name);
+    let skills_root = config::claude_user_skills_dir();
+    fs::create_dir_all(&skills_root)?;
+    let mut dest = skills_root.join(&basename);
+    let mut counter = 2;
+    while dest.exists() {
+        dest = skills_root.join(format!("{basename}-{counter}"));
+        counter += 1;
+    }
+    fs::rename(&canon_target, &dest)?;
+    Ok(dest)
+}
+
+pub fn list_archived_skills() -> Vec<ArchivedSkill> {
+    let root = config::claude_skills_archive_dir();
+    if !root.is_dir() {
+        return Vec::new();
+    }
+    let entries: Vec<PathBuf> = match fs::read_dir(&root) {
+        Ok(it) => it.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        if !entry.is_dir() {
+            continue;
+        }
+        let folder_name = entry
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let (original_name, archived_at_from_name) = parse_archive_dirname(&folder_name)
+            .unwrap_or_else(|| (folder_name.clone(), String::new()));
+        let mut skill_md = entry.join("SKILL.md");
+        if !skill_md.exists() {
+            skill_md = entry.join("skill.md");
+        }
+        let (fm, skill_md_path) = if skill_md.exists() {
+            match fs::read_to_string(&skill_md) {
+                Ok(t) => (parse_frontmatter(&t).0, Some(skill_md)),
+                Err(_) => (Fields::new(), None),
+            }
+        } else {
+            (Fields::new(), None)
+        };
+        let archived_at = if archived_at_from_name.is_empty() {
+            file_mtime_iso(&entry)
+        } else {
+            archived_at_from_name
+        };
+        let name = fm
+            .get("name")
+            .cloned()
+            .unwrap_or_else(|| original_name.clone());
+        out.push(ArchivedSkill {
+            name,
+            original_name,
+            folder: entry,
+            skill_md_path,
+            description: fm.get("description").cloned().unwrap_or_default(),
+            version: skill_version(&fm),
+            archived_at,
+        });
+    }
+    out.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
+    out
 }
 
 pub fn build_local_only_marketplace() -> Marketplace {

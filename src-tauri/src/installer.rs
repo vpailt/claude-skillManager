@@ -80,10 +80,23 @@ fn cache_path(marketplace: &str, plugin: &str, version: &str) -> PathBuf {
 }
 
 pub fn install_plugin(gh: &GitHubClient, plugin: &Plugin) -> Result<PathBuf> {
+    tracing::info!(
+        "install_plugin: {} from {} (marketplace={})",
+        plugin.name,
+        plugin
+            .source
+            .as_ref()
+            .map(|s| s.repo.as_str())
+            .unwrap_or("?"),
+        plugin.marketplace_name
+    );
     let src = plugin
         .source
         .as_ref()
-        .ok_or_else(|| Error::Invalid(format!("Plugin {} has no source.", plugin.name)))?;
+        .ok_or_else(|| {
+            tracing::error!("plugin {} has no source", plugin.name);
+            Error::Invalid(format!("Plugin {} has no source.", plugin.name))
+        })?;
     let version = plugin
         .latest_version
         .clone()
@@ -217,6 +230,11 @@ fn register_install(
 }
 
 pub fn uninstall(plugin: &Plugin) -> Result<()> {
+    tracing::info!(
+        "uninstall_plugin: {} (marketplace={})",
+        plugin.name,
+        plugin.marketplace_name
+    );
     let mut data = load_installed();
     let key = format!("{}@{}", plugin.name, plugin.marketplace_name);
     let mut changed = false;

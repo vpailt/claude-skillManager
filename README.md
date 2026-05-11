@@ -4,8 +4,9 @@ Desktop app that manages [Claude Code](https://claude.com/claude-code) skills an
 installed locally and lets you browse a GitHub-hosted marketplace, install/update plugins,
 and (admin) submit new skills or new versions back via GitHub PR.
 
-Built with **Tauri 2 + React + Tailwind + shadcn/ui**. Ships as a single `.exe`
-(~6 MB) — **no Python, git, gh, or Claude CLI required at runtime.**
+Built with **Tauri 2 + React + Tailwind + shadcn/ui**. Distributed as a **portable
+directory** (zip the `SkillManager/` folder) — the executable, its config, and its
+logs sit side by side. **No Python, git, gh, or Claude CLI required at runtime.**
 
 ## What it does
 
@@ -43,15 +44,39 @@ Output: `src-tauri\target\release\skillmanager.exe`. Bundles land in
 
 ## First-time setup
 
-1. Launch the exe.
-2. Open **Settings**.
-3. Paste a GitHub Personal Access Token. Required scopes:
+1. Launch `skillmanager.exe`. A `config/` and a `logs/` folder are created next to it
+   on first run.
+2. Open **Settings** and paste a GitHub Personal Access Token. Required scopes:
    - `repo` (full repo access) if you want admin uploads (branch + PR)
    - public read works without a token but is heavily rate-limited
-4. For each marketplace, fill the `owner/repo` field. The Admin tab auto-shows
-   marketplaces where the token has push access (detected via
-   `/repos/{repo}/permissions`).
-5. Save → the catalog refreshes with remote info.
+3. Add marketplaces from **Admin → Admin local → Add from URL** (paste the
+   marketplace repo's Git URL). The Admin distant tab auto-shows marketplaces
+   where the token has push access (detected via `/repos/{repo}/permissions`).
+4. Refresh → the catalog reconciles remote + local install state.
+
+## Portable layout
+
+After first launch the install directory looks like this:
+
+```
+SkillManager/
+├── skillmanager.exe
+├── config/
+│   ├── config.properties     # token + polling + UI prefs (hand-editable)
+│   ├── logging.properties    # log enable / level / rotation count
+│   ├── marketplaces.json     # registered marketplaces
+│   ├── pr_history.json       # rolling list of admin-opened PRs
+│   └── pending_prs.json      # PR drafts awaiting merge
+└── logs/
+    └── skillmanager.YYYY-MM-DD.log
+```
+
+Both `.properties` files are plain `key=value`; restart the app to pick up changes
+made by hand. Logging level, enable toggle, max-files (daily rotation), in-app log
+viewer and a one-click **Purge logs** button live in **Settings → Logging**.
+
+Migrating from an older install? If `%APPDATA%\SkillManager\settings.json` exists,
+its token + marketplaces are imported once on first launch.
 
 ## How install works
 
@@ -108,9 +133,9 @@ SkillManager/
 │   ├── main.tsx
 │   ├── pages/                # Overview, Plugins, Skills, Admin, Settings
 │   ├── components/           # shadcn/ui primitives + app components
-│   ├── hooks/                # TanStack Query bridges
-│   ├── lib/                  # api.ts (invoke wrappers), types.ts
-│   ├── stores/               # Zustand: theme, app selection
+│   ├── hooks/                # TanStack Query bridges (refresh, PR polling)
+│   ├── lib/                  # api.ts, types.ts, logger.ts, utils.ts
+│   ├── stores/               # Zustand: UI prefs, app selection, notifications
 │   └── styles.css
 └── src-tauri/                # Rust backend
     ├── Cargo.toml
@@ -122,7 +147,9 @@ SkillManager/
         ├── lib.rs            # tauri::generate_handler!
         ├── commands/         # #[tauri::command] handlers
         ├── models.rs         # domain types
-        ├── config.rs         # paths, settings.json
+        ├── config.rs         # paths + portable config.properties / marketplaces.json
+        ├── properties.rs     # tiny Java-style .properties parser/serializer
+        ├── logger.rs         # tracing → logs/skillmanager.<date>.log
         ├── frontmatter.rs    # tiny YAML-frontmatter parser
         ├── github_client.rs  # REST API client
         ├── plugin_state.rs   # ~/.claude/settings.json patch
@@ -137,3 +164,7 @@ SkillManager/
         ├── pending_prs.rs
         └── error.rs
 ```
+
+The shipped `.exe` is around **6.8 MB**. Release profile is tuned for size
+(`opt-level = "s"`, `lto = true`, `codegen-units = 1`, `strip = true`,
+`panic = "abort"`) and all dependencies are pure-Rust (no OpenSSL/C deps).

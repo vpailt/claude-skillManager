@@ -8,7 +8,8 @@ use crate::admin::{self, FileChange, UploadResult};
 use crate::admin_drafts::{
     self, AdminDraft, BumpSuggestion, LocalSkill, RemoteSkillInfo, UploadSkillArgs,
 };
-use crate::config::{self, MarketplaceConfig, Settings};
+use crate::config::{self, LoggingConfig, MarketplaceConfig, Settings, UiPrefs};
+use crate::logger;
 use crate::error::Result;
 use crate::frontmatter::parse_frontmatter;
 use crate::github_client::GitHubClient;
@@ -49,10 +50,18 @@ pub async fn save_app_settings(settings: Settings) -> Result<()> {
 
 #[tauri::command]
 pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
+    tracing::info!("refresh_all started");
     let settings = config::load_settings();
-    let gh = GitHubClient::new(&settings.github_token)?;
+    let gh = GitHubClient::new(&settings.github_token).map_err(|e| {
+        tracing::error!("github client init failed: {}", e);
+        e
+    })?;
 
     // 1) Auto-update marketplaces flagged with `autoUpdate=true`.
+    //
+    // Failures here are non-fatal: the local install stays usable even if the
+    // network is down. We surface them via `tracing::warn!` so they show up in
+    // the log file users can attach to a bug report.
     for cfg in &settings.marketplaces {
         if !cfg.github_repo.is_empty() {
             let info = marketplace_installer::get_install_info(&cfg.name);
@@ -61,13 +70,20 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(cfg.auto_update);
             if auto && marketplace_installer::is_marketplace_installed(&cfg.name) {
-                let _ = app.emit("refresh-progress", &format!("auto-update: {}", cfg.name));
-                let _ = marketplace_installer::auto_update_if_changed(
+                if let Err(e) =
+                    app.emit("refresh-progress", &format!("auto-update: {}", cfg.name))
+                {
+                    tracing::debug!("emit refresh-progress failed (ignored): {}", e);
+                }
+                let (updated, msg) = marketplace_installer::auto_update_if_changed(
                     &gh,
                     &cfg.name,
                     &cfg.github_repo,
                     &cfg.default_branch,
                 );
+                if !updated && msg != "up to date" {
+                    tracing::warn!("auto-update {} skipped: {}", cfg.name, msg);
+                }
             }
         }
     }
@@ -76,22 +92,40 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
     let mut marketplaces = local_scanner::build_marketplaces_from_settings(&settings.marketplaces);
 
     // 3) For each marketplace with a github source, fetch the registry and merge.
+    //
+    // `fetch_marketplace_plugins` returns an empty vector on network/parse
+    // failure rather than propagating — that's intentional: a stale-but-usable
+    // local view beats a hard error in the refresh pipeline. We still log when
+    // the merge yields zero remote plugins for a known GitHub source so a
+    // diagnostic trail exists.
     for mp in marketplaces.iter_mut() {
         if mp.source_repo.is_empty() {
             continue;
         }
-        let _ = app.emit("refresh-progress", &format!("fetching: {}", mp.name));
+        if let Err(e) = app.emit("refresh-progress", &format!("fetching: {}", mp.name)) {
+            tracing::debug!("emit refresh-progress failed (ignored): {}", e);
+        }
         let cfg = settings.get_marketplace(&mp.name);
         let r#ref = cfg.map(|c| c.default_branch.as_str()).unwrap_or("");
         let remote =
             marketplace_remote::fetch_marketplace_plugins(&gh, &mp.source_repo, r#ref, &mp.name);
+        if remote.is_empty() {
+            tracing::warn!(
+                "no remote plugins fetched for marketplace {} ({}@{})",
+                mp.name,
+                mp.source_repo,
+                if r#ref.is_empty() { "default" } else { r#ref }
+            );
+        }
         let local = std::mem::take(&mut mp.plugins);
         mp.plugins = marketplace_remote::merge_local_remote(local, remote);
 
         // Editable flag = current token has push rights on the source repo.
+        // Drives whether the Admin → Distant tab lists this marketplace.
         mp.editable = gh.can_push(&mp.source_repo);
 
         // Merge remote-only skills for installed plugins with a github source.
+        // Errors are non-fatal: we want the rest of the refresh to complete.
         for plugin in mp.plugins.iter_mut() {
             let Some(src) = plugin.source.clone() else {
                 continue;
@@ -102,20 +136,30 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
             if plugin.installed_version.is_none() {
                 continue;
             }
-            if let Ok(remote_skills) = marketplace_remote::fetch_plugin_skills(
-                &gh,
-                &src,
-                &plugin.name,
-                &mp.name,
-            ) {
-                let local = std::mem::take(&mut plugin.skills);
-                plugin.skills = marketplace_remote::merge_skills(local, remote_skills);
+            match marketplace_remote::fetch_plugin_skills(&gh, &src, &plugin.name, &mp.name) {
+                Ok(remote_skills) => {
+                    let local = std::mem::take(&mut plugin.skills);
+                    plugin.skills = marketplace_remote::merge_skills(local, remote_skills);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "fetch_plugin_skills failed for {}@{}: {}",
+                        plugin.name,
+                        mp.name,
+                        e
+                    );
+                }
             }
         }
     }
 
     let local_only = local_scanner::build_local_only_marketplace();
 
+    tracing::info!(
+        "refresh_all done: {} marketplace(s), {} local-only skill(s)",
+        marketplaces.len(),
+        local_only.plugins.iter().map(|p| p.skills.len()).sum::<usize>()
+    );
     Ok(RefreshResult {
         marketplaces,
         local_only,
@@ -151,6 +195,7 @@ pub async fn uninstall_marketplace_cmd(name: String) -> Result<()> {
 
 #[tauri::command]
 pub async fn set_marketplace_auto_update(name: String, value: bool) -> Result<bool> {
+    tracing::info!("set_marketplace_auto_update: {} -> {}", name, value);
     marketplace_installer::set_auto_update(&name, value)
 }
 
@@ -202,6 +247,12 @@ pub fn parse_marketplace_url(url: String) -> Option<String> {
 
 #[tauri::command]
 pub async fn set_plugin_enabled(plugin: String, marketplace: String, value: bool) -> Result<()> {
+    tracing::info!(
+        "set_plugin_enabled: {}@{} -> {}",
+        plugin,
+        marketplace,
+        value
+    );
     plugin_state::set_enabled(&plugin, &marketplace, value)
 }
 
@@ -420,10 +471,91 @@ pub async fn settings_remove_marketplace(name: String) -> Result<Settings> {
 
 #[tauri::command]
 pub async fn settings_set_token(token: String) -> Result<Settings> {
+    tracing::info!("github token updated (len={})", token.len());
     let mut s = config::load_settings();
     s.github_token = token;
     config::save_settings(&s)?;
     Ok(s)
+}
+
+#[tauri::command]
+pub async fn settings_set_ui(ui: UiPrefs) -> Result<Settings> {
+    let mut s = config::load_settings();
+    s.ui = ui;
+    config::save_settings(&s)?;
+    Ok(s)
+}
+
+#[tauri::command]
+pub async fn settings_export() -> Result<String> {
+    let s = config::load_settings();
+    serde_json::to_string_pretty(&s).map_err(crate::error::Error::from)
+}
+
+#[tauri::command]
+pub async fn settings_import(payload: String) -> Result<Settings> {
+    let s: Settings =
+        serde_json::from_str(&payload).map_err(crate::error::Error::from)?;
+    config::save_settings(&s)?;
+    tracing::info!(
+        "imported settings: {} marketplace(s)",
+        s.marketplaces.len()
+    );
+    Ok(s)
+}
+
+#[tauri::command]
+pub async fn settings_paths() -> serde_json::Value {
+    serde_json::json!({
+        "exeDir": config::exe_dir(),
+        "configDir": config::app_settings_dir(),
+        "logsDir": config::logs_dir(),
+        "configFile": config::config_properties_file(),
+        "marketplacesFile": config::marketplaces_file(),
+        "loggingFile": config::logging_properties_file(),
+    })
+}
+
+// ---------- Logging commands ----------
+
+#[tauri::command]
+pub async fn logging_get_config() -> LoggingConfig {
+    config::load_logging_config()
+}
+
+#[tauri::command]
+pub async fn logging_set_config(cfg: LoggingConfig) -> Result<LoggingConfig> {
+    config::save_logging_config(&cfg)?;
+    tracing::info!(
+        "logging config updated: enabled={} level={}",
+        cfg.enabled,
+        cfg.level
+    );
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub async fn logging_purge() -> Result<u32> {
+    let removed = logger::purge().map_err(crate::error::Error::from)?;
+    Ok(removed as u32)
+}
+
+#[tauri::command]
+pub async fn logging_tail(max_bytes: Option<usize>) -> Result<String> {
+    logger::tail(max_bytes.unwrap_or(64 * 1024))
+        .map_err(crate::error::Error::from)
+}
+
+#[tauri::command]
+pub async fn logging_log(level: String, target: Option<String>, message: String) {
+    let target = target.unwrap_or_else(|| "frontend".to_string());
+    match level.to_ascii_uppercase().as_str() {
+        "ERROR" => tracing::error!(target: "frontend", "[{}] {}", target, message),
+        "WARN" => tracing::warn!(target: "frontend", "[{}] {}", target, message),
+        "DEBUG" => tracing::debug!(target: "frontend", "[{}] {}", target, message),
+        "TRACE" => tracing::trace!(target: "frontend", "[{}] {}", target, message),
+        _ => tracing::info!(target: "frontend", "[{}] {}", target, message),
+    }
 }
 
 // ---------- Admin draft commands ----------
@@ -515,6 +647,18 @@ pub async fn list_duplicate_skills() -> Vec<local_scanner::DuplicateSkill> {
 }
 
 #[tauri::command]
-pub async fn delete_user_skill(folder: PathBuf) -> Result<()> {
-    local_scanner::delete_user_skill_folder(&folder)
+pub async fn archive_user_skill(folder: PathBuf) -> Result<PathBuf> {
+    tracing::info!("archive_user_skill: {}", folder.display());
+    local_scanner::archive_user_skill_folder(&folder)
+}
+
+#[tauri::command]
+pub async fn list_archived_skills() -> Vec<local_scanner::ArchivedSkill> {
+    local_scanner::list_archived_skills()
+}
+
+#[tauri::command]
+pub async fn restore_archived_skill(folder: PathBuf) -> Result<PathBuf> {
+    tracing::info!("restore_archived_skill: {}", folder.display());
+    local_scanner::restore_archived_skill_folder(&folder)
 }

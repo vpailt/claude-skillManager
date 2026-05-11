@@ -13,7 +13,6 @@ import {
   RefreshCw,
   Search,
   Trash2,
-  X,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -277,6 +276,7 @@ function UninstallMarketplaceDialog({
 
 function MarketplaceRow({
   mp,
+  cfgAutoUpdate,
   selected,
   onSelect,
   onUninstallRequest,
@@ -284,6 +284,7 @@ function MarketplaceRow({
   status,
 }: {
   mp: Marketplace;
+  cfgAutoUpdate: boolean;
   selected: boolean;
   onSelect: () => void;
   onUninstallRequest: () => void;
@@ -306,6 +307,22 @@ function MarketplaceRow({
   });
   const forget = useMutation({
     mutationFn: () => api.settingsRemoveMarketplace(mp.name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      qc.invalidateQueries({ queryKey: ["refresh"] });
+    },
+  });
+  const toggleAuto = useMutation({
+    mutationFn: async (next: boolean) => {
+      const settings = await api.loadAppSettings();
+      const cfg = settings.marketplaces.find((m) => m.name === mp.name);
+      if (cfg) {
+        await api.settingsUpsertMarketplace({ ...cfg, autoUpdate: next });
+      }
+      if (mp.installed) {
+        await api.setMarketplaceAutoUpdate(mp.name, next);
+      }
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["app-settings"] });
       qc.invalidateQueries({ queryKey: ["refresh"] });
@@ -358,6 +375,18 @@ function MarketplaceRow({
         {mp.sourceRepo || mp.sourcePath || "—"}
       </td>
       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2" title="Auto-update on every refresh if the remote SHA changed">
+          <Switch
+            checked={cfgAutoUpdate}
+            onCheckedChange={(v) => toggleAuto.mutate(v)}
+            disabled={!mp.sourceRepo || toggleAuto.isPending}
+          />
+          <span className="text-[11px] text-muted-foreground">
+            {cfgAutoUpdate ? "on" : "off"}
+          </span>
+        </div>
+      </td>
+      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-1">
           {mp.installed ? (
             <>
@@ -406,11 +435,11 @@ function MarketplaceRow({
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 px-2 text-xs text-muted-foreground"
+            className="h-7 w-7 p-0 text-destructive"
             onClick={() => forget.mutate()}
-            title="Remove this marketplace from the app's settings (does not delete local files)"
+            title="Forget this marketplace from the app's settings (does not delete local files)"
           >
-            <X className="h-3 w-3" />
+            <Trash2 className="h-3 w-3" />
           </Button>
         </div>
       </td>
@@ -552,6 +581,10 @@ export function AdminLocalPanel() {
   // has no install/uninstall/source-repo to manage. Users still see those
   // skills under the regular Plugins tab.
   const allMps = useApp((s) => s.marketplaces);
+  const settingsQuery = useQuery({
+    queryKey: ["app-settings"],
+    queryFn: api.loadAppSettings,
+  });
 
   const [mpFilter, setMpFilter] = useState("");
   const [pluginFilter, setPluginFilter] = useState("");
@@ -751,7 +784,7 @@ export function AdminLocalPanel() {
             />
           </div>
 
-          <div className="overflow-hidden rounded-md border">
+          <div className="overflow-x-auto rounded-md border">
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-xs text-muted-foreground">
                 <tr className="border-b">
@@ -759,6 +792,7 @@ export function AdminLocalPanel() {
                   <th className="px-3 py-2 text-left">Install</th>
                   <th className="px-3 py-2 text-left">Freshness</th>
                   <th className="px-3 py-2 text-left">Source repo</th>
+                  <th className="px-3 py-2 text-left">Auto-update</th>
                   <th className="px-3 py-2 text-left">Actions</th>
                 </tr>
               </thead>
@@ -767,6 +801,11 @@ export function AdminLocalPanel() {
                   <MarketplaceRow
                     key={mp.name}
                     mp={mp}
+                    cfgAutoUpdate={
+                      settingsQuery.data?.marketplaces.find(
+                        (m) => m.name === mp.name
+                      )?.autoUpdate ?? false
+                    }
                     selected={selected?.name === mp.name}
                     onSelect={() => onSelect(mp.name)}
                     onUninstallRequest={() => setUninstallTarget(mp.name)}
@@ -777,7 +816,7 @@ export function AdminLocalPanel() {
                 {filteredMps.length === 0 && (
                   <tr>
                     <td
-                      colSpan={5}
+                      colSpan={6}
                       className="px-3 py-6 text-center text-xs text-muted-foreground"
                     >
                       No marketplaces. Click <em>Add from URL</em>.

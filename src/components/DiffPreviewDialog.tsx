@@ -31,7 +31,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent } from "@/components/ui/card";
 import { api } from "@/lib/api";
 import type { AdminDraft, UploadResult } from "@/lib/types";
-import { useTheme } from "@/stores/theme";
+import { useUi } from "@/stores/ui";
 
 interface Props {
   open: boolean;
@@ -48,7 +48,13 @@ function ActionIcon({ action }: { action: string }) {
 
 function FileDiff({ entry }: { entry: AdminDraft["entries"][number] }) {
   const [open, setOpen] = useState(true);
-  const { theme } = useTheme();
+  const theme = useUi((s) => s.ui.theme);
+  const resolvedTheme =
+    theme === "auto"
+      ? document.documentElement.classList.contains("dark")
+        ? "dark"
+        : "light"
+      : theme;
   return (
     <div className="overflow-hidden rounded-md border">
       <button
@@ -78,7 +84,7 @@ function FileDiff({ entry }: { entry: AdminDraft["entries"][number] }) {
               newValue={entry.newContent ?? ""}
               splitView={false}
               hideLineNumbers={false}
-              useDarkTheme={theme === "dark"}
+              useDarkTheme={resolvedTheme === "dark"}
               styles={{
                 contentText: {
                   fontSize: "11px",

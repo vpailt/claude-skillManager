@@ -9,10 +9,10 @@
 //! React only deals with serializable data.
 
 use crate::admin::{
-    self, add_plugin_to_registry, bump_version, build_manifest_bump, collect_skill_folder_changes,
+    add_plugin_to_registry, bump_version, build_manifest_bump, collect_skill_folder_changes,
     fetch_marketplace_registry, make_branch_name, remove_plugin_from_registry, serialize_registry,
     submit_changes, unified_diff, update_plugin_in_registry, validate_marketplace_registry,
-    validate_skill_frontmatter, FileChange, UploadResult, REGISTRY_PATH,
+    validate_skill_frontmatter, FileChange, UploadResult,
 };
 use crate::config;
 use crate::error::{Error, Result};
@@ -907,8 +907,3 @@ pub fn suggest_bumps(version: &str) -> BumpSuggestion {
     }
 }
 
-pub fn admin_module_marker() {
-    // Dummy to silence "unused" warnings on re-export below in case features change.
-    let _ = admin::REGISTRY_PATH;
-    let _ = REGISTRY_PATH;
-}

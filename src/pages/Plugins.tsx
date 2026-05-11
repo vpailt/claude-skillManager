@@ -10,7 +10,7 @@ import {
   Power,
   PowerOff,
 } from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,8 @@ import { Switch } from "@/components/ui/switch";
 import { useApp, type Selection } from "@/stores/app";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { ResizableSplit } from "@/components/ResizableSplit";
+import { SkillMarkdown } from "@/components/SkillMarkdown";
 import type { InstallState, Marketplace, Plugin, Skill } from "@/lib/types";
 
 const STATE_LABEL: Record<InstallState, string> = {
@@ -72,7 +74,7 @@ function PluginRow({ marketplace, plugin }: { marketplace: string; plugin: Plugi
           )}
         </Button>
         <Package className="h-4 w-4 text-muted-foreground" />
-        <span className="font-medium">{plugin.name}</span>
+        <span className="truncate font-medium">{plugin.name}</span>
         <Badge variant={stateVariant(plugin.installState)}>
           {STATE_LABEL[plugin.installState]}
         </Badge>
@@ -166,7 +168,7 @@ function MarketplaceBlock({ marketplace }: { marketplace: Marketplace }) {
           )}
         </Button>
         <Globe className="h-4 w-4 text-muted-foreground" />
-        <span>{marketplace.name}</span>
+        <span className="truncate">{marketplace.name}</span>
         {marketplace.installed && <Badge variant="success">installed</Badge>}
       </div>
       {open && (
@@ -180,6 +182,27 @@ function MarketplaceBlock({ marketplace }: { marketplace: Marketplace }) {
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+function Breadcrumb({ selection }: { selection: Selection }) {
+  if (!selection) return null;
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+      <span>{selection.marketplace}</span>
+      {"plugin" in selection && (
+        <>
+          <ChevronRight className="h-3 w-3" />
+          <span>{selection.plugin}</span>
+        </>
+      )}
+      {selection.kind === "skill" && (
+        <>
+          <ChevronRight className="h-3 w-3" />
+          <span className="text-foreground">{selection.skill}</span>
+        </>
       )}
     </div>
   );
@@ -212,10 +235,21 @@ function DetailPanel({ selection }: { selection: Selection }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["refresh"] }),
   });
 
+  const selectedSkill =
+    selection?.kind === "skill"
+      ? findSkill(selection.marketplace, selection.plugin, selection.skill)
+      : null;
+  const skillContent = useQuery({
+    enabled: !!selectedSkill?.skillMdPath,
+    queryKey: ["plugins-skill-md", selectedSkill?.skillMdPath],
+    queryFn: () => api.readTextFile(selectedSkill!.skillMdPath as string),
+  });
+
   if (!selection) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Select a marketplace, plugin or skill to see details.
+      <div className="flex h-full flex-col items-center justify-center gap-2 py-20 text-center text-sm text-muted-foreground">
+        <Package className="h-8 w-8 opacity-40" />
+        <span>Select a marketplace, plugin or skill to see details.</span>
       </div>
     );
   }
@@ -226,6 +260,7 @@ function DetailPanel({ selection }: { selection: Selection }) {
     return (
       <Card className="m-4">
         <CardHeader>
+          <Breadcrumb selection={selection} />
           <div className="flex items-center justify-between">
             <CardTitle>{m.name}</CardTitle>
             {m.installed && <Badge variant="success">installed</Badge>}
@@ -256,6 +291,7 @@ function DetailPanel({ selection }: { selection: Selection }) {
     return (
       <Card className="m-4">
         <CardHeader>
+          <Breadcrumb selection={selection} />
           <div className="flex items-center justify-between">
             <div>
               <CardTitle>{p.name}</CardTitle>
@@ -267,7 +303,7 @@ function DetailPanel({ selection }: { selection: Selection }) {
           </div>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {(p.installState === "not_installed" || p.installState === "outdated") && (
               <Button
                 size="sm"
@@ -343,26 +379,32 @@ function DetailPanel({ selection }: { selection: Selection }) {
   }
 
   if (selection.kind === "skill") {
-    const s = findSkill(selection.marketplace, selection.plugin, selection.skill);
+    const s = selectedSkill;
     if (!s) return null;
     return (
       <Card className="m-4">
         <CardHeader>
+          <Breadcrumb selection={selection} />
           <CardTitle>{s.name}</CardTitle>
           <CardDescription>{s.description || "No description"}</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          <div>
-            <span className="text-muted-foreground">Plugin:</span>{" "}
-            {s.pluginName || "—"}
-          </div>
-          <div>
-            <span className="text-muted-foreground">Marketplace:</span>{" "}
-            {s.marketplaceName || "—"}
-          </div>
+        <CardContent className="space-y-3 text-sm">
           {s.folder && (
-            <div className="break-all text-xs text-muted-foreground">
+            <div className="break-all rounded-md bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground">
               {s.folder.toString()}
+            </div>
+          )}
+          {s.skillMdPath && (
+            <div className="rounded-md border bg-card p-4">
+              {skillContent.isLoading ? (
+                <div className="text-xs text-muted-foreground">Loading…</div>
+              ) : skillContent.data ? (
+                <SkillMarkdown content={skillContent.data} />
+              ) : (
+                <div className="text-xs text-muted-foreground">
+                  (failed to read)
+                </div>
+              )}
             </div>
           )}
         </CardContent>
@@ -383,28 +425,36 @@ export function PluginsPage() {
     return out;
   }, [marketplaces, localOnly]);
 
-  return (
-    <div className="grid h-full grid-cols-[360px_1fr] divide-x">
-      <div className="flex h-full flex-col">
-        <div className="border-b px-4 py-3">
-          <h2 className="text-sm font-semibold">Marketplaces & plugins</h2>
-        </div>
-        <ScrollArea className="flex-1">
-          <div className="py-2">
-            {list.map((m) => (
-              <MarketplaceBlock key={m.name} marketplace={m} />
-            ))}
-            {list.length === 0 && (
-              <div className="px-4 py-6 text-sm text-muted-foreground">
-                Nothing here yet — add a marketplace from Settings.
-              </div>
-            )}
-          </div>
-        </ScrollArea>
+  const left = (
+    <>
+      <div className="border-b px-4 py-3">
+        <h2 className="text-sm font-semibold">Marketplaces & plugins</h2>
       </div>
-      <ScrollArea className="h-full">
-        <DetailPanel selection={selection} />
+      <ScrollArea className="flex-1">
+        <div className="py-2">
+          {list.map((m) => (
+            <MarketplaceBlock key={m.name} marketplace={m} />
+          ))}
+          {list.length === 0 && (
+            <div className="flex flex-col items-center gap-2 px-4 py-10 text-center text-xs text-muted-foreground">
+              <Globe className="h-6 w-6 opacity-40" />
+              <span>No marketplace yet. Add one from the Admin tab.</span>
+            </div>
+          )}
+        </div>
       </ScrollArea>
+    </>
+  );
+
+  const right = (
+    <ScrollArea className="h-full">
+      <DetailPanel selection={selection} />
+    </ScrollArea>
+  );
+
+  return (
+    <div className="h-full min-h-0">
+      <ResizableSplit storageId="plugins" left={left} right={right} defaultLeftSize={28} />
     </div>
   );
 }

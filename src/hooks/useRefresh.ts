@@ -3,6 +3,9 @@ import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/api";
 import { useApp } from "@/stores/app";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("refresh");
 
 export function useRefresh() {
   const setMarketplaces = useApp((s) => s.setMarketplaces);
@@ -15,15 +18,24 @@ export function useRefresh() {
 
   useEffect(() => {
     if (query.data) {
+      log.info(
+        "refresh result:",
+        `${query.data.marketplaces.length} marketplace(s)`
+      );
       setMarketplaces(query.data.marketplaces, query.data.localOnly);
     }
   }, [query.data, setMarketplaces]);
 
+  useEffect(() => {
+    if (query.error) {
+      log.error("refresh failed:", query.error);
+    }
+  }, [query.error]);
+
   // Rust commands can stream progress via the "refresh-progress" event.
   useEffect(() => {
     const unlisten = listen<string>("refresh-progress", (e) => {
-      // eslint-disable-next-line no-console
-      console.debug("[refresh]", e.payload);
+      log.debug(e.payload);
     });
     return () => {
       unlisten.then((fn) => fn());

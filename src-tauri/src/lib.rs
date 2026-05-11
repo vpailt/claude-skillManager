@@ -12,18 +12,26 @@ pub mod frontmatter;
 pub mod github_client;
 pub mod installer;
 pub mod local_scanner;
+pub mod logger;
 pub mod marketplace_installer;
 pub mod marketplace_remote;
 pub mod models;
 pub mod pending_prs;
 pub mod plugin_state;
 pub mod pr_history;
+pub mod properties;
 pub mod registry;
 
 use commands::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    logger::init();
+    tracing::info!(
+        "SkillManager starting (version {})",
+        env!("CARGO_PKG_VERSION")
+    );
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -64,6 +72,15 @@ pub fn run() {
             settings_upsert_marketplace,
             settings_remove_marketplace,
             settings_set_token,
+            settings_set_ui,
+            settings_export,
+            settings_import,
+            settings_paths,
+            logging_get_config,
+            logging_set_config,
+            logging_purge,
+            logging_tail,
+            logging_log,
             admin_prepare_add_plugin,
             admin_prepare_bump_plugin,
             admin_prepare_remove_plugin,
@@ -75,7 +92,9 @@ pub fn run() {
             admin_list_remote_skills,
             admin_suggest_bumps,
             list_duplicate_skills,
-            delete_user_skill,
+            archive_user_skill,
+            list_archived_skills,
+            restore_archived_skill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
