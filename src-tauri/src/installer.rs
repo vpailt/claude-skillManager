@@ -117,6 +117,7 @@ pub fn install_plugin(gh: &GitHubClient, plugin: &Plugin) -> Result<PathBuf> {
             &plugin.name,
             &version,
             &r#ref,
+            &src.path,
         );
     }
     if src.kind == "directory" && !src.path.is_empty() {
@@ -142,12 +143,13 @@ fn install_from_github(
     plugin_name: &str,
     version: &str,
     r#ref: &str,
+    subpath: &str,
 ) -> Result<PathBuf> {
     let zip_bytes = gh.download_zipball(repo, r#ref)?;
     let install_path = cache_path(marketplace_name, plugin_name, version);
     rmtree_robust(&install_path)?;
     fs::create_dir_all(&install_path)?;
-    GitHubClient::extract_zipball(&zip_bytes, &install_path, "")?;
+    GitHubClient::extract_zipball(&zip_bytes, &install_path, subpath)?;
 
     let sha = gh
         .get_latest_commit(repo, r#ref)

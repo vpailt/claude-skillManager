@@ -117,6 +117,33 @@ fn scan_skills_in_folder(
     skills
 }
 
+/// Resolve the plugin's effective root inside a cache directory.
+///
+/// Most plugins extract directly under `<install_path>/`, but some upstream
+/// marketplaces ship a plugin nested in a subdirectory (e.g.
+/// `RevenueCat/rc-claude-code-plugin` puts everything under `revenuecat/`
+/// without declaring a `source.path`). Walk one level deep looking for the
+/// canonical `.claude-plugin/plugin.json` (or `manifest.json`) marker.
+fn resolve_plugin_root(install_path: &Path) -> PathBuf {
+    let is_root = |p: &Path| -> bool {
+        p.join(".claude-plugin").join("plugin.json").exists()
+            || p.join("manifest.json").exists()
+            || p.join("skills").is_dir()
+    };
+    if is_root(install_path) {
+        return install_path.to_path_buf();
+    }
+    if let Ok(entries) = fs::read_dir(install_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && is_root(&path) {
+                return path;
+            }
+        }
+    }
+    install_path.to_path_buf()
+}
+
 pub fn scan_local_plugin(
     install_path: &Path,
     plugin_name: &str,
@@ -125,18 +152,26 @@ pub fn scan_local_plugin(
     git_sha: &str,
     last_updated: &str,
 ) -> Plugin {
-    let manifest_path = install_path.join("manifest.json");
+    let plugin_root = resolve_plugin_root(install_path);
+    let manifest_path = plugin_root.join("manifest.json");
     let manifest = if manifest_path.exists() {
         read_json(&manifest_path)
     } else {
-        Value::Null
+        // Fall back to .claude-plugin/plugin.json so we still pick up
+        // description/version when manifest.json is absent.
+        let alt = plugin_root.join(".claude-plugin").join("plugin.json");
+        if alt.exists() {
+            read_json(&alt)
+        } else {
+            Value::Null
+        }
     };
     let description = manifest
         .get("description")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let skills = scan_skills_in_folder(install_path, plugin_name, marketplace_name);
+    let skills = scan_skills_in_folder(&plugin_root, plugin_name, marketplace_name);
     let installed_version = if installed_version.is_empty() {
         manifest
             .get("version")
