@@ -491,6 +491,9 @@ impl GitHubClient {
         }
     }
 
+    /// Returns true if the current token has push (or stronger) rights on
+    /// `repo`. Used to decide which marketplaces show up as editable in the
+    /// admin UI.
     pub fn can_push(&self, repo: &str) -> bool {
         let p = self.get_permissions(repo);
         ["push", "maintain", "admin"]

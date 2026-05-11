@@ -17,3 +17,6 @@ src-tauri/gen/
 # OS
 Thumbs.db
 .DS_Store
+
+# Build artifacts
+build.log

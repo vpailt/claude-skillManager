@@ -2,10 +2,12 @@
 //! port of src/local_scanner.py.
 
 use crate::config::{self, MarketplaceConfig};
-use crate::frontmatter::parse_frontmatter;
+use crate::frontmatter::{parse_frontmatter, Fields};
 use crate::models::{InstallState, Marketplace, Plugin, Skill, UserSkill};
 use crate::plugin_state;
 use crate::registry::parse_marketplace_json;
+use chrono::{DateTime, Utc};
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -262,13 +264,6 @@ pub fn build_marketplaces_from_settings(
     let mut seen: HashSet<String> = HashSet::new();
 
     for cfg in settings_marketplaces {
-        let kind = if !cfg.github_repo.is_empty() {
-            "github"
-        } else if !cfg.source_path.is_empty() {
-            "directory"
-        } else {
-            "unknown"
-        };
         let mut plugins = installed_map.remove(&cfg.name).unwrap_or_default();
         if !cfg.source_path.is_empty() {
             let available = scan_directory_marketplace(Path::new(&cfg.source_path), &cfg.name);
@@ -285,6 +280,28 @@ pub fn build_marketplaces_from_settings(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        // Fallback: if app settings has no github_repo but Claude's own
+        // known_marketplaces.json knows this marketplace was installed from
+        // GitHub, use that. Avoids forcing the user to re-enter owner/repo
+        // already recorded by `/plugin marketplace add`.
+        let known_repo = info
+            .get("source")
+            .and_then(|s| s.get("repo"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let source_repo = if !cfg.github_repo.is_empty() {
+            cfg.github_repo.clone()
+        } else {
+            known_repo
+        };
+        let kind = if !source_repo.is_empty() {
+            "github"
+        } else if !cfg.source_path.is_empty() {
+            "directory"
+        } else {
+            "unknown"
+        };
         if !install_location.is_empty() && cfg.source_path.is_empty() {
             let available = scan_directory_marketplace(Path::new(&install_location), &cfg.name);
             plugins = merge_directory_plugins(plugins, available);
@@ -293,12 +310,12 @@ pub fn build_marketplaces_from_settings(
         out.push(Marketplace {
             name: cfg.name.clone(),
             source_kind: kind.to_string(),
-            source_repo: cfg.github_repo.clone(),
+            remote_browseable: !source_repo.is_empty(),
+            source_repo,
             source_path: cfg.source_path.clone(),
             install_location,
             plugins,
             owned: cfg.owned,
-            remote_browseable: !cfg.github_repo.is_empty(),
             installed: !info.is_null(),
             last_updated,
             ..Default::default()
@@ -328,9 +345,21 @@ pub fn build_marketplaces_from_settings(
                 scan_directory_marketplace(Path::new(&install_location), &orphan_name);
             plugins = merge_directory_plugins(plugins, available);
         }
+        let known_repo = info
+            .get("source")
+            .and_then(|s| s.get("repo"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         out.push(Marketplace {
             name: orphan_name.clone(),
-            source_kind: "unknown".to_string(),
+            source_kind: if known_repo.is_empty() {
+                "unknown".to_string()
+            } else {
+                "github".to_string()
+            },
+            remote_browseable: !known_repo.is_empty(),
+            source_repo: known_repo,
             install_location,
             plugins,
             installed: !info.is_null(),
@@ -382,6 +411,187 @@ pub fn scan_user_skills() -> Vec<UserSkill> {
         });
     }
     out
+}
+
+/// Pulls a skill version from frontmatter, mirroring `admin_drafts::skill_version_from_fm`.
+fn skill_version(fm: &Fields) -> String {
+    fm.get("version")
+        .or_else(|| fm.get("metadata.version"))
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn file_mtime_iso(path: &Path) -> String {
+    let Ok(meta) = fs::metadata(path) else {
+        return String::new();
+    };
+    let Ok(mtime) = meta.modified() else {
+        return String::new();
+    };
+    let dt: DateTime<Utc> = mtime.into();
+    dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateCopy {
+    pub folder: PathBuf,
+    pub skill_md_path: PathBuf,
+    pub version: String,
+    pub description: String,
+    pub last_modified: String,
+    /// Human-readable origin: "(local)" or "<plugin>@<marketplace>".
+    pub source: String,
+    pub plugin_name: Option<String>,
+    pub marketplace_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateSkill {
+    pub name: String,
+    pub local: DuplicateCopy,
+    pub plugin_copies: Vec<DuplicateCopy>,
+}
+
+fn copy_from_local(folder: &Path) -> Option<DuplicateCopy> {
+    let mut skill_md = folder.join("SKILL.md");
+    if !skill_md.exists() {
+        skill_md = folder.join("skill.md");
+        if !skill_md.exists() {
+            return None;
+        }
+    }
+    let text = fs::read_to_string(&skill_md).ok()?;
+    let (fm, _) = parse_frontmatter(&text);
+    let name = fm.get("name").cloned().unwrap_or_else(|| {
+        folder
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    });
+    Some(DuplicateCopy {
+        folder: folder.to_path_buf(),
+        last_modified: file_mtime_iso(&skill_md),
+        skill_md_path: skill_md,
+        version: skill_version(&fm),
+        description: fm.get("description").cloned().unwrap_or_default(),
+        source: "(local)".to_string(),
+        plugin_name: None,
+        marketplace_name: Some(name),
+    })
+}
+
+fn copy_from_plugin_skill(skill: &Skill) -> Option<DuplicateCopy> {
+    let folder = skill.folder.clone()?;
+    let skill_md = skill.skill_md_path.clone().unwrap_or_else(|| {
+        let candidate = folder.join("SKILL.md");
+        if candidate.exists() {
+            candidate
+        } else {
+            folder.join("skill.md")
+        }
+    });
+    let (version, description) = if skill_md.exists() {
+        fs::read_to_string(&skill_md)
+            .ok()
+            .map(|t| {
+                let (fm, _) = parse_frontmatter(&t);
+                (skill_version(&fm), fm.get("description").cloned().unwrap_or_default())
+            })
+            .unwrap_or_default()
+    } else {
+        (String::new(), skill.description.clone())
+    };
+    let plugin_name = skill.plugin_name.clone().unwrap_or_default();
+    let marketplace_name = skill.marketplace_name.clone().unwrap_or_default();
+    let source = if plugin_name.is_empty() && marketplace_name.is_empty() {
+        "(plugin)".to_string()
+    } else {
+        format!("{plugin_name}@{marketplace_name}")
+    };
+    Some(DuplicateCopy {
+        folder,
+        last_modified: file_mtime_iso(&skill_md),
+        skill_md_path: skill_md,
+        version,
+        description,
+        source,
+        plugin_name: skill.plugin_name.clone(),
+        marketplace_name: skill.marketplace_name.clone(),
+    })
+}
+
+/// Scans `~/.claude/skills/` and every installed plugin's skills, returning
+/// each local skill that also exists in at least one installed plugin (matched
+/// case-insensitively on the skill `name` from frontmatter, falling back to
+/// folder basename).
+pub fn find_duplicate_skills() -> Vec<DuplicateSkill> {
+    let user_skills = scan_user_skills();
+    if user_skills.is_empty() {
+        return Vec::new();
+    }
+    let by_mp = installed_plugins_by_marketplace();
+    let mut out = Vec::new();
+    for us in user_skills {
+        let key = us.name.to_lowercase();
+        let mut plugin_copies = Vec::new();
+        for (_mp_name, plugins) in &by_mp {
+            for plugin in plugins {
+                for skill in &plugin.skills {
+                    if skill.name.to_lowercase() == key {
+                        if let Some(c) = copy_from_plugin_skill(skill) {
+                            plugin_copies.push(c);
+                        }
+                    }
+                }
+            }
+        }
+        if plugin_copies.is_empty() {
+            continue;
+        }
+        let Some(mut local) = copy_from_local(&us.folder) else {
+            continue;
+        };
+        // copy_from_local stuffed the resolved name into marketplace_name as a
+        // convenience; drop it so the JSON shape matches plugin copies.
+        local.marketplace_name = None;
+        out.push(DuplicateSkill {
+            name: us.name,
+            local,
+            plugin_copies,
+        });
+    }
+    out
+}
+
+/// Removes a local user skill folder. Refuses anything not under
+/// `~/.claude/skills/<name>/` so misuse (or a stray bug in the frontend) can't
+/// wipe arbitrary paths.
+pub fn delete_user_skill_folder(folder: &Path) -> crate::error::Result<()> {
+    use crate::error::Error;
+    let root = config::claude_user_skills_dir();
+    let canon_root = fs::canonicalize(&root)
+        .map_err(|e| Error::Invalid(format!("user skills dir not accessible: {e}")))?;
+    let canon_target = fs::canonicalize(folder)
+        .map_err(|e| Error::NotFound(format!("folder not accessible: {e}")))?;
+    if !canon_target.starts_with(&canon_root) {
+        return Err(Error::Invalid(format!(
+            "Refusing to delete '{}' — not under {}",
+            canon_target.display(),
+            canon_root.display()
+        )));
+    }
+    // Direct child only (no `~/.claude/skills/` itself, no nested files).
+    if canon_target.parent().map(|p| p != canon_root).unwrap_or(true) {
+        return Err(Error::Invalid(format!(
+            "Refusing to delete '{}' — not a direct child of {}",
+            canon_target.display(),
+            canon_root.display()
+        )));
+    }
+    crate::installer::rmtree_robust(&canon_target)
 }
 
 pub fn build_local_only_marketplace() -> Marketplace {

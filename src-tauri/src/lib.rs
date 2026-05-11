@@ -74,6 +74,8 @@ pub fn run() {
             admin_list_user_skills,
             admin_list_remote_skills,
             admin_suggest_bumps,
+            list_duplicate_skills,
+            delete_user_skill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

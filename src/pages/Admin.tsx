@@ -47,6 +47,7 @@ function MarketplaceAdminSection({
   onLaunch: (w: WizardKind) => void;
 }) {
   const editable = useEditableMarketplaces();
+  const allMarketplaces = useApp((s) => s.marketplaces);
   const [selectedMp, setSelectedMp] = useState<string>("");
   const [pluginFilter, setPluginFilter] = useState("");
   const findMarketplace = useApp((s) => s.findMarketplace);
@@ -71,12 +72,41 @@ function MarketplaceAdminSection({
   }, [mp, pluginFilter]);
 
   if (editable.length === 0) {
+    const githubBacked = allMarketplaces.filter((m) => m.sourceRepo);
+    const unconfigured = allMarketplaces.filter((m) => !m.sourceRepo);
     return (
       <Card>
-        <CardContent className="p-6 text-sm text-muted-foreground">
-          No editable marketplace detected. A marketplace shows up here once
-          your GitHub token has push access to its repository — set the token
-          in Settings, then refresh.
+        <CardContent className="space-y-2 p-6 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">
+            No editable marketplace available.
+          </p>
+          {allMarketplaces.length === 0 && (
+            <p>
+              No marketplace registered yet. Add one in <strong>Settings</strong>{" "}
+              with an <code>owner/repo</code>.
+            </p>
+          )}
+          {unconfigured.length > 0 && (
+            <p>
+              These marketplaces have no GitHub repo configured — open{" "}
+              <strong>Settings</strong> and fill in <code>owner/repo</code> for:{" "}
+              <span className="font-mono text-foreground">
+                {unconfigured.map((m) => m.name).join(", ")}
+              </span>
+              .
+            </p>
+          )}
+          {githubBacked.length > 0 && (
+            <p>
+              Your GitHub token does not have push access on:{" "}
+              <span className="font-mono text-foreground">
+                {githubBacked.map((m) => `${m.name} (${m.sourceRepo})`).join(", ")}
+              </span>
+              . Use a token with the <code>repo</code> scope (classic PAT) or{" "}
+              <code>Contents: write</code> + <code>Pull requests: write</code>{" "}
+              (fine-grained), then refresh.
+            </p>
+          )}
         </CardContent>
       </Card>
     );

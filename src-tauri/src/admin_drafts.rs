@@ -17,6 +17,16 @@ use crate::admin::{
 use crate::config;
 use crate::error::{Error, Result};
 use crate::frontmatter::{parse_frontmatter, update_frontmatter, Fields};
+
+/// Pulls the skill version from frontmatter, accepting either a top-level
+/// `version:` (acx-library style) or a nested `metadata.version:` (afv-library
+/// style). Returns "" when neither is present.
+fn skill_version_from_fm(fm: &Fields) -> String {
+    fm.get("version")
+        .or_else(|| fm.get("metadata.version"))
+        .cloned()
+        .unwrap_or_default()
+}
 use crate::github_client::GitHubClient;
 use crate::local_scanner;
 use crate::pending_prs::{self, PendingPR};
@@ -95,19 +105,38 @@ fn repo_for(marketplace: &str) -> Result<(String, String)> {
     let cfg = config::load_settings()
         .marketplaces
         .into_iter()
-        .find(|m| m.name == marketplace)
-        .ok_or_else(|| Error::Invalid(format!("Marketplace '{marketplace}' not in settings.")))?;
-    if cfg.github_repo.is_empty() {
+        .find(|m| m.name == marketplace);
+    let (repo, branch) = match cfg {
+        Some(c) => (c.github_repo, c.default_branch),
+        None => (String::new(), String::new()),
+    };
+    // Fallback: marketplaces installed via Claude's `/plugin marketplace add`
+    // may not have an entry in SkillManager's app settings, but their GitHub
+    // repo is recorded in `~/.claude/plugins/known_marketplaces.json`. Mirror
+    // the fallback used by `local_scanner::build_marketplaces_from_settings`
+    // so admin commands work for those marketplaces too.
+    let repo = if repo.is_empty() {
+        local_scanner::load_known_marketplaces()
+            .get(marketplace)
+            .and_then(|info| info.get("source"))
+            .and_then(|src| src.get("repo"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        repo
+    };
+    if repo.is_empty() {
         return Err(Error::Invalid(format!(
             "Marketplace '{marketplace}' has no GitHub repo configured."
         )));
     }
-    let branch = if cfg.default_branch.is_empty() {
+    let branch = if branch.is_empty() {
         "main".to_string()
     } else {
-        cfg.default_branch
+        branch
     };
-    Ok((cfg.github_repo, branch))
+    Ok((repo, branch))
 }
 
 fn diff_entry_modify(path: &str, old: &str, new: &str) -> DiffEntry {
@@ -430,7 +459,16 @@ fn plugin_source_repo_of(registry: &Value, plugin_name: &str) -> String {
                     return None;
                 }
                 let src = o.get("source")?;
-                src.get("repo").and_then(|v| v.as_str()).map(String::from)
+                if let Some(repo) = src.get("repo").and_then(|v| v.as_str()) {
+                    if !repo.is_empty() {
+                        return Some(repo.to_string());
+                    }
+                }
+                // Fallback: many marketplace.json entries omit `repo` and only
+                // ship `url`. Resolve the GitHub URL to owner/repo so we don't
+                // miss the plugin's source repo.
+                let url = src.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                parse_github_marketplace_url(url)
             })
         })
         .unwrap_or_default()
@@ -775,7 +813,7 @@ pub fn list_user_skills() -> Vec<LocalSkill> {
         };
         if let Ok(text) = std::fs::read_to_string(&target) {
             let (fm, _) = parse_frontmatter(&text);
-            version = fm.get("version").cloned().unwrap_or_default();
+            version = skill_version_from_fm(&fm);
         }
         out.push(LocalSkill {
             name: s.name,
@@ -840,7 +878,7 @@ pub fn list_remote_skills(
         if let Ok((text, _)) = gh.get_file(&plugin_repo, &format!("{}/SKILL.md", e.path), &plugin_ref)
         {
             let (fm, _) = parse_frontmatter(&text);
-            version = fm.get("version").cloned().unwrap_or_default();
+            version = skill_version_from_fm(&fm);
         }
         let local_match = local_index.get(&name).cloned();
         out.push(RemoteSkillInfo {

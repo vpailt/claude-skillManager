@@ -88,7 +88,7 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
         let local = std::mem::take(&mut mp.plugins);
         mp.plugins = marketplace_remote::merge_local_remote(local, remote);
 
-        // Editable flag = current token has push rights.
+        // Editable flag = current token has push rights on the source repo.
         mp.editable = gh.can_push(&mp.source_repo);
 
         // Merge remote-only skills for installed plugins with a github source.
@@ -506,3 +506,15 @@ pub async fn admin_suggest_bumps(version: String) -> BumpSuggestion {
 // Type alias kept so the commands file is the single source of truth for
 // the `Skill` struct re-exports the frontend may want.
 pub type _SkillExport = Skill;
+
+// ---------- Duplicate-skill detection ----------
+
+#[tauri::command]
+pub async fn list_duplicate_skills() -> Vec<local_scanner::DuplicateSkill> {
+    local_scanner::find_duplicate_skills()
+}
+
+#[tauri::command]
+pub async fn delete_user_skill(folder: PathBuf) -> Result<()> {
+    local_scanner::delete_user_skill_folder(&folder)
+}

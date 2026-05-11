@@ -836,7 +836,7 @@ export function PluginActionsRow({
         className="text-destructive"
       >
         <Trash className="mr-1 h-3 w-3" />
-        Remove
+        Remove from marketplace
       </Button>
     </div>
   );

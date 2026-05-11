@@ -4,9 +4,12 @@
 #   .\build.ps1            # full build with NSIS installer (in src-tauri\target\release\bundle\)
 #   .\build.ps1 -NoBundle  # just the .exe (faster, no installer)
 #   .\build.ps1 -Dev       # run in dev mode with hot reload
+#   .\build.ps1 -Clean     # wipe stale tauri/skillmanager build artifacts before building
+#                            (use after moving the project on disk or upgrading tauri)
 param(
     [switch]$Dev,
-    [switch]$NoBundle
+    [switch]$NoBundle,
+    [switch]$Clean
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,6 +24,16 @@ if (-not (Test-Path $cargo)) {
     exit 1
 }
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+
+# vswhere.exe ships next to the Visual Studio Installer. vcvarsall.bat calls it
+# internally to discover the install — if it's not on PATH (e.g. in a stripped
+# CI/headless shell), vcvars writes an error to stderr that $ErrorActionPreference
+# = "Stop" then promotes to a fatal exception. Prepend the standard Installer dir
+# defensively so the script works in both interactive and non-interactive shells.
+$vswhereDir = "C:\Program Files (x86)\Microsoft Visual Studio\Installer"
+if ((Test-Path (Join-Path $vswhereDir "vswhere.exe")) -and ($env:PATH -notlike "*$vswhereDir*")) {
+    $env:PATH = "$vswhereDir;$env:PATH"
+}
 
 $vcvars = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
 if (-not (Test-Path $vcvars)) {
@@ -39,6 +52,12 @@ cmd /c "`"$vcvars`" x64 && set" 2>$null `
         $name, $value = $_ -split '=', 2
         [Environment]::SetEnvironmentVariable($name, $value, 'Process')
     }
+
+if ($Clean) {
+    Write-Host "==> Cleaning stale build artifacts (skillmanager + tauri)" -ForegroundColor Cyan
+    & $cargo clean --release -p skillmanager --manifest-path src-tauri\Cargo.toml
+    & $cargo clean --release -p tauri        --manifest-path src-tauri\Cargo.toml
+}
 
 if (-not (Test-Path "node_modules")) {
     Write-Host "==> Installing npm dependencies" -ForegroundColor Cyan

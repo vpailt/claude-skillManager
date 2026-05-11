@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AdminDraft,
   BumpSuggestion,
+  DuplicateSkill,
   LocalSkill,
   Marketplace,
   MarketplaceConfig,
@@ -172,6 +173,12 @@ export const api = {
     }),
   adminSuggestBumps: (version: string) =>
     invoke<BumpSuggestion>("admin_suggest_bumps", { version }),
+
+  // --- duplicate skills ---
+  listDuplicateSkills: () =>
+    invoke<DuplicateSkill[]>("list_duplicate_skills"),
+  deleteUserSkill: (folder: string) =>
+    invoke<void>("delete_user_skill", { folder }),
 };
 
 // Marketplace name used by the backend to surface standalone user skills.

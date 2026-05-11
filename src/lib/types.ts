@@ -188,3 +188,21 @@ export interface BumpSuggestion {
   minor: string;
   major: string;
 }
+
+export interface DuplicateCopy {
+  folder: string;
+  skillMdPath: string;
+  version: string;
+  description: string;
+  lastModified: string;
+  /** "(local)" or "<plugin>@<marketplace>" */
+  source: string;
+  pluginName: string | null;
+  marketplaceName: string | null;
+}
+
+export interface DuplicateSkill {
+  name: string;
+  local: DuplicateCopy;
+  pluginCopies: DuplicateCopy[];
+}

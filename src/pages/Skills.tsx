@@ -8,6 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Skill } from "@/lib/types";
+import { DuplicateSkillsPanel } from "@/components/DuplicateSkillsPanel";
 
 interface SkillEntry extends Skill {
   pluginNameSafe: string;
@@ -67,7 +68,8 @@ export function SkillsPage() {
   return (
     <div className="grid h-full grid-cols-[400px_1fr] divide-x">
       <div className="flex h-full flex-col">
-        <div className="border-b p-4">
+        <div className="space-y-3 border-b p-4">
+          <DuplicateSkillsPanel />
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -77,7 +79,7 @@ export function SkillsPage() {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <p className="mt-2 text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {filtered.length} of {all.length} skills
           </p>
         </div>
