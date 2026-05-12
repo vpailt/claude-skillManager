@@ -433,32 +433,16 @@ interface ActivityEvent {
   timestamp: number;
 }
 
+// NOTE: `\b` anchors below matter — without it, `install_plugin` would
+// substring-match inside `uninstall_plugin` and mislabel every uninstall as
+// an install. Uninstall patterns are checked first as belt-and-braces.
 const ACTIVITY_PATTERNS: {
   re: RegExp;
   build: (m: RegExpMatchArray) => Omit<ActivityEvent, "timestamp">;
 }[] = [
-  // --- plugin install ---
-  {
-    re: /install_plugin ok: (\S+)@(\S+)/,
-    build: (m) => ({
-      kind: "install",
-      level: "ok",
-      message: "Installed plugin",
-      detail: `${m[1]} · ${m[2]}`,
-    }),
-  },
-  {
-    re: /install_plugin failed: (\S+)@(\S+): (.+)/,
-    build: (m) => ({
-      kind: "install",
-      level: "error",
-      message: "Install failed",
-      detail: `${m[1]} · ${m[2]} — ${m[3]}`,
-    }),
-  },
   // --- plugin uninstall ---
   {
-    re: /uninstall_plugin ok: (\S+)@(\S+)/,
+    re: /\buninstall_plugin ok: (\S+)@(\S+)/,
     build: (m) => ({
       kind: "uninstall",
       level: "ok",
@@ -467,7 +451,7 @@ const ACTIVITY_PATTERNS: {
     }),
   },
   {
-    re: /uninstall_plugin failed: (\S+)@(\S+): (.+)/,
+    re: /\buninstall_plugin failed: (\S+)@(\S+): (.+)/,
     build: (m) => ({
       kind: "uninstall",
       level: "error",
@@ -475,28 +459,28 @@ const ACTIVITY_PATTERNS: {
       detail: `${m[1]} · ${m[2]} — ${m[3]}`,
     }),
   },
-  // --- marketplace install ---
+  // --- plugin install ---
   {
-    re: /install_marketplace ok: (\S+) from (\S+)/,
+    re: /\binstall_plugin ok: (\S+)@(\S+)/,
     build: (m) => ({
-      kind: "install-mp",
+      kind: "install",
       level: "ok",
-      message: "Installed marketplace",
+      message: "Installed plugin",
       detail: `${m[1]} · ${m[2]}`,
     }),
   },
   {
-    re: /install_marketplace failed: (\S+) from (\S+): (.+)/,
+    re: /\binstall_plugin failed: (\S+)@(\S+): (.+)/,
     build: (m) => ({
-      kind: "install-mp",
+      kind: "install",
       level: "error",
-      message: "Marketplace install failed",
+      message: "Install failed",
       detail: `${m[1]} · ${m[2]} — ${m[3]}`,
     }),
   },
   // --- marketplace uninstall ---
   {
-    re: /uninstall_marketplace ok: (\S+)/,
+    re: /\buninstall_marketplace ok: (\S+)/,
     build: (m) => ({
       kind: "uninstall-mp",
       level: "ok",
@@ -505,12 +489,31 @@ const ACTIVITY_PATTERNS: {
     }),
   },
   {
-    re: /uninstall_marketplace failed: (\S+): (.+)/,
+    re: /\buninstall_marketplace failed: (\S+): (.+)/,
     build: (m) => ({
       kind: "uninstall-mp",
       level: "error",
       message: "Marketplace removal failed",
       detail: `${m[1]} — ${m[2]}`,
+    }),
+  },
+  // --- marketplace install ---
+  {
+    re: /\binstall_marketplace ok: (\S+) from (\S+)/,
+    build: (m) => ({
+      kind: "install-mp",
+      level: "ok",
+      message: "Installed marketplace",
+      detail: `${m[1]} · ${m[2]}`,
+    }),
+  },
+  {
+    re: /\binstall_marketplace failed: (\S+) from (\S+): (.+)/,
+    build: (m) => ({
+      kind: "install-mp",
+      level: "error",
+      message: "Marketplace install failed",
+      detail: `${m[1]} · ${m[2]} — ${m[3]}`,
     }),
   },
   // --- PR submission ---
@@ -640,14 +643,12 @@ function RecentActivitySection() {
                     >
                       {ev.message}
                     </span>
-                    {isError && (
-                      <Badge
-                        variant="destructive"
-                        className="shrink-0 px-1.5 py-0 text-[10px]"
-                      >
-                        failed
-                      </Badge>
-                    )}
+                    <Badge
+                      variant={isError ? "destructive" : "success"}
+                      className="shrink-0 px-1.5 py-0 text-[10px]"
+                    >
+                      {isError ? "failed" : "ok"}
+                    </Badge>
                     <span
                       className="min-w-0 flex-1 truncate text-muted-foreground"
                       title={ev.detail}
