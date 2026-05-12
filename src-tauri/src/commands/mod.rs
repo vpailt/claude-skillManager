@@ -169,12 +169,34 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
 #[tauri::command]
 pub async fn install_plugin_cmd(plugin: Plugin) -> Result<PathBuf> {
     let gh = gh()?;
-    installer::install_plugin(&gh, &plugin)
+    let name = plugin.name.clone();
+    let mp = plugin.marketplace_name.clone();
+    match installer::install_plugin(&gh, &plugin) {
+        Ok(p) => {
+            tracing::info!("install_plugin ok: {}@{}", name, mp);
+            Ok(p)
+        }
+        Err(e) => {
+            tracing::error!("install_plugin failed: {}@{}: {}", name, mp, e);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn uninstall_plugin_cmd(plugin: Plugin) -> Result<()> {
-    installer::uninstall(&plugin)
+    let name = plugin.name.clone();
+    let mp = plugin.marketplace_name.clone();
+    match installer::uninstall(&plugin) {
+        Ok(()) => {
+            tracing::info!("uninstall_plugin ok: {}@{}", name, mp);
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("uninstall_plugin failed: {}@{}: {}", name, mp, e);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -185,12 +207,38 @@ pub async fn install_marketplace_cmd(
     auto_update: Option<bool>,
 ) -> Result<PathBuf> {
     let gh = gh()?;
-    marketplace_installer::install_marketplace(&gh, &name, &repo, &r#ref, auto_update)
+    let label = name.clone();
+    let repo_label = repo.clone();
+    match marketplace_installer::install_marketplace(&gh, &name, &repo, &r#ref, auto_update) {
+        Ok(p) => {
+            tracing::info!("install_marketplace ok: {} from {}", label, repo_label);
+            Ok(p)
+        }
+        Err(e) => {
+            tracing::error!(
+                "install_marketplace failed: {} from {}: {}",
+                label,
+                repo_label,
+                e
+            );
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn uninstall_marketplace_cmd(name: String) -> Result<()> {
-    marketplace_installer::uninstall_marketplace(&name)
+    let label = name.clone();
+    match marketplace_installer::uninstall_marketplace(&name) {
+        Ok(()) => {
+            tracing::info!("uninstall_marketplace ok: {}", label);
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("uninstall_marketplace failed: {}: {}", label, e);
+            Err(e)
+        }
+    }
 }
 
 /// Full removal of a marketplace from the app's view.
@@ -512,7 +560,8 @@ pub struct SubmitChangesArgs {
 #[tauri::command]
 pub async fn admin_submit_changes(args: SubmitChangesArgs) -> Result<UploadResult> {
     let gh = gh()?;
-    admin::submit_changes(
+    let title = args.pr_title.clone();
+    match admin::submit_changes(
         &gh,
         &args.repo,
         &args.base_branch,
@@ -521,7 +570,13 @@ pub async fn admin_submit_changes(args: SubmitChangesArgs) -> Result<UploadResul
         &args.pr_body,
         &args.branch_prefix,
         &args.deletions,
-    )
+    ) {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            tracing::error!("admin.submit_changes failed: {}: {}", title, e);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -775,7 +830,14 @@ pub async fn admin_prepare_delete_skill(
 #[tauri::command]
 pub async fn admin_submit_draft(draft: AdminDraft) -> Result<UploadResult> {
     let gh = gh()?;
-    admin_drafts::submit_draft(&gh, &draft)
+    let title = draft.pr_title.clone();
+    match admin_drafts::submit_draft(&gh, &draft) {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            tracing::error!("admin.submit_changes failed: {}: {}", title, e);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]

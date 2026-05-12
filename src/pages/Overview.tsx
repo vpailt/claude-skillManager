@@ -422,11 +422,14 @@ function NeedsAttentionSection() {
 }
 
 type ActivityKind = "install" | "uninstall" | "install-mp" | "uninstall-mp" | "pr";
+type ActivityLevel = "ok" | "error";
 
 interface ActivityEvent {
   kind: ActivityKind;
+  level: ActivityLevel;
   message: string;
   detail: string;
+  url?: string;
   timestamp: number;
 }
 
@@ -434,44 +437,100 @@ const ACTIVITY_PATTERNS: {
   re: RegExp;
   build: (m: RegExpMatchArray) => Omit<ActivityEvent, "timestamp">;
 }[] = [
+  // --- plugin install ---
   {
-    re: /install_plugin: (\S+) from \S+ \(marketplace=(\S+)\)/,
+    re: /install_plugin ok: (\S+)@(\S+)/,
     build: (m) => ({
       kind: "install",
+      level: "ok",
       message: "Installed plugin",
       detail: `${m[1]} · ${m[2]}`,
     }),
   },
   {
-    re: /uninstall_plugin: (\S+) \(marketplace=(\S+)\)/,
+    re: /install_plugin failed: (\S+)@(\S+): (.+)/,
+    build: (m) => ({
+      kind: "install",
+      level: "error",
+      message: "Install failed",
+      detail: `${m[1]} · ${m[2]} — ${m[3]}`,
+    }),
+  },
+  // --- plugin uninstall ---
+  {
+    re: /uninstall_plugin ok: (\S+)@(\S+)/,
     build: (m) => ({
       kind: "uninstall",
+      level: "ok",
       message: "Uninstalled plugin",
       detail: `${m[1]} · ${m[2]}`,
     }),
   },
   {
-    re: /install_marketplace: (\S+) from (\S+)/,
+    re: /uninstall_plugin failed: (\S+)@(\S+): (.+)/,
+    build: (m) => ({
+      kind: "uninstall",
+      level: "error",
+      message: "Uninstall failed",
+      detail: `${m[1]} · ${m[2]} — ${m[3]}`,
+    }),
+  },
+  // --- marketplace install ---
+  {
+    re: /install_marketplace ok: (\S+) from (\S+)/,
     build: (m) => ({
       kind: "install-mp",
+      level: "ok",
       message: "Installed marketplace",
       detail: `${m[1]} · ${m[2]}`,
     }),
   },
   {
-    re: /uninstall_marketplace: (\S+)/,
+    re: /install_marketplace failed: (\S+) from (\S+): (.+)/,
+    build: (m) => ({
+      kind: "install-mp",
+      level: "error",
+      message: "Marketplace install failed",
+      detail: `${m[1]} · ${m[2]} — ${m[3]}`,
+    }),
+  },
+  // --- marketplace uninstall ---
+  {
+    re: /uninstall_marketplace ok: (\S+)/,
     build: (m) => ({
       kind: "uninstall-mp",
+      level: "ok",
       message: "Removed marketplace",
       detail: m[1],
     }),
   },
   {
+    re: /uninstall_marketplace failed: (\S+): (.+)/,
+    build: (m) => ({
+      kind: "uninstall-mp",
+      level: "error",
+      message: "Marketplace removal failed",
+      detail: `${m[1]} — ${m[2]}`,
+    }),
+  },
+  // --- PR submission ---
+  {
     re: /admin\.submit_changes ok: PR #(\d+) (\S+)/,
     build: (m) => ({
       kind: "pr",
+      level: "ok",
       message: "Opened PR",
       detail: `#${m[1]}`,
+      url: m[2],
+    }),
+  },
+  {
+    re: /admin\.submit_changes failed: (.+): (.+)/,
+    build: (m) => ({
+      kind: "pr",
+      level: "error",
+      message: "PR submission failed",
+      detail: `${m[1]} — ${m[2]}`,
     }),
   },
 ];
@@ -484,7 +543,7 @@ const ACTIVITY_ICONS: Record<ActivityKind, React.ComponentType<{ className?: str
   pr: GitPullRequest,
 };
 
-const ACTIVITY_COLORS: Record<ActivityKind, string> = {
+const ACTIVITY_OK_COLORS: Record<ActivityKind, string> = {
   install: "text-emerald-500",
   uninstall: "text-muted-foreground",
   "install-mp": "text-sky-500",
@@ -546,14 +605,53 @@ function RecentActivitySection() {
             <ul className="space-y-0.5">
               {events.map((ev, i) => {
                 const Icon = ACTIVITY_ICONS[ev.kind];
+                const isError = ev.level === "error";
+                const iconColor = isError
+                  ? "text-destructive"
+                  : ACTIVITY_OK_COLORS[ev.kind];
+                const rowProps = ev.url
+                  ? {
+                      role: "button" as const,
+                      tabIndex: 0,
+                      onClick: () => openExternal(ev.url!),
+                      onKeyDown: (e: React.KeyboardEvent) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openExternal(ev.url!);
+                        }
+                      },
+                      className: cn(
+                        "flex items-center gap-3 rounded-md px-2 py-1.5 text-sm cursor-pointer transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      ),
+                    }
+                  : {
+                      className: cn(
+                        "flex items-center gap-3 rounded-md px-2 py-1.5 text-sm"
+                      ),
+                    };
                 return (
-                  <li
-                    key={`${ev.timestamp}-${i}`}
-                    className="flex items-center gap-3 rounded-md px-2 py-1.5 text-sm"
-                  >
-                    <Icon className={cn("h-4 w-4 shrink-0", ACTIVITY_COLORS[ev.kind])} />
-                    <span className="shrink-0 font-medium">{ev.message}</span>
-                    <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                  <li key={`${ev.timestamp}-${i}`} {...rowProps}>
+                    <Icon className={cn("h-4 w-4 shrink-0", iconColor)} />
+                    <span
+                      className={cn(
+                        "shrink-0 font-medium",
+                        isError && "text-destructive"
+                      )}
+                    >
+                      {ev.message}
+                    </span>
+                    {isError && (
+                      <Badge
+                        variant="destructive"
+                        className="shrink-0 px-1.5 py-0 text-[10px]"
+                      >
+                        failed
+                      </Badge>
+                    )}
+                    <span
+                      className="min-w-0 flex-1 truncate text-muted-foreground"
+                      title={ev.detail}
+                    >
                       {ev.detail}
                     </span>
                     <span
