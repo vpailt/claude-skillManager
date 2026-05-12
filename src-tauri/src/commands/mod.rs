@@ -8,7 +8,8 @@ use crate::admin::{self, FileChange, UploadResult};
 use crate::admin_drafts::{
     self, AdminDraft, BumpSuggestion, LocalSkill, RemoteSkillInfo, UploadSkillArgs,
 };
-use crate::config::{self, MarketplaceConfig, Settings};
+use crate::config::{self, LoggingConfig, MarketplaceConfig, Settings, UiPrefs};
+use crate::logger;
 use crate::error::Result;
 use crate::frontmatter::parse_frontmatter;
 use crate::github_client::GitHubClient;
@@ -49,10 +50,18 @@ pub async fn save_app_settings(settings: Settings) -> Result<()> {
 
 #[tauri::command]
 pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
+    tracing::info!("refresh_all started");
     let settings = config::load_settings();
-    let gh = GitHubClient::new(&settings.github_token)?;
+    let gh = GitHubClient::new(&settings.github_token).map_err(|e| {
+        tracing::error!("github client init failed: {}", e);
+        e
+    })?;
 
     // 1) Auto-update marketplaces flagged with `autoUpdate=true`.
+    //
+    // Failures here are non-fatal: the local install stays usable even if the
+    // network is down. We surface them via `tracing::warn!` so they show up in
+    // the log file users can attach to a bug report.
     for cfg in &settings.marketplaces {
         if !cfg.github_repo.is_empty() {
             let info = marketplace_installer::get_install_info(&cfg.name);
@@ -61,13 +70,20 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(cfg.auto_update);
             if auto && marketplace_installer::is_marketplace_installed(&cfg.name) {
-                let _ = app.emit("refresh-progress", &format!("auto-update: {}", cfg.name));
-                let _ = marketplace_installer::auto_update_if_changed(
+                if let Err(e) =
+                    app.emit("refresh-progress", &format!("auto-update: {}", cfg.name))
+                {
+                    tracing::debug!("emit refresh-progress failed (ignored): {}", e);
+                }
+                let (updated, msg) = marketplace_installer::auto_update_if_changed(
                     &gh,
                     &cfg.name,
                     &cfg.github_repo,
                     &cfg.default_branch,
                 );
+                if !updated && msg != "up to date" {
+                    tracing::warn!("auto-update {} skipped: {}", cfg.name, msg);
+                }
             }
         }
     }
@@ -76,22 +92,40 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
     let mut marketplaces = local_scanner::build_marketplaces_from_settings(&settings.marketplaces);
 
     // 3) For each marketplace with a github source, fetch the registry and merge.
+    //
+    // `fetch_marketplace_plugins` returns an empty vector on network/parse
+    // failure rather than propagating — that's intentional: a stale-but-usable
+    // local view beats a hard error in the refresh pipeline. We still log when
+    // the merge yields zero remote plugins for a known GitHub source so a
+    // diagnostic trail exists.
     for mp in marketplaces.iter_mut() {
         if mp.source_repo.is_empty() {
             continue;
         }
-        let _ = app.emit("refresh-progress", &format!("fetching: {}", mp.name));
+        if let Err(e) = app.emit("refresh-progress", &format!("fetching: {}", mp.name)) {
+            tracing::debug!("emit refresh-progress failed (ignored): {}", e);
+        }
         let cfg = settings.get_marketplace(&mp.name);
         let r#ref = cfg.map(|c| c.default_branch.as_str()).unwrap_or("");
         let remote =
             marketplace_remote::fetch_marketplace_plugins(&gh, &mp.source_repo, r#ref, &mp.name);
+        if remote.is_empty() {
+            tracing::warn!(
+                "no remote plugins fetched for marketplace {} ({}@{})",
+                mp.name,
+                mp.source_repo,
+                if r#ref.is_empty() { "default" } else { r#ref }
+            );
+        }
         let local = std::mem::take(&mut mp.plugins);
         mp.plugins = marketplace_remote::merge_local_remote(local, remote);
 
         // Editable flag = current token has push rights on the source repo.
+        // Drives whether the Admin → Distant tab lists this marketplace.
         mp.editable = gh.can_push(&mp.source_repo);
 
         // Merge remote-only skills for installed plugins with a github source.
+        // Errors are non-fatal: we want the rest of the refresh to complete.
         for plugin in mp.plugins.iter_mut() {
             let Some(src) = plugin.source.clone() else {
                 continue;
@@ -102,20 +136,30 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
             if plugin.installed_version.is_none() {
                 continue;
             }
-            if let Ok(remote_skills) = marketplace_remote::fetch_plugin_skills(
-                &gh,
-                &src,
-                &plugin.name,
-                &mp.name,
-            ) {
-                let local = std::mem::take(&mut plugin.skills);
-                plugin.skills = marketplace_remote::merge_skills(local, remote_skills);
+            match marketplace_remote::fetch_plugin_skills(&gh, &src, &plugin.name, &mp.name) {
+                Ok(remote_skills) => {
+                    let local = std::mem::take(&mut plugin.skills);
+                    plugin.skills = marketplace_remote::merge_skills(local, remote_skills);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "fetch_plugin_skills failed for {}@{}: {}",
+                        plugin.name,
+                        mp.name,
+                        e
+                    );
+                }
             }
         }
     }
 
     let local_only = local_scanner::build_local_only_marketplace();
 
+    tracing::info!(
+        "refresh_all done: {} marketplace(s), {} local-only skill(s)",
+        marketplaces.len(),
+        local_only.plugins.iter().map(|p| p.skills.len()).sum::<usize>()
+    );
     Ok(RefreshResult {
         marketplaces,
         local_only,
@@ -125,12 +169,34 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
 #[tauri::command]
 pub async fn install_plugin_cmd(plugin: Plugin) -> Result<PathBuf> {
     let gh = gh()?;
-    installer::install_plugin(&gh, &plugin)
+    let name = plugin.name.clone();
+    let mp = plugin.marketplace_name.clone();
+    match installer::install_plugin(&gh, &plugin) {
+        Ok(p) => {
+            tracing::info!("install_plugin ok: {}@{}", name, mp);
+            Ok(p)
+        }
+        Err(e) => {
+            tracing::error!("install_plugin failed: {}@{}: {}", name, mp, e);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn uninstall_plugin_cmd(plugin: Plugin) -> Result<()> {
-    installer::uninstall(&plugin)
+    let name = plugin.name.clone();
+    let mp = plugin.marketplace_name.clone();
+    match installer::uninstall(&plugin) {
+        Ok(()) => {
+            tracing::info!("uninstall_plugin ok: {}@{}", name, mp);
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("uninstall_plugin failed: {}@{}: {}", name, mp, e);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -141,16 +207,83 @@ pub async fn install_marketplace_cmd(
     auto_update: Option<bool>,
 ) -> Result<PathBuf> {
     let gh = gh()?;
-    marketplace_installer::install_marketplace(&gh, &name, &repo, &r#ref, auto_update)
+    let label = name.clone();
+    let repo_label = repo.clone();
+    match marketplace_installer::install_marketplace(&gh, &name, &repo, &r#ref, auto_update) {
+        Ok(p) => {
+            tracing::info!("install_marketplace ok: {} from {}", label, repo_label);
+            Ok(p)
+        }
+        Err(e) => {
+            tracing::error!(
+                "install_marketplace failed: {} from {}: {}",
+                label,
+                repo_label,
+                e
+            );
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn uninstall_marketplace_cmd(name: String) -> Result<()> {
-    marketplace_installer::uninstall_marketplace(&name)
+    let label = name.clone();
+    match marketplace_installer::uninstall_marketplace(&name) {
+        Ok(()) => {
+            tracing::info!("uninstall_marketplace ok: {}", label);
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("uninstall_marketplace failed: {}: {}", label, e);
+            Err(e)
+        }
+    }
+}
+
+/// Full removal of a marketplace from the app's view.
+///
+/// `uninstall_marketplace` only touches `known_marketplaces.json` and the
+/// marketplace folder — `installed_plugins.json` still has `"<plugin>@<mp>"`
+/// keys, and the orphan-detection in `build_marketplaces_from_settings` would
+/// resurrect the marketplace from those keys alone. So a real "delete"
+/// cascades: uninstall every plugin recorded under this marketplace, then the
+/// marketplace itself, then forget it from the app's settings.
+///
+/// Per-plugin failures are non-fatal — we always continue and report them in
+/// the log, because partial cleanup is still better than nothing.
+#[tauri::command]
+pub async fn delete_marketplace_completely(name: String) -> Result<Settings> {
+    tracing::info!("delete_marketplace_completely: {}", name);
+    let plugins = local_scanner::installed_plugins_by_marketplace()
+        .remove(&name)
+        .unwrap_or_default();
+    for plugin in plugins {
+        if let Err(e) = installer::uninstall(&plugin) {
+            tracing::warn!(
+                "delete_marketplace_completely: failed to uninstall plugin '{}' from '{}': {}",
+                plugin.name,
+                name,
+                e
+            );
+        }
+    }
+    if let Err(e) = marketplace_installer::uninstall_marketplace(&name) {
+        tracing::warn!(
+            "delete_marketplace_completely: uninstall_marketplace('{}') failed: {}",
+            name,
+            e
+        );
+    }
+    let mut s = config::load_settings();
+    s.marketplaces.retain(|m| m.name != name);
+    config::save_settings(&s)?;
+    Ok(s)
 }
 
 #[tauri::command]
 pub async fn set_marketplace_auto_update(name: String, value: bool) -> Result<bool> {
+    tracing::info!("set_marketplace_auto_update: {} -> {}", name, value);
     marketplace_installer::set_auto_update(&name, value)
 }
 
@@ -202,6 +335,12 @@ pub fn parse_marketplace_url(url: String) -> Option<String> {
 
 #[tauri::command]
 pub async fn set_plugin_enabled(plugin: String, marketplace: String, value: bool) -> Result<()> {
+    tracing::info!(
+        "set_plugin_enabled: {}@{} -> {}",
+        plugin,
+        marketplace,
+        value
+    );
     plugin_state::set_enabled(&plugin, &marketplace, value)
 }
 
@@ -226,6 +365,134 @@ pub async fn list_skill_files(folder: PathBuf) -> Result<Vec<String>> {
 #[tauri::command]
 pub async fn read_text_file(path: PathBuf) -> Result<String> {
     std::fs::read_to_string(&path).map_err(crate::error::Error::from)
+}
+
+/// Open a URL or filesystem path through the Windows shell (or platform
+/// equivalent). Bypasses `tauri-plugin-opener`'s scope system, which silently
+/// drops unscoped `file://` and `https://` targets in v2.
+#[tauri::command]
+pub async fn open_in_shell(target: String) -> Result<()> {
+    let t = target.trim();
+    if t.is_empty() {
+        return Err(crate::error::Error::Invalid("empty target".into()));
+    }
+    #[cfg(windows)]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let target_wide: Vec<u16> = OsStr::new(t)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let verb_wide: Vec<u16> = OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        #[link(name = "shell32")]
+        extern "system" {
+            fn ShellExecuteW(
+                hwnd: *mut core::ffi::c_void,
+                lp_operation: *const u16,
+                lp_file: *const u16,
+                lp_parameters: *const u16,
+                lp_directory: *const u16,
+                n_show_cmd: i32,
+            ) -> isize;
+        }
+        const SW_SHOWNORMAL: i32 = 1;
+        // ShellExecuteW returns >32 on success; any value <=32 is an error
+        // code in the legacy HINSTANCE convention.
+        let rc = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb_wide.as_ptr(),
+                target_wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if rc > 32 {
+            tracing::debug!("ShellExecuteW opened: {}", t);
+            Ok(())
+        } else {
+            tracing::warn!(
+                "ShellExecuteW failed for '{}' (code={})",
+                t,
+                rc
+            );
+            Err(crate::error::Error::Invalid(format!(
+                "ShellExecuteW failed (code {rc})"
+            )))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Err(crate::error::Error::Invalid(format!(
+            "open_in_shell not implemented on this platform for: {t}"
+        )))
+    }
+}
+
+/// Launches VS Code with the given path opened as a folder/file.
+///
+/// Goes through `cmd /C code` on Windows because the VS Code launcher is
+/// `code.cmd`, which Rust's `Command::new` won't pick up from PATH directly
+/// (it searches for `.exe` only). `CREATE_NO_WINDOW` keeps the helper console
+/// from flashing on screen. On other OSes we just call `code` directly.
+///
+/// We *don't* wait for the child — VS Code keeps running after this returns.
+#[tauri::command]
+pub async fn open_in_vscode(path: String) -> Result<()> {
+    let p = path.trim();
+    if p.is_empty() {
+        return Err(crate::error::Error::Invalid("empty path".into()));
+    }
+    if !std::path::Path::new(p).exists() {
+        return Err(crate::error::Error::Invalid(format!(
+            "path does not exist: {p}"
+        )));
+    }
+    tracing::info!("open_in_vscode: {}", p);
+
+    let spawn_result = {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            std::process::Command::new("cmd")
+                .args(["/C", "code", p])
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+        }
+        #[cfg(not(windows))]
+        {
+            std::process::Command::new("code").arg(p).spawn()
+        }
+    };
+
+    spawn_result.map(|_| ()).map_err(|e| {
+        tracing::warn!("open_in_vscode failed for '{}': {}", p, e);
+        crate::error::Error::Invalid(format!(
+            "Failed to launch VS Code: {e}. Make sure the `code` CLI is on \
+             your PATH — in VS Code run the command 'Shell Command: Install \
+             code command in PATH'."
+        ))
+    })
+}
+
+/// Last-modified timestamp for a file or directory, as an RFC3339 UTC string.
+/// Returns `None` when the path doesn't exist or the FS doesn't expose mtime.
+#[tauri::command]
+pub async fn file_mtime(path: PathBuf) -> Option<String> {
+    let meta = std::fs::metadata(&path).ok()?;
+    let modified = meta.modified().ok()?;
+    let dur = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let secs = dur.as_secs() as i64;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, dur.subsec_nanos())
+        .map(|dt| dt.to_rfc3339())
 }
 
 #[tauri::command]
@@ -293,7 +560,8 @@ pub struct SubmitChangesArgs {
 #[tauri::command]
 pub async fn admin_submit_changes(args: SubmitChangesArgs) -> Result<UploadResult> {
     let gh = gh()?;
-    admin::submit_changes(
+    let title = args.pr_title.clone();
+    match admin::submit_changes(
         &gh,
         &args.repo,
         &args.base_branch,
@@ -302,7 +570,13 @@ pub async fn admin_submit_changes(args: SubmitChangesArgs) -> Result<UploadResul
         &args.pr_body,
         &args.branch_prefix,
         &args.deletions,
-    )
+    ) {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            tracing::error!("admin.submit_changes failed: {}: {}", title, e);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -420,10 +694,91 @@ pub async fn settings_remove_marketplace(name: String) -> Result<Settings> {
 
 #[tauri::command]
 pub async fn settings_set_token(token: String) -> Result<Settings> {
+    tracing::info!("github token updated (len={})", token.len());
     let mut s = config::load_settings();
     s.github_token = token;
     config::save_settings(&s)?;
     Ok(s)
+}
+
+#[tauri::command]
+pub async fn settings_set_ui(ui: UiPrefs) -> Result<Settings> {
+    let mut s = config::load_settings();
+    s.ui = ui;
+    config::save_settings(&s)?;
+    Ok(s)
+}
+
+#[tauri::command]
+pub async fn settings_export() -> Result<String> {
+    let s = config::load_settings();
+    serde_json::to_string_pretty(&s).map_err(crate::error::Error::from)
+}
+
+#[tauri::command]
+pub async fn settings_import(payload: String) -> Result<Settings> {
+    let s: Settings =
+        serde_json::from_str(&payload).map_err(crate::error::Error::from)?;
+    config::save_settings(&s)?;
+    tracing::info!(
+        "imported settings: {} marketplace(s)",
+        s.marketplaces.len()
+    );
+    Ok(s)
+}
+
+#[tauri::command]
+pub async fn settings_paths() -> serde_json::Value {
+    serde_json::json!({
+        "exeDir": config::exe_dir(),
+        "configDir": config::app_settings_dir(),
+        "logsDir": config::logs_dir(),
+        "configFile": config::config_properties_file(),
+        "marketplacesFile": config::marketplaces_file(),
+        "loggingFile": config::logging_properties_file(),
+    })
+}
+
+// ---------- Logging commands ----------
+
+#[tauri::command]
+pub async fn logging_get_config() -> LoggingConfig {
+    config::load_logging_config()
+}
+
+#[tauri::command]
+pub async fn logging_set_config(cfg: LoggingConfig) -> Result<LoggingConfig> {
+    config::save_logging_config(&cfg)?;
+    tracing::info!(
+        "logging config updated: enabled={} level={}",
+        cfg.enabled,
+        cfg.level
+    );
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub async fn logging_purge() -> Result<u32> {
+    let removed = logger::purge().map_err(crate::error::Error::from)?;
+    Ok(removed as u32)
+}
+
+#[tauri::command]
+pub async fn logging_tail(max_bytes: Option<usize>) -> Result<String> {
+    logger::tail(max_bytes.unwrap_or(64 * 1024))
+        .map_err(crate::error::Error::from)
+}
+
+#[tauri::command]
+pub async fn logging_log(level: String, target: Option<String>, message: String) {
+    let target = target.unwrap_or_else(|| "frontend".to_string());
+    match level.to_ascii_uppercase().as_str() {
+        "ERROR" => tracing::error!(target: "frontend", "[{}] {}", target, message),
+        "WARN" => tracing::warn!(target: "frontend", "[{}] {}", target, message),
+        "DEBUG" => tracing::debug!(target: "frontend", "[{}] {}", target, message),
+        "TRACE" => tracing::trace!(target: "frontend", "[{}] {}", target, message),
+        _ => tracing::info!(target: "frontend", "[{}] {}", target, message),
+    }
 }
 
 // ---------- Admin draft commands ----------
@@ -475,7 +830,14 @@ pub async fn admin_prepare_delete_skill(
 #[tauri::command]
 pub async fn admin_submit_draft(draft: AdminDraft) -> Result<UploadResult> {
     let gh = gh()?;
-    admin_drafts::submit_draft(&gh, &draft)
+    let title = draft.pr_title.clone();
+    match admin_drafts::submit_draft(&gh, &draft) {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            tracing::error!("admin.submit_changes failed: {}: {}", title, e);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -515,6 +877,18 @@ pub async fn list_duplicate_skills() -> Vec<local_scanner::DuplicateSkill> {
 }
 
 #[tauri::command]
-pub async fn delete_user_skill(folder: PathBuf) -> Result<()> {
-    local_scanner::delete_user_skill_folder(&folder)
+pub async fn archive_user_skill(folder: PathBuf) -> Result<PathBuf> {
+    tracing::info!("archive_user_skill: {}", folder.display());
+    local_scanner::archive_user_skill_folder(&folder)
+}
+
+#[tauri::command]
+pub async fn list_archived_skills() -> Vec<local_scanner::ArchivedSkill> {
+    local_scanner::list_archived_skills()
+}
+
+#[tauri::command]
+pub async fn restore_archived_skill(folder: PathBuf) -> Result<PathBuf> {
+    tracing::info!("restore_archived_skill: {}", folder.display());
+    local_scanner::restore_archived_skill_folder(&folder)
 }

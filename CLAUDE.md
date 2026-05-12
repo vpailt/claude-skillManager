@@ -45,9 +45,50 @@ The app is a GUI over **Claude Code's plugin install state**. Every important fi
 | `~/.claude/settings.json` → `enabledPlugins["<plugin>@<marketplace>"]` | enable/disable | `plugin_state.rs` |
 | `~/.claude/skills/<name>/` | standalone user skills | `local_scanner.rs` |
 
-App's own settings live separately at `%APPDATA%\SkillManager\settings.json` (see
-`config::app_settings_dir()`) — token + per-marketplace config. Nothing is written next
-to the .exe; that's intentional so the exe stays portable.
+### Portable install layout (own files)
+
+The app's own state is **portable** and sits next to `skillmanager.exe` — the
+distribution model is "zip the SkillManager directory and move it". `config::exe_dir()`
+resolves the directory of the running exe; `config::app_settings_dir()` returns
+`<exe_dir>/config`, `config::logs_dir()` returns `<exe_dir>/logs`. Both are created on
+first access. In dev (`cargo tauri dev`), `exe_dir` is `src-tauri/target/debug/`, so
+config and logs land there.
+
+```
+SkillManager/
+├── skillmanager.exe
+├── config/
+│   ├── config.properties      ← token + polling + UI prefs (Java-style key=value)
+│   ├── logging.properties     ← logger config (enabled, level, max files)
+│   ├── marketplaces.json      ← list of registered marketplaces
+│   ├── pr_history.json        ← rolling list of admin-opened PRs
+│   └── pending_prs.json       ← PR drafts awaiting merge
+└── logs/
+    └── skillmanager.YYYY-MM-DD.log
+```
+
+The two `.properties` files are hand-editable; restart the app to pick up changes
+made outside the Settings page. The properties parser is intentionally minimal
+(no multi-line values, no `\uXXXX` escapes) — see `properties.rs`.
+
+On first run, if a legacy `%APPDATA%/SkillManager/settings.json` is found and the
+portable `config.properties` does not yet exist, the legacy blob is migrated once
+(guarded by a `OnceLock` so it never re-runs). Don't reintroduce code paths that
+write to `%APPDATA%` — everything goes through `config::app_settings_dir()`.
+
+### Logging
+
+`logger::init()` runs at the top of `lib::run()` and wires `tracing` to a daily
+rolling file (`tracing-appender`) under `<exe_dir>/logs/`. The level filter is
+scoped to `skillmanager_lib=<LEVEL>` so dependency chatter stays quiet at
+DEBUG/TRACE. When `logging.enabled=false`, output drops to stderr at WARN+ only —
+do not assume file logging is always on. The `WorkerGuard` returned by the
+non-blocking writer is stashed in a static so it lives for the whole process;
+forgetting to hold a guard loses the tail of the log on shutdown.
+
+Frontend logs reach the same file via the `logging_log` Tauri command (see
+`src/lib/logger.ts`). Use `createLogger("<target>")` rather than `console.*` for
+events that should survive a session — `console.*` only lives in devtools.
 
 ### Marketplace = index, not container
 
@@ -90,6 +131,14 @@ that requires `git` on the user's machine.
 
 - `frontmatter.rs` — minimal YAML-frontmatter parser. Only `name`/`description`/`type`
   are used. If you need richer YAML, weigh that against the binary-size constraint.
+- `properties.rs` — minimal Java-style `.properties` parser/serializer used for
+  `config.properties` and `logging.properties`. Scalars only; reach for JSON for lists.
+- `config.rs` — paths (`exe_dir`, `app_settings_dir`, `logs_dir`), the `Settings` /
+  `UiPrefs` / `LoggingConfig` structs, and the load/save split between
+  `config.properties` (scalars) and `marketplaces.json` (the list).
+- `logger.rs` — boots the `tracing` subscriber against `<exe_dir>/logs/`. `init()` is
+  idempotent. `purge()` handles the Windows file-lock case by truncating in place when
+  removal fails. `tail()` powers the in-app log viewer.
 - `github_client.rs::extract_zipball` — strips the top-level `<repo>-<sha>/` folder
   GitHub adds, and uses the `\\?\` long-path prefix on Windows (via `long_path()`) to
   bypass MAX_PATH. Don't replace with a naive zip extract loop.
@@ -102,7 +151,9 @@ that requires `git` on the user's machine.
   marketplaces (installed locally but missing from app settings) so the user can still
   see/act on them.
 - `commands/` — every `#[tauri::command]` handler lives here; register new ones in
-  `lib.rs::tauri::generate_handler!`.
+  `lib.rs::tauri::generate_handler!`. Wrap meaningful side-effects in
+  `tracing::info!` (install/uninstall, PR submission, settings mutations) so they
+  appear in the log file users can ship back as a bug report.
 - `error.rs` — `AppError` is the single error type returned to the frontend. Wrap new
   failure modes here; don't leak `anyhow::Error` across the FFI boundary.
 
@@ -112,21 +163,40 @@ that requires `git` on the user's machine.
   add a Tauri command; don't call `invoke()` directly from components.
 - `lib/types.ts` — TS mirror of Rust models. Keep field casing consistent
   (`#[serde(rename_all = "camelCase")]` on the Rust side).
+- `lib/logger.ts` — `createLogger("<target>")` produces an `{error,warn,info,debug,trace}`
+  object that tees to the console **and** the backend log file via `logging_log`. Prefer
+  this over `console.*` for anything you'd want in a post-mortem.
+- `lib/utils.ts::openExternal` — always go through this for opening URLs; it falls back
+  to `window.open` if the Tauri opener plugin is missing a capability.
 - `hooks/useRefresh.ts` — TanStack Query bridge for the refresh pipeline; UI components
   consume the resulting query state, not the raw command.
-- `stores/` — Zustand for cross-page UI state (theme, current selection). Server state
-  belongs in TanStack Query, not Zustand.
+- `hooks/usePrPolling.ts` — gated by `ui.prPollingEnabled` in settings; min interval 15s.
+- `stores/ui.ts` — single source of truth for theme/density/sidebar/polling prefs.
+  `stores/theme.ts` is a thin re-export alias kept for legacy imports.
+- `stores/notifications.ts` — in-app toast queue. The polling hook and Settings page
+  push success/error toasts here; `NotificationStack` renders them.
 - `pages/` — one file per top-level tab (Overview, Plugins, Skills, Admin, Settings).
+- `components/ResizableSplit.tsx` — wraps `react-resizable-panels` with persistent
+  layout via `autoSaveId`. Use it for any two-pane page; never grid `[fixed_px]_1fr`
+  again — that broke responsiveness on small windows.
 
 ## Conventions worth preserving
 
 - All JSON writes that matter go through `installer::atomic_write_json` (write `.tmp`
-  then `rename`) — don't write JSON in place.
+  then `rename`) — don't write JSON in place. `properties::write_atomic` does the same
+  for `.properties` files.
 - Timestamps in install records use `installer::now_iso()` (UTC, milliseconds, `Z`
   suffix) to match Claude Code's own format.
 - New plugins are auto-enabled on install only if `enabledPlugins` has no existing entry
   (mirrors `/plugin install`).
-- Domain types live in `models.rs` (Rust) and `lib/types.ts` (TS). Keep these two files
-  in lockstep, not scattered.
+- Domain types live in `models.rs` + `config.rs` (Rust) and `lib/types.ts` (TS). Keep
+  these in lockstep, not scattered.
 - `serde` derives use `rename_all = "camelCase"` so the Rust → TS boundary doesn't need
   manual translation.
+- App-state files (`config.properties`, `logging.properties`, `marketplaces.json`,
+  `pr_history.json`, `pending_prs.json`, `logs/`) sit under `<exe_dir>/`. Never write
+  to `%APPDATA%` directly — go through `config::app_settings_dir()` or
+  `config::logs_dir()`.
+- Backend events worth keeping in a log file use `tracing::info!`/`warn!`/`error!`.
+  Frontend events use `createLogger("<target>")` from `lib/logger.ts`. Don't sprinkle
+  `println!` or `console.log` in shipped code — they bypass the log file.

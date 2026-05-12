@@ -67,9 +67,41 @@ export interface MarketplaceConfig {
   autoUpdate: boolean;
 }
 
+export type UiDensity = "compact" | "comfortable";
+export type ThemePref = "light" | "dark" | "auto";
+export type LogLevel = "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE";
+
+export interface UiPrefs {
+  prPollingEnabled: boolean;
+  prPollingIntervalSeconds: number;
+  density: UiDensity;
+  theme: ThemePref;
+  sidebarCollapsed: boolean;
+  startMinimized: boolean;
+  closeToTray: boolean;
+  nativeNotificationsEnabled: boolean;
+}
+
+export interface LoggingConfig {
+  enabled: boolean;
+  level: LogLevel;
+  maxFileSizeMb: number;
+  maxFileCount: number;
+}
+
+export interface SettingsPaths {
+  exeDir: string;
+  configDir: string;
+  logsDir: string;
+  configFile: string;
+  marketplacesFile: string;
+  loggingFile: string;
+}
+
 export interface Settings {
   githubToken: string;
   marketplaces: MarketplaceConfig[];
+  ui: UiPrefs;
 }
 
 export interface RefreshResult {
@@ -205,4 +237,14 @@ export interface DuplicateSkill {
   name: string;
   local: DuplicateCopy;
   pluginCopies: DuplicateCopy[];
+}
+
+export interface ArchivedSkill {
+  name: string;
+  originalName: string;
+  folder: string;
+  skillMdPath: string | null;
+  description: string;
+  archivedAt: string;
+  version: string;
 }

@@ -43,10 +43,18 @@ pub fn install_marketplace(
     r#ref: &str,
     auto_update: Option<bool>,
 ) -> Result<PathBuf> {
+    tracing::info!(
+        "install_marketplace: {} from {} (ref={}, autoUpdate={:?})",
+        name,
+        repo,
+        r#ref,
+        auto_update
+    );
     if name.is_empty() {
         return Err(Error::Invalid("Marketplace name is required.".into()));
     }
     if repo.is_empty() {
+        tracing::error!("marketplace {} has no GitHub repo configured", name);
         return Err(Error::Invalid(format!(
             "Marketplace '{name}' has no GitHub repo configured."
         )));
@@ -138,12 +146,24 @@ pub fn auto_update_if_changed(
         return (false, "up to date".into());
     }
     match install_marketplace(gh, name, repo, &r#ref, None) {
-        Ok(_) => (true, if latest.is_empty() { "updated".into() } else { latest }),
-        Err(e) => (false, format!("install failed: {e}")),
+        Ok(_) => {
+            tracing::info!(
+                "auto-update applied for {}: {} → {}",
+                name,
+                if stored.is_empty() { "(none)" } else { &stored },
+                if latest.is_empty() { "(unknown)" } else { &latest }
+            );
+            (true, if latest.is_empty() { "updated".into() } else { latest })
+        }
+        Err(e) => {
+            tracing::warn!("auto-update for {} failed: {}", name, e);
+            (false, format!("install failed: {e}"))
+        }
     }
 }
 
 pub fn uninstall_marketplace(name: &str) -> Result<()> {
+    tracing::info!("uninstall_marketplace: {}", name);
     let mut data = load_known();
     let info = data.remove(name);
     if info.is_some() {

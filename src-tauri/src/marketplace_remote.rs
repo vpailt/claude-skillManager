@@ -74,7 +74,15 @@ fn compute_state(p: &Plugin) -> InstallState {
     }
     let latest = p.latest_version.as_deref().unwrap_or("");
     if latest.is_empty() {
-        return InstallState::LocalOnly;
+        // The remote registry doesn't pin a version (Anthropic's official
+        // marketplace omits `version` on most entries). If we successfully
+        // matched against a remote entry, the plugin is fully tracked —
+        // LocalOnly is reserved for installs with no remote knowledge at all.
+        return if p.remote_present {
+            InstallState::Installed
+        } else {
+            InstallState::LocalOnly
+        };
     }
     if semver_eq(installed, latest) {
         InstallState::Installed

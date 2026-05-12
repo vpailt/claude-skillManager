@@ -53,3 +53,55 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.6); }
+
+/* Compact density — tighten paddings on common shadcn primitives */
+.compact .card-padding,
+.compact [data-card] > div { padding-block: 0.5rem; }
+.compact .text-sm { font-size: 0.8125rem; line-height: 1.15rem; }
+.compact .text-xs { font-size: 0.6875rem; }
+.compact .px-3 { padding-left: 0.5rem; padding-right: 0.5rem; }
+.compact .py-2 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+.compact .p-3 { padding: 0.5rem; }
+.compact .p-4 { padding: 0.75rem; }
+.compact .p-6 { padding: 1rem; }
+.compact .gap-3 { gap: 0.5rem; }
+.compact .gap-4 { gap: 0.625rem; }
+.compact .space-y-3 > * + * { margin-top: 0.5rem; }
+.compact .space-y-4 > * + * { margin-top: 0.625rem; }
+
+/* Resizable panel handle */
+.PanelResizeHandleOuter { position: relative; outline: none; }
+.PanelResizeHandleOuter[data-panel-resize-handle-enabled="true"]:hover .PanelResizeHandleInner,
+.PanelResizeHandleOuter[data-resize-handle-active] .PanelResizeHandleInner {
+  background-color: hsl(var(--primary) / 0.4);
+}
+.PanelResizeHandleInner {
+  background-color: hsl(var(--border));
+  transition: background-color 150ms;
+}
+.PanelResizeHandleOuter[data-panel-group-direction="horizontal"] .PanelResizeHandleInner {
+  width: 4px; height: 100%; margin-inline: -1px;
+}
+
+/* Radix ScrollArea wraps children in a <div style="display:table;min-width:100%"> so
+   that wide intrinsic children (long URLs, code blocks) push the viewport sideways
+   instead of wrapping. Force block layout so content respects the available width. */
+[data-radix-scroll-area-viewport] > div { display: block !important; min-width: 0 !important; max-width: 100% !important; }
+
+/* Markdown body */
+.prose-skill { color: hsl(var(--foreground)); font-size: 0.875rem; line-height: 1.5; min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+.prose-skill h1, .prose-skill h2, .prose-skill h3, .prose-skill h4 { font-weight: 600; margin-top: 1.1em; margin-bottom: 0.4em; }
+.prose-skill h1 { font-size: 1.25rem; }
+.prose-skill h2 { font-size: 1.1rem; }
+.prose-skill h3 { font-size: 1rem; }
+.prose-skill p { margin-block: 0.5em; }
+.prose-skill ul, .prose-skill ol { margin-block: 0.5em; padding-inline-start: 1.5em; }
+.prose-skill li { margin-block: 0.2em; }
+.prose-skill code { background-color: hsl(var(--muted)); padding: 0.1em 0.35em; border-radius: 0.25rem; font-size: 0.85em; }
+.prose-skill pre { background-color: hsl(var(--muted)); padding: 0.7em 0.9em; border-radius: 0.4rem; overflow-x: auto; max-width: 100%; }
+.prose-skill pre code { background: transparent; padding: 0; overflow-wrap: normal; word-break: normal; white-space: pre; }
+.prose-skill blockquote { border-inline-start: 3px solid hsl(var(--border)); padding-inline-start: 0.75em; color: hsl(var(--muted-foreground)); margin-block: 0.5em; }
+.prose-skill a { color: hsl(var(--primary)); text-decoration: underline; }
+.prose-skill table { border-collapse: collapse; margin-block: 0.5em; display: block; max-width: 100%; overflow-x: auto; }
+.prose-skill th, .prose-skill td { border: 1px solid hsl(var(--border)); padding: 0.3em 0.55em; }
+.prose-skill img { max-width: 100%; height: auto; }

@@ -80,10 +80,23 @@ fn cache_path(marketplace: &str, plugin: &str, version: &str) -> PathBuf {
 }
 
 pub fn install_plugin(gh: &GitHubClient, plugin: &Plugin) -> Result<PathBuf> {
+    tracing::info!(
+        "install_plugin: {} from {} (marketplace={})",
+        plugin.name,
+        plugin
+            .source
+            .as_ref()
+            .map(|s| s.repo.as_str())
+            .unwrap_or("?"),
+        plugin.marketplace_name
+    );
     let src = plugin
         .source
         .as_ref()
-        .ok_or_else(|| Error::Invalid(format!("Plugin {} has no source.", plugin.name)))?;
+        .ok_or_else(|| {
+            tracing::error!("plugin {} has no source", plugin.name);
+            Error::Invalid(format!("Plugin {} has no source.", plugin.name))
+        })?;
     let version = plugin
         .latest_version
         .clone()
@@ -104,6 +117,7 @@ pub fn install_plugin(gh: &GitHubClient, plugin: &Plugin) -> Result<PathBuf> {
             &plugin.name,
             &version,
             &r#ref,
+            &src.path,
         );
     }
     if src.kind == "directory" && !src.path.is_empty() {
@@ -129,12 +143,13 @@ fn install_from_github(
     plugin_name: &str,
     version: &str,
     r#ref: &str,
+    subpath: &str,
 ) -> Result<PathBuf> {
     let zip_bytes = gh.download_zipball(repo, r#ref)?;
     let install_path = cache_path(marketplace_name, plugin_name, version);
     rmtree_robust(&install_path)?;
     fs::create_dir_all(&install_path)?;
-    GitHubClient::extract_zipball(&zip_bytes, &install_path, "")?;
+    GitHubClient::extract_zipball(&zip_bytes, &install_path, subpath)?;
 
     let sha = gh
         .get_latest_commit(repo, r#ref)
@@ -217,6 +232,11 @@ fn register_install(
 }
 
 pub fn uninstall(plugin: &Plugin) -> Result<()> {
+    tracing::info!(
+        "uninstall_plugin: {} (marketplace={})",
+        plugin.name,
+        plugin.marketplace_name
+    );
     let mut data = load_installed();
     let key = format!("{}@{}", plugin.name, plugin.marketplace_name);
     let mut changed = false;

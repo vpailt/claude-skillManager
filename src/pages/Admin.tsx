@@ -9,17 +9,14 @@ import {
   Globe,
   Sparkles,
   Upload,
-  Trash,
   HardDrive,
 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
-import { shortDate } from "@/lib/utils";
+import { openExternal, shortDate } from "@/lib/utils";
 import {
   AddPluginButton,
   PluginActionsRow,
@@ -29,7 +26,10 @@ import {
 } from "@/components/AdminWizards";
 import { AdminLocalPanel } from "@/components/AdminLocalPanel";
 import { useApp } from "@/stores/app";
+import { useNotifications } from "@/stores/notifications";
 import type { Plugin } from "@/lib/types";
+
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function statusVariant(status: string) {
   if (status === "merged") return "success" as const;
@@ -52,8 +52,6 @@ function MarketplaceAdminSection({
   const [pluginFilter, setPluginFilter] = useState("");
   const findMarketplace = useApp((s) => s.findMarketplace);
 
-  // Default the dropdown to the first editable marketplace once data arrives,
-  // and clear the selection if the current pick disappears (e.g. token revoked).
   useEffect(() => {
     if (editable.length === 0) {
       if (selectedMp !== "") setSelectedMp("");
@@ -82,14 +80,13 @@ function MarketplaceAdminSection({
           </p>
           {allMarketplaces.length === 0 && (
             <p>
-              No marketplace registered yet. Add one in <strong>Settings</strong>{" "}
-              with an <code>owner/repo</code>.
+              No marketplace registered yet. Add one from the <strong>Admin local</strong>{" "}
+              tab using <em>Add from URL</em>.
             </p>
           )}
           {unconfigured.length > 0 && (
             <p>
-              These marketplaces have no GitHub repo configured — open{" "}
-              <strong>Settings</strong> and fill in <code>owner/repo</code> for:{" "}
+              These marketplaces have no GitHub repo configured:{" "}
               <span className="font-mono text-foreground">
                 {unconfigured.map((m) => m.name).join(", ")}
               </span>
@@ -194,7 +191,7 @@ function PluginAdminCard({
                 size="sm"
                 variant="ghost"
                 onClick={() =>
-                  openUrl(`https://github.com/${plugin.source!.repo}`)
+                  openExternal(`https://github.com/${plugin.source!.repo}`)
                 }
               >
                 <ExternalLink className="h-3 w-3" />
@@ -285,7 +282,7 @@ function PluginAdminCard({
                         })
                       }
                     >
-                      <Trash className="h-3 w-3" />
+                      <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
                 </div>
@@ -304,6 +301,7 @@ function PluginAdminCard({
 
 function PrHistorySection() {
   const qc = useQueryClient();
+  const notify = useNotifications((s) => s.push);
   const history = useQuery({ queryKey: ["pr-history"], queryFn: api.prHistoryList });
   const pending = useQuery({ queryKey: ["pending-prs"], queryFn: api.pendingPrsList });
 
@@ -311,15 +309,33 @@ function PrHistorySection() {
     mutationFn: ({ repo, number }: { repo: string; number: number }) =>
       api.prHistoryRefreshStatus(repo, number),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-history"] }),
+    onError: (e, vars) =>
+      notify({
+        kind: "error",
+        title: `Refresh PR #${vars.number} failed`,
+        body: errMsg(e),
+      }),
   });
   const removeRecord = useMutation({
     mutationFn: ({ repo, number }: { repo: string; number: number }) =>
       api.prHistoryRemove(repo, number),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-history"] }),
+    onError: (e, vars) =>
+      notify({
+        kind: "error",
+        title: `Remove PR #${vars.number} failed`,
+        body: errMsg(e),
+      }),
   });
   const clearAll = useMutation({
     mutationFn: api.prHistoryClear,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-history"] }),
+    onError: (e) =>
+      notify({
+        kind: "error",
+        title: "Clear PR history failed",
+        body: errMsg(e),
+      }),
   });
 
   return (
@@ -347,7 +363,12 @@ function PrHistorySection() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => openUrl(p.prUrl)}
+                    title={p.prUrl || "no URL"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openExternal(p.prUrl);
+                    }}
+                    disabled={!p.prUrl}
                   >
                     <ExternalLink className="h-3 w-3" />
                   </Button>
@@ -370,28 +391,49 @@ function PrHistorySection() {
         <div className="space-y-2">
           {history.data?.length === 0 && (
             <Card>
-              <CardContent className="p-6 text-sm text-muted-foreground">
-                No PR history yet.
+              <CardContent className="flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
+                <ListChecks className="h-8 w-8 opacity-40" />
+                <span>No PR history yet.</span>
               </CardContent>
             </Card>
           )}
           {history.data?.map((r) => (
             <Card key={`${r.repo}#${r.number}`}>
-              <CardContent className="flex items-center gap-2 p-3 text-sm">
+              <CardContent className="flex flex-wrap items-center gap-2 p-3 text-sm">
                 <Badge variant={statusVariant(r.status)}>{r.status}</Badge>
-                <span className="font-medium">{r.title}</span>
+                <button
+                  type="button"
+                  className="truncate text-left font-medium hover:underline"
+                  title={r.url || "no URL"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openExternal(r.url);
+                  }}
+                >
+                  {r.title}
+                </button>
                 <Badge variant="outline" className="text-[10px]">
                   {r.kind || "—"}
                 </Badge>
                 <span className="ml-auto text-xs text-muted-foreground">
                   {r.repo} #{r.number} · {shortDate(r.createdAt)}
                 </span>
-                <Button size="sm" variant="ghost" onClick={() => openUrl(r.url)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title={r.url || "no URL"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openExternal(r.url);
+                  }}
+                  disabled={!r.url}
+                >
                   <ExternalLink className="h-3 w-3" />
                 </Button>
                 <Button
                   size="sm"
                   variant="ghost"
+                  title="Refresh status from GitHub"
                   onClick={() =>
                     refreshStatus.mutate({ repo: r.repo, number: r.number })
                   }
@@ -401,6 +443,7 @@ function PrHistorySection() {
                 <Button
                   size="sm"
                   variant="ghost"
+                  title="Remove from history"
                   onClick={() =>
                     removeRecord.mutate({ repo: r.repo, number: r.number })
                   }
@@ -425,8 +468,8 @@ export function AdminPage() {
   const [wizard, setWizard] = useState<WizardKind | null>(null);
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="border-b p-4">
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="shrink-0 border-b p-4">
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-5 w-5 text-primary" />
           <h1 className="text-xl font-semibold">Admin</h1>
@@ -464,13 +507,13 @@ export function AdminPage() {
         </div>
       </header>
 
-      <ScrollArea className="flex-1">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="p-4">
           {tab === "local" && <AdminLocalPanel />}
           {tab === "remote" && <MarketplaceAdminSection onLaunch={setWizard} />}
           {tab === "history" && <PrHistorySection />}
         </div>
-      </ScrollArea>
+      </div>
 
       <WizardHost active={wizard} onClose={() => setWizard(null)} />
     </div>

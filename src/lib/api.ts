@@ -2,9 +2,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AdminDraft,
+  ArchivedSkill,
   BumpSuggestion,
   DuplicateSkill,
   LocalSkill,
+  LogLevel,
+  LoggingConfig,
   Marketplace,
   MarketplaceConfig,
   PendingPR,
@@ -13,6 +16,8 @@ import type {
   RefreshResult,
   RemoteSkillInfo,
   Settings,
+  SettingsPaths,
+  UiPrefs,
   UploadResult,
   UploadSkillArgs,
 } from "./types";
@@ -26,8 +31,26 @@ export const api = {
     invoke<Settings>("settings_upsert_marketplace", { cfg }),
   settingsRemoveMarketplace: (name: string) =>
     invoke<Settings>("settings_remove_marketplace", { name }),
+  deleteMarketplaceCompletely: (name: string) =>
+    invoke<Settings>("delete_marketplace_completely", { name }),
   settingsSetToken: (token: string) =>
     invoke<Settings>("settings_set_token", { token }),
+  settingsSetUi: (ui: UiPrefs) =>
+    invoke<Settings>("settings_set_ui", { ui }),
+  settingsExport: () => invoke<string>("settings_export"),
+  settingsImport: (payload: string) =>
+    invoke<Settings>("settings_import", { payload }),
+  settingsPaths: () => invoke<SettingsPaths>("settings_paths"),
+
+  // --- logging ---
+  loggingGetConfig: () => invoke<LoggingConfig>("logging_get_config"),
+  loggingSetConfig: (cfg: LoggingConfig) =>
+    invoke<LoggingConfig>("logging_set_config", { cfg }),
+  loggingPurge: () => invoke<number>("logging_purge"),
+  loggingTail: (maxBytes?: number) =>
+    invoke<string>("logging_tail", { maxBytes: maxBytes ?? null }),
+  loggingLog: (level: LogLevel, target: string, message: string) =>
+    invoke<void>("logging_log", { level, target, message }),
 
   // --- refresh ---
   refreshAll: () => invoke<RefreshResult>("refresh_all"),
@@ -71,6 +94,11 @@ export const api = {
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   writeTextFile: (path: string, content: string) =>
     invoke<void>("write_text_file", { path, content }),
+  fileMtime: (path: string) => invoke<string | null>("file_mtime", { path }),
+  openInShell: (target: string) =>
+    invoke<void>("open_in_shell", { target }),
+  openInVsCode: (path: string) =>
+    invoke<void>("open_in_vscode", { path }),
   parseSkillMd: (text: string) =>
     invoke<{ fields: Record<string, string>; body: string }>("parse_skill_md", {
       text,
@@ -177,8 +205,12 @@ export const api = {
   // --- duplicate skills ---
   listDuplicateSkills: () =>
     invoke<DuplicateSkill[]>("list_duplicate_skills"),
-  deleteUserSkill: (folder: string) =>
-    invoke<void>("delete_user_skill", { folder }),
+  archiveUserSkill: (folder: string) =>
+    invoke<string>("archive_user_skill", { folder }),
+  listArchivedSkills: () =>
+    invoke<ArchivedSkill[]>("list_archived_skills"),
+  restoreArchivedSkill: (folder: string) =>
+    invoke<string>("restore_archived_skill", { folder }),
 };
 
 // Marketplace name used by the backend to surface standalone user skills.
