@@ -9,7 +9,6 @@ import {
   Folder,
   Info,
   MoreVertical,
-  Plus,
   Search,
   Sparkles,
   Filter,
@@ -566,16 +565,6 @@ export function SkillsPage() {
           aria-label="Search"
         >
           <Search className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 w-7 p-0"
-          onClick={() => (window.location.hash = "#/admin")}
-          aria-label="New skill"
-          title="Add a new skill via Admin"
-        >
-          <Plus className="h-3.5 w-3.5" />
         </Button>
       </div>
 
