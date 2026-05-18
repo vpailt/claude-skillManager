@@ -23,6 +23,7 @@ use crate::models::{Marketplace, Plugin, Skill};
 use crate::pending_prs::{self, PendingPR};
 use crate::plugin_state;
 use crate::pr_history::{self, PRRecord};
+use crate::token_store;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -697,10 +698,9 @@ pub async fn settings_remove_marketplace(name: String) -> Result<Settings> {
 #[tauri::command]
 pub async fn settings_set_token(token: String) -> Result<Settings> {
     tracing::info!("github token updated (len={})", token.len());
-    let mut s = config::load_settings();
-    s.github_token = token;
-    config::save_settings(&s)?;
-    Ok(s)
+    token_store::save(&token)?;
+    // Reload so the returned Settings reflects what's actually stored.
+    Ok(config::load_settings())
 }
 
 #[tauri::command]
@@ -713,7 +713,10 @@ pub async fn settings_set_ui(ui: UiPrefs) -> Result<Settings> {
 
 #[tauri::command]
 pub async fn settings_export() -> Result<String> {
-    let s = config::load_settings();
+    // Never include the GitHub token in an export blob — it stays in the OS
+    // credential vault. Users re-enter it after importing on another machine.
+    let mut s = config::load_settings();
+    s.github_token.clear();
     serde_json::to_string_pretty(&s).map_err(crate::error::Error::from)
 }
 
@@ -721,12 +724,21 @@ pub async fn settings_export() -> Result<String> {
 pub async fn settings_import(payload: String) -> Result<Settings> {
     let s: Settings =
         serde_json::from_str(&payload).map_err(crate::error::Error::from)?;
-    config::save_settings(&s)?;
+    // Back-compat: an export from an older build may still carry a token.
+    // Lift it into the credential vault rather than dropping it on disk.
+    if !s.github_token.is_empty() {
+        if let Err(e) = token_store::save(&s.github_token) {
+            tracing::warn!("could not store imported token in credential vault: {e}");
+        }
+    }
+    let mut to_save = s.clone();
+    to_save.github_token.clear();
+    config::save_settings(&to_save)?;
     tracing::info!(
         "imported settings: {} marketplace(s)",
         s.marketplaces.len()
     );
-    Ok(s)
+    Ok(config::load_settings())
 }
 
 #[tauri::command]

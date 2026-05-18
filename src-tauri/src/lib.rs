@@ -24,6 +24,7 @@ pub mod plugin_state;
 pub mod pr_history;
 pub mod properties;
 pub mod registry;
+pub mod token_store;
 pub mod tray;
 
 use commands::*;

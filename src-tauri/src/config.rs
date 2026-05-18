@@ -20,6 +20,7 @@
 
 use crate::error::{Error, Result};
 use crate::properties::{write_atomic, Properties};
+use crate::token_store;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -258,7 +259,6 @@ const PROP_UI_CLOSE_TO_TRAY: &str = "ui.tray.close.to.tray";
 const PROP_UI_NATIVE_NOTIFICATIONS: &str = "ui.notifications.native.enabled";
 
 const PROPS_SECTIONS: &[(&str, &[&str])] = &[
-    ("GitHub credentials", &["github."]),
     ("PR status polling", &["polling."]),
     ("UI preferences", &["ui."]),
 ];
@@ -266,9 +266,10 @@ const PROPS_SECTIONS: &[(&str, &[&str])] = &[
 fn settings_from_properties_and_marketplaces(
     props: &Properties,
     marketplaces: Vec<MarketplaceConfig>,
+    github_token: String,
 ) -> Settings {
     Settings {
-        github_token: props.get_or(PROP_TOKEN, ""),
+        github_token,
         marketplaces,
         ui: UiPrefs {
             pr_polling_enabled: props.get_bool(PROP_POLLING_ENABLED, false),
@@ -286,7 +287,6 @@ fn settings_from_properties_and_marketplaces(
 
 fn settings_to_properties(s: &Settings) -> Properties {
     let mut p = Properties::new();
-    p.set(PROP_TOKEN, &s.github_token);
     p.set_bool(PROP_POLLING_ENABLED, s.ui.pr_polling_enabled);
     p.set_u32(PROP_POLLING_INTERVAL, s.ui.pr_polling_interval_seconds);
     p.set(PROP_UI_THEME, &s.ui.theme);
@@ -351,21 +351,78 @@ fn migrate_legacy_if_needed() {
     );
 }
 
+/// One-shot migration: if `config.properties` still carries a `github.token=…`
+/// line, move it into the OS credential vault and rewrite the file without it.
+/// Runs at most once per process; safe to call on every `load_settings()`.
+fn migrate_token_to_keyring_if_needed(props: &Properties) -> Option<String> {
+    static DONE: OnceLock<()> = OnceLock::new();
+    let legacy = props.get(PROP_TOKEN).map(str::to_string);
+    let Some(legacy) = legacy else {
+        return None;
+    };
+    if legacy.is_empty() {
+        // Empty placeholder: just strip it on the next save, no token to lift.
+        return None;
+    }
+    if DONE.get().is_some() {
+        return Some(legacy);
+    }
+    DONE.set(()).ok();
+    match token_store::save(&legacy) {
+        Ok(()) => {
+            tracing::info!(
+                "Migrated github.token from config.properties into OS credential vault"
+            );
+            // Rewrite the file without the token. Reuse settings_to_properties
+            // which already omits the token from rendered output.
+            let mut sanitized = props.clone();
+            sanitized.remove(PROP_TOKEN);
+            let rendered = render_config_properties(&sanitized);
+            if let Err(e) = write_atomic(&config_properties_file(), &rendered) {
+                tracing::warn!("could not rewrite config.properties post-migration: {e}");
+            }
+            Some(legacy)
+        }
+        Err(e) => {
+            tracing::warn!(
+                "could not migrate github.token to credential vault, leaving in config.properties: {e}"
+            );
+            Some(legacy)
+        }
+    }
+}
+
+fn render_config_properties(props: &Properties) -> String {
+    format!(
+        "# SkillManager configuration\n\
+         # Edit by hand or via the Settings page in the app.\n\
+         # Restart the app after manual changes.\n\
+         #\n\
+         # The GitHub token is stored in the OS credential vault on Windows,\n\
+         # not in this file. Use the Settings page to set or clear it.\n\n{}",
+        props.render_with_sections(PROPS_SECTIONS)
+    )
+}
+
 pub fn load_settings() -> Settings {
     migrate_legacy_if_needed();
     let props = Properties::load(&config_properties_file()).unwrap_or_default();
     let marketplaces = load_marketplaces();
-    settings_from_properties_and_marketplaces(&props, marketplaces)
+    let token_from_vault = token_store::load().unwrap_or_else(|e| {
+        tracing::warn!("token_store::load failed: {e}");
+        None
+    });
+    let github_token = token_from_vault
+        .or_else(|| migrate_token_to_keyring_if_needed(&props))
+        .unwrap_or_default();
+    settings_from_properties_and_marketplaces(&props, marketplaces, github_token)
 }
 
 pub fn save_settings(s: &Settings) -> Result<()> {
+    // Token persistence is handled separately via `token_store` so it never
+    // touches the on-disk properties file.
     let props = settings_to_properties(s);
-    let rendered = format!(
-        "# SkillManager configuration\n\
-         # Edit by hand or via the Settings page in the app.\n\
-         # Restart the app after manual changes.\n\n{}",
-        props.render_with_sections(PROPS_SECTIONS)
-    );
+    let rendered = render_config_properties(&props);
     write_atomic(&config_properties_file(), &rendered)?;
     save_marketplaces(&s.marketplaces)?;
     Ok(())

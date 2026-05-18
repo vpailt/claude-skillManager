@@ -38,6 +38,7 @@ walkdir = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 # Single-instance enforcement only ships on desktop targets. On mobile, Tauri
 # already guarantees one process per app and the plugin doesn't build.

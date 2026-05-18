@@ -86,6 +86,10 @@ impl Properties {
         self.inner.insert(key.into(), value.into());
     }
 
+    pub fn remove(&mut self, key: &str) {
+        self.inner.remove(key);
+    }
+
     pub fn set_bool<K: Into<String>>(&mut self, key: K, value: bool) {
         self.set(key, if value { "true" } else { "false" });
     }
