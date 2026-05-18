@@ -30,6 +30,7 @@ import { useNotifications } from "@/stores/notifications";
 import { api } from "@/lib/api";
 import { cn, openExternal, shortDate } from "@/lib/utils";
 import type { Plugin } from "@/lib/types";
+import { useAppVersion } from "@/hooks/useAppVersion";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -677,6 +678,7 @@ export function OverviewPage() {
   const marketplaces = useApp((s) => s.marketplaces);
   const localOnly = useApp((s) => s.localOnly);
   const setSelection = useApp((s) => s.setSelection);
+  const version = useAppVersion();
 
   const totalPlugins = marketplaces.reduce((acc, m) => acc + m.plugins.length, 0);
   const installedPlugins = marketplaces
@@ -708,7 +710,14 @@ export function OverviewPage() {
     <div className="h-full w-full overflow-auto">
       <div className="flex w-full flex-col p-6">
         <header className="mb-4">
-          <h1 className="text-2xl font-semibold">Overview</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold">Overview</h1>
+            {version && (
+              <Badge variant="outline" className="font-mono text-[11px]">
+                v{version}
+              </Badge>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">
             Snapshot of your Claude Code plugins, skills and marketplaces.
           </p>

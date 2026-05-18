@@ -296,14 +296,13 @@ function PluginAdminCard({
 }
 
 // ============================================================
-// PR history & pending
+// PR history
 // ============================================================
 
 function PrHistorySection() {
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
   const history = useQuery({ queryKey: ["pr-history"], queryFn: api.prHistoryList });
-  const pending = useQuery({ queryKey: ["pending-prs"], queryFn: api.pendingPrsList });
 
   const refreshStatus = useMutation({
     mutationFn: ({ repo, number }: { repo: string; number: number }) =>
@@ -340,45 +339,6 @@ function PrHistorySection() {
 
   return (
     <div className="space-y-6">
-      {pending.data && pending.data.length > 0 && (
-        <section>
-          <h3 className="mb-2 text-sm font-semibold">Pending PRs</h3>
-          <div className="space-y-2">
-            {pending.data.map((p) => (
-              <Card key={`${p.marketplaceName}/${p.pluginName}/${p.action}`}>
-                <CardContent className="flex items-center gap-2 p-3 text-sm">
-                  <Badge variant="warning">{p.action}</Badge>
-                  <span className="font-medium">{p.pluginName}</span>
-                  <span className="text-xs text-muted-foreground">
-                    in {p.marketplaceName}
-                  </span>
-                  {p.newVersion && (
-                    <Badge variant="secondary" className="text-[10px]">
-                      → v{p.newVersion}
-                    </Badge>
-                  )}
-                  <span className="ml-auto text-xs text-muted-foreground">
-                    PR #{p.prNumber} · {shortDate(p.createdAt)}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    title={p.prUrl || "no URL"}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openExternal(p.prUrl);
-                    }}
-                    disabled={!p.prUrl}
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                  </Button>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </section>
-      )}
-
       <section>
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-sm font-semibold">PR history</h3>

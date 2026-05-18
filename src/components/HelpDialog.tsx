@@ -6,6 +6,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
 import {
   Globe,
   HardDrive,
@@ -18,6 +19,7 @@ import {
   FolderOpen,
   Bug,
 } from "lucide-react";
+import { useAppVersion } from "@/hooks/useAppVersion";
 
 interface HelpDialogProps {
   open: boolean;
@@ -28,6 +30,7 @@ interface HelpDialogProps {
 // Loaded lazily from the Sidebar's "?" button — keep it readable on a 1024px
 // window: scrollable body, ~520px wide.
 export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
+  const version = useAppVersion();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl gap-0 p-0">
@@ -35,6 +38,11 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
             SkillManager — how it works
+            {version && (
+              <Badge variant="outline" className="ml-auto font-mono text-[11px]">
+                v{version}
+              </Badge>
+            )}
           </DialogTitle>
           <DialogDescription>
             A portable GUI for Claude Code plugins, marketplaces and skills.

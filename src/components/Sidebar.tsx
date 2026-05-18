@@ -22,6 +22,7 @@ import { useUi } from "@/stores/ui";
 import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { HelpDialog } from "@/components/HelpDialog";
+import { useAppVersion } from "@/hooks/useAppVersion";
 
 interface NavItem {
   to: string;
@@ -55,9 +56,9 @@ const NAV: NavItem[] = [
   },
   {
     to: "/admin",
-    label: "Contribute",
+    label: "Administration",
     subtitle: "PRs to marketplaces",
-    tooltip: "Contribute — propose changes to marketplaces via GitHub pull requests",
+    tooltip: "Administration — propose changes to marketplaces via GitHub pull requests",
     icon: ShieldCheck,
   },
 ];
@@ -76,6 +77,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const theme = useUi((s) => s.ui.theme);
   const patch = useUi((s) => s.patch);
   const [helpOpen, setHelpOpen] = useState(false);
+  const version = useAppVersion();
   const cycleTheme = () => {
     const idx = THEME_CYCLE.indexOf(theme);
     patch({ theme: THEME_CYCLE[(idx + 1) % THEME_CYCLE.length] });
@@ -196,6 +198,25 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
             )}
           </NavLink>
         ))}
+        <button
+          type="button"
+          onClick={() => setHelpOpen(true)}
+          title="Help — what each section does and where data lives"
+          className={cn(
+            "flex w-full items-start gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
+            collapsed && "items-center justify-center px-0 py-2"
+          )}
+        >
+          <HelpCircle className="h-4 w-4 shrink-0 self-center" />
+          {!collapsed && (
+            <div className="min-w-0 flex-1 leading-tight text-left">
+              <div className="truncate font-medium">Help</div>
+              <div className="truncate text-[11px] text-muted-foreground/80">
+                Guide & shortcuts
+              </div>
+            </div>
+          )}
+        </button>
       </nav>
 
       {/* GitHub status (only when expanded) */}
@@ -244,15 +265,6 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => setHelpOpen(true)}
-          title="Help — what each section does and where data lives"
-          aria-label="Help"
-        >
-          <HelpCircle className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
           onClick={cycleTheme}
           title={THEME_TOOLTIP[theme]}
           aria-label="Cycle theme"
@@ -281,7 +293,8 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
       </div>
       {!collapsed && (
         <div className="px-3 pb-2 text-center text-[10px] text-muted-foreground/60">
-          Designed by Valentin
+          <div>Designed by @vpailt</div>
+          {version && <div>v{version}</div>}
         </div>
       )}
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />

@@ -40,11 +40,23 @@ interface SkillEntry extends Skill {
   pluginEnabled: boolean | null;
 }
 
+interface FileSelection {
+  skill: SkillEntry;
+  relativePath: string;
+}
+
 type Selection =
   | { kind: "skill"; value: SkillEntry }
+  | { kind: "file"; value: FileSelection }
   | { kind: "duplicate"; value: DuplicateSkill }
   | { kind: "archived"; value: ArchivedSkill }
   | null;
+
+function joinPath(folder: string, rel: string): string {
+  if (!folder) return rel;
+  const trimmed = folder.replace(/[\\/]+$/, "");
+  return `${trimmed}/${rel}`;
+}
 
 type Origin = "all" | "local" | "plugin" | "remote";
 
@@ -108,6 +120,8 @@ interface FileNodeRowProps {
   depth: number;
   expandedDirs: Set<string>;
   onToggle: (path: string) => void;
+  onSelectFile: (path: string) => void;
+  selectedPath: string | null;
 }
 
 function FileNodeRow({
@@ -116,15 +130,24 @@ function FileNodeRow({
   depth,
   expandedDirs,
   onToggle,
+  onSelectFile,
+  selectedPath,
 }: FileNodeRowProps) {
   const isOpen = expandedDirs.has(path);
   const Icon = node.isDir ? Folder : FileText;
   const isSkillMd = !node.isDir && node.name.toUpperCase() === "SKILL.MD";
+  const isSelected = !node.isDir && selectedPath === path;
   return (
     <>
       <button
-        onClick={() => node.isDir && onToggle(path)}
-        className="flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs text-muted-foreground hover:bg-accent/40"
+        onClick={() =>
+          node.isDir ? onToggle(path) : onSelectFile(path)
+        }
+        className={`flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs hover:bg-accent/40 ${
+          isSelected
+            ? "bg-accent text-foreground"
+            : "text-muted-foreground"
+        }`}
         style={{ paddingLeft: `${depth * 12 + 6}px` }}
       >
         {node.isDir ? (
@@ -143,7 +166,7 @@ function FileNodeRow({
         />
         <span
           className={`truncate ${
-            isSkillMd ? "font-medium text-foreground" : ""
+            isSkillMd || isSelected ? "font-medium text-foreground" : ""
           }`}
         >
           {node.name}
@@ -159,6 +182,8 @@ function FileNodeRow({
               depth={depth + 1}
               expandedDirs={expandedDirs}
               onToggle={onToggle}
+              onSelectFile={onSelectFile}
+              selectedPath={selectedPath}
             />
           ))}
         </>
@@ -175,6 +200,8 @@ interface SkillRowProps {
   expanded: boolean;
   onSelect: () => void;
   onToggle: () => void;
+  onSelectFile: (skill: SkillEntry, relativePath: string) => void;
+  selectedFilePath: string | null;
   localName: string;
 }
 
@@ -184,6 +211,8 @@ function SkillRow({
   expanded,
   onSelect,
   onToggle,
+  onSelectFile,
+  selectedFilePath,
   localName,
 }: SkillRowProps) {
   const filesQuery = useQuery({
@@ -277,6 +306,8 @@ function SkillRow({
               depth={0}
               expandedDirs={expandedDirs}
               onToggle={toggleDir}
+              onSelectFile={(p) => onSelectFile(skill, p)}
+              selectedPath={selectedFilePath}
             />
           ))}
         </div>
@@ -455,12 +486,21 @@ export function SkillsPage() {
     return map;
   }, [filtered]);
 
-  const selectedSkill = selected?.kind === "skill" ? selected.value : null;
+  const selectedSkill =
+    selected?.kind === "skill"
+      ? selected.value
+      : selected?.kind === "file"
+      ? selected.value.skill
+      : null;
+  const selectedFile = selected?.kind === "file" ? selected.value : null;
+  const selectedFileAbs = selectedFile
+    ? joinPath(selectedFile.skill.folder as string, selectedFile.relativePath)
+    : null;
 
-  const skillContent = useQuery({
-    enabled: !!selectedSkill?.skillMdPath,
-    queryKey: ["skill-md", selectedSkill?.skillMdPath],
-    queryFn: () => api.readTextFile(selectedSkill!.skillMdPath as string),
+  const fileContent = useQuery({
+    enabled: !!selectedFileAbs,
+    queryKey: ["file-content", selectedFileAbs],
+    queryFn: () => api.readTextFile(selectedFileAbs as string),
   });
 
   const mtime = useQuery({
@@ -631,8 +671,15 @@ export function SkillsPage() {
                 {skills.map((s) => {
                   const k = skillKey(s);
                   const isSel =
-                    selected?.kind === "skill" &&
-                    skillKey(selected.value) === k;
+                    (selected?.kind === "skill" &&
+                      skillKey(selected.value) === k) ||
+                    (selected?.kind === "file" &&
+                      skillKey(selected.value.skill) === k);
+                  const selectedFileForRow =
+                    selected?.kind === "file" &&
+                    skillKey(selected.value.skill) === k
+                      ? selected.value.relativePath
+                      : null;
                   return (
                     <SkillRow
                       key={k}
@@ -643,6 +690,13 @@ export function SkillsPage() {
                         setSelected({ kind: "skill", value: s })
                       }
                       onToggle={() => toggleExpanded(k)}
+                      onSelectFile={(skill, relativePath) => {
+                        setSelected({
+                          kind: "file",
+                          value: { skill, relativePath },
+                        });
+                      }}
+                      selectedFilePath={selectedFileForRow}
                       localName={localName}
                     />
                   );
@@ -663,7 +717,8 @@ export function SkillsPage() {
         <div className="flex h-full flex-col items-center justify-center gap-2 p-10 text-center text-sm text-muted-foreground">
           <Sparkles className="h-8 w-8 opacity-40" />
           <span>
-            Pick a skill, a duplicate or an archived entry to view details.
+            Pick a skill to see its description, expand it to browse files,
+            or open a duplicate / archived entry.
           </span>
         </div>
       )}
@@ -689,8 +744,6 @@ export function SkillsPage() {
       {selected?.kind === "skill" && (
         <SkillDetailView
           skill={selected.value}
-          markdown={skillContent.data}
-          markdownLoading={skillContent.isLoading}
           mtimeIso={mtime.data ?? null}
           showDescription={showDescription}
           onToggleDescription={() => setShowDescription((v) => !v)}
@@ -703,6 +756,17 @@ export function SkillsPage() {
               value,
             });
           }}
+        />
+      )}
+
+      {selected?.kind === "file" && (
+        <FileDetailView
+          skill={selected.value.skill}
+          relativePath={selected.value.relativePath}
+          absPath={selectedFileAbs as string}
+          content={fileContent.data}
+          loading={fileContent.isLoading}
+          error={fileContent.error as Error | null}
         />
       )}
     </div>
@@ -719,8 +783,6 @@ export function SkillsPage() {
 
 interface DetailProps {
   skill: SkillEntry;
-  markdown: string | undefined;
-  markdownLoading: boolean;
   mtimeIso: string | null;
   showDescription: boolean;
   onToggleDescription: () => void;
@@ -730,8 +792,6 @@ interface DetailProps {
 
 function SkillDetailView({
   skill,
-  markdown,
-  markdownLoading,
   mtimeIso,
   showDescription,
   onToggleDescription,
@@ -813,23 +873,95 @@ function SkillDetailView({
             {skill.folder.toString()}
           </div>
         )}
-        {skill.skillMdPath ? (
-          <div className="min-w-0 max-w-full overflow-hidden rounded-lg border bg-card p-6 shadow-sm">
-            {markdownLoading ? (
-              <div className="text-xs text-muted-foreground">Loading…</div>
-            ) : markdown ? (
-              <SkillMarkdown content={markdown} />
-            ) : (
-              <div className="text-xs text-muted-foreground">
-                (failed to read SKILL.md)
-              </div>
-            )}
-          </div>
-        ) : (
+        {!skill.folder && (
           <div className="rounded-md border border-dashed bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-            Remote-only skill — install the plugin to view SKILL.md.
+            Remote-only skill — install the plugin to browse its files.
           </div>
         )}
+        {skill.folder && (
+          <div className="rounded-md border border-dashed bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+            Expand the skill on the left and click a file to view its
+            contents.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface FileDetailProps {
+  skill: SkillEntry;
+  relativePath: string;
+  absPath: string;
+  content: string | undefined;
+  loading: boolean;
+  error: Error | null;
+}
+
+function FileDetailView({
+  skill,
+  relativePath,
+  absPath,
+  content,
+  loading,
+  error,
+}: FileDetailProps) {
+  const fileName = relativePath.split("/").pop() || relativePath;
+  const isMarkdown = /\.(md|markdown)$/i.test(fileName);
+  return (
+    <div className="flex h-full min-w-0 flex-col">
+      <header className="flex items-center gap-3 border-b px-6 py-4">
+        <FileText className="h-5 w-5 shrink-0 text-violet-400/80" />
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-lg font-semibold">{fileName}</h1>
+          <div className="truncate text-[11px] text-muted-foreground">
+            {skill.name} · {relativePath}
+          </div>
+        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 gap-1.5 px-2 text-xs"
+          aria-label="Open in VS Code"
+          title="Open this file in VS Code"
+          onClick={async () => {
+            try {
+              await api.openInVsCode(absPath);
+            } catch (e) {
+              useNotifications.getState().push({
+                kind: "error",
+                title: "Open in VS Code failed",
+                body: e instanceof Error ? e.message : String(e),
+              });
+            }
+          }}
+        >
+          <Code2 className="h-4 w-4" />
+          VS Code
+        </Button>
+      </header>
+
+      <div className="min-w-0 flex-1 p-6">
+        <div className="mb-3 overflow-hidden break-all rounded-md bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground">
+          {absPath}
+        </div>
+        <div className="min-w-0 max-w-full overflow-hidden rounded-lg border bg-card p-6 shadow-sm">
+          {loading ? (
+            <div className="text-xs text-muted-foreground">Loading…</div>
+          ) : error ? (
+            <div className="text-xs text-destructive">
+              Failed to read file: {error.message}
+            </div>
+          ) : content === undefined ? (
+            <div className="text-xs text-muted-foreground">(no content)</div>
+          ) : isMarkdown ? (
+            <SkillMarkdown content={content} />
+          ) : (
+            <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground">
+              {content}
+            </pre>
+          )}
+        </div>
       </div>
     </div>
   );
