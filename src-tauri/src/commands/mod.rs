@@ -8,6 +8,7 @@ use crate::admin::{self, FileChange, UploadResult};
 use crate::admin_drafts::{
     self, AdminDraft, BumpSuggestion, LocalSkill, RemoteSkillInfo, UploadSkillArgs,
 };
+use crate::app_uninstaller::{self, UninstallInfo};
 use crate::app_updater::{self, AppUpdateInfo};
 use crate::config::{self, LoggingConfig, MarketplaceConfig, Settings, UiPrefs};
 use crate::logger;
@@ -916,6 +917,37 @@ pub async fn app_install_update(
     // Tiny delay so the spawned process is fully detached, then quit. Without
     // this the installer occasionally fails to grab the file lock on the
     // running .exe before we exit and Windows blocks it.
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        app.exit(0);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn app_detect_uninstaller() -> UninstallInfo {
+    app_uninstaller::detect()
+}
+
+/// Spawn the registered uninstaller and exit. Errors when the install is
+/// portable (no uninstall.exe + no registry entry); the front-end is expected
+/// to surface that case with a "delete the folder manually" message.
+#[tauri::command]
+pub async fn app_uninstall(app: AppHandle) -> Result<()> {
+    let info = app_uninstaller::detect();
+    if info.kind == "none" {
+        tracing::warn!("app_uninstall: no uninstaller registered (portable install)");
+        return Err(crate::error::Error::Invalid(
+            "No uninstaller found. This looks like a portable install — \
+             close SkillManager and delete the folder manually."
+                .into(),
+        ));
+    }
+    app_uninstaller::launch(&info)?;
+    tracing::info!(
+        "app_uninstall: uninstaller spawned ({}), exiting app",
+        info.kind
+    );
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(500));
         app.exit(0);

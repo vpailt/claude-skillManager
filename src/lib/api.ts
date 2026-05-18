@@ -19,6 +19,7 @@ import type {
   Settings,
   SettingsPaths,
   UiPrefs,
+  UninstallInfo,
   UploadResult,
   UploadSkillArgs,
 } from "./types";
@@ -207,6 +208,10 @@ export const api = {
   appCheckUpdate: () => invoke<AppUpdateInfo>("app_check_update"),
   appInstallUpdate: (assetUrl: string, assetName: string) =>
     invoke<void>("app_install_update", { assetUrl, assetName }),
+
+  // --- app uninstall ---
+  appDetectUninstaller: () => invoke<UninstallInfo>("app_detect_uninstaller"),
+  appUninstall: () => invoke<void>("app_uninstall"),
 
   // --- duplicate skills ---
   listDuplicateSkills: () =>

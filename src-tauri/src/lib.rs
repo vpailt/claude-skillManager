@@ -5,6 +5,7 @@
 
 pub mod admin;
 pub mod admin_drafts;
+pub mod app_uninstaller;
 pub mod app_updater;
 pub mod commands;
 pub mod config;
@@ -153,6 +154,8 @@ pub fn run() {
             restore_archived_skill,
             app_check_update,
             app_install_update,
+            app_detect_uninstaller,
+            app_uninstall,
             tray::show_main_window,
             tray::hide_main_window,
         ])

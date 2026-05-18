@@ -261,3 +261,12 @@ export interface AppUpdateInfo {
   /** "no_release" or "ok" */
   status: string;
 }
+
+export interface UninstallInfo {
+  /** "nsis" (uninstall.exe found), "registry" (matched by InstallLocation), or "none" (portable install) */
+  kind: "nsis" | "registry" | "none" | string;
+  uninstallerPath: string | null;
+  installLocation: string | null;
+  displayName: string | null;
+  displayVersion: string | null;
+}

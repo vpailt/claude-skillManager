@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   ArrowUpCircle,
   ExternalLink,
+  AlertTriangle,
 } from "lucide-react";
 import {
   save as saveDialog,
@@ -26,12 +27,21 @@ import type {
   LoggingConfig,
   Settings as SettingsType,
   UiPrefs,
+  UninstallInfo,
 } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useNotifications } from "@/stores/notifications";
 import { setFrontendLogLevel } from "@/lib/logger";
 
@@ -76,6 +86,8 @@ export function SettingsPage() {
   const [logTail, setLogTail] = useState<string>("");
   const [showLogs, setShowLogs] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
+  const [uninstallInfo, setUninstallInfo] = useState<UninstallInfo | null>(null);
 
   useEffect(() => {
     if (settingsQuery.data) {
@@ -247,6 +259,38 @@ export function SettingsPage() {
       push({
         kind: "error",
         title: "Check for updates failed",
+        body: errMsg(e),
+      }),
+  });
+
+  const openUninstallDialog = async () => {
+    try {
+      const info = await api.appDetectUninstaller();
+      setUninstallInfo(info);
+      setUninstallDialogOpen(true);
+    } catch (e) {
+      push({
+        kind: "error",
+        title: "Uninstall detection failed",
+        body: errMsg(e),
+      });
+    }
+  };
+
+  const uninstallMutation = useMutation({
+    mutationFn: api.appUninstall,
+    onSuccess: () => {
+      setUninstallDialogOpen(false);
+      push({
+        kind: "info",
+        title: "Uninstaller launched",
+        body: "SkillManager will exit so Windows can complete the uninstall.",
+      });
+    },
+    onError: (e) =>
+      push({
+        kind: "error",
+        title: "Uninstall failed",
         body: errMsg(e),
       }),
   });
@@ -766,7 +810,7 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="mb-6">
         <CardHeader>
           <CardTitle>Export / Import</CardTitle>
           <CardDescription>
@@ -804,6 +848,105 @@ export function SettingsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      <Card className="border-destructive/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-destructive">
+            <AlertTriangle className="h-4 w-4" />
+            Danger zone
+          </CardTitle>
+          <CardDescription>
+            Uninstall SkillManager from this machine. Runs the Windows
+            uninstaller registered at install time; your local{" "}
+            <code>~/.claude/</code> data (plugins, skills, marketplaces) is
+            <strong> not </strong>touched — only the SkillManager app itself.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            variant="destructive"
+            onClick={openUninstallDialog}
+            disabled={uninstallMutation.isPending}
+          >
+            <Trash2 className="mr-1 h-3 w-3" />
+            Uninstall SkillManager
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Dialog
+        open={uninstallDialogOpen}
+        onOpenChange={(o) => {
+          if (!uninstallMutation.isPending) setUninstallDialogOpen(o);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Uninstall SkillManager?
+            </DialogTitle>
+            <DialogDescription>
+              The Windows uninstaller will start and remove the SkillManager
+              application. The app will close as soon as you confirm. Your
+              Claude Code data under <code>~/.claude/</code> is left untouched.
+            </DialogDescription>
+          </DialogHeader>
+
+          {uninstallInfo && (
+            <div className="space-y-1 rounded-md border bg-muted/40 p-3 text-xs">
+              <div className="flex gap-2">
+                <span className="w-24 text-muted-foreground">Detected</span>
+                <Badge variant={uninstallInfo.kind === "none" ? "warning" : "outline"}>
+                  {uninstallInfo.kind === "nsis"
+                    ? "uninstall.exe found"
+                    : uninstallInfo.kind === "registry"
+                      ? "registry entry"
+                      : "no uninstaller (portable install)"}
+                </Badge>
+              </div>
+              {uninstallInfo.installLocation && (
+                <div className="flex gap-2">
+                  <span className="w-24 text-muted-foreground">Location</span>
+                  <code className="truncate">{uninstallInfo.installLocation}</code>
+                </div>
+              )}
+              {uninstallInfo.displayVersion && (
+                <div className="flex gap-2">
+                  <span className="w-24 text-muted-foreground">Version</span>
+                  <code>{uninstallInfo.displayVersion}</code>
+                </div>
+              )}
+              {uninstallInfo.kind === "none" && (
+                <div className="pt-1 text-amber-600 dark:text-amber-400">
+                  No uninstaller registered. This looks like a portable
+                  install — close SkillManager and delete the folder manually.
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setUninstallDialogOpen(false)}
+              disabled={uninstallMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => uninstallMutation.mutate()}
+              disabled={
+                uninstallMutation.isPending || uninstallInfo?.kind === "none"
+              }
+            >
+              <Trash2 className="mr-1 h-3 w-3" />
+              {uninstallMutation.isPending ? "Launching…" : "Uninstall now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
