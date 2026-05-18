@@ -18,12 +18,20 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let refresh_item = MenuItem::with_id(app, "tray-refresh", "Refresh", true, None::<&str>)?;
     let settings_item =
         MenuItem::with_id(app, "tray-settings", "Open Settings", true, None::<&str>)?;
+    let help_item = MenuItem::with_id(app, "tray-help", "Help", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(app, "tray-quit", "Quit SkillManager", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
-        &[&show_item, &refresh_item, &settings_item, &sep, &quit_item],
+        &[
+            &show_item,
+            &refresh_item,
+            &settings_item,
+            &help_item,
+            &sep,
+            &quit_item,
+        ],
     )?;
 
     let icon = app
@@ -50,6 +58,12 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 show_window(app);
                 if let Err(e) = app.emit("tray://open-settings", ()) {
                     tracing::warn!("emit tray://open-settings failed: {}", e);
+                }
+            }
+            "tray-help" => {
+                show_window(app);
+                if let Err(e) = app.emit("tray://open-help", ()) {
+                    tracing::warn!("emit tray://open-help failed: {}", e);
                 }
             }
             "tray-quit" => {

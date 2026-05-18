@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { createLogger } from "@/lib/logger";
+import { useHelpDialog } from "@/stores/helpDialog";
 
 const log = createLogger("tray");
 
@@ -10,6 +11,7 @@ const log = createLogger("tray");
  * Reacts to events emitted by the Rust tray menu (see `src-tauri/src/tray.rs`):
  * - `tray://refresh`        → invalidate the refresh query
  * - `tray://open-settings`  → navigate to /settings
+ * - `tray://open-help`      → open the Help dialog
  */
 export function useTrayEvents() {
   const qc = useQueryClient();
@@ -29,6 +31,13 @@ export function useTrayEvents() {
       listen("tray://open-settings", () => {
         log.info("tray: open settings");
         navigate("/settings");
+      })
+    );
+
+    offs.push(
+      listen("tray://open-help", () => {
+        log.info("tray: open help");
+        useHelpDialog.getState().setOpen(true);
       })
     );
 

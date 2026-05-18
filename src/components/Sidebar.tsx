@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -23,6 +22,7 @@ import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { HelpDialog } from "@/components/HelpDialog";
 import { useAppVersion } from "@/hooks/useAppVersion";
+import { useHelpDialog } from "@/stores/helpDialog";
 
 interface NavItem {
   to: string;
@@ -76,7 +76,8 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const collapsed = useUi((s) => s.ui.sidebarCollapsed);
   const theme = useUi((s) => s.ui.theme);
   const patch = useUi((s) => s.patch);
-  const [helpOpen, setHelpOpen] = useState(false);
+  const helpOpen = useHelpDialog((s) => s.open);
+  const setHelpOpen = useHelpDialog((s) => s.setOpen);
   const version = useAppVersion();
   const cycleTheme = () => {
     const idx = THEME_CYCLE.indexOf(theme);
@@ -198,25 +199,6 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
             )}
           </NavLink>
         ))}
-        <button
-          type="button"
-          onClick={() => setHelpOpen(true)}
-          title="Help — what each section does and where data lives"
-          className={cn(
-            "flex w-full items-start gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
-            collapsed && "items-center justify-center px-0 py-2"
-          )}
-        >
-          <HelpCircle className="h-4 w-4 shrink-0 self-center" />
-          {!collapsed && (
-            <div className="min-w-0 flex-1 leading-tight text-left">
-              <div className="truncate font-medium">Help</div>
-              <div className="truncate text-[11px] text-muted-foreground/80">
-                Guide & shortcuts
-              </div>
-            </div>
-          )}
-        </button>
       </nav>
 
       {/* GitHub status (only when expanded) */}
@@ -262,6 +244,15 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
             </Button>
           )}
         </NavLink>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setHelpOpen(true)}
+          title="Help — guide & shortcuts"
+          aria-label="Help"
+        >
+          <HelpCircle className="h-4 w-4" />
+        </Button>
         <Button
           variant="ghost"
           size="icon"
