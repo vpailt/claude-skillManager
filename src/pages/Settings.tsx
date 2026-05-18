@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/dialog";
 import { useNotifications } from "@/stores/notifications";
 import { setFrontendLogLevel } from "@/lib/logger";
+import { useAppVersion } from "@/hooks/useAppVersion";
 
 const DEFAULT_UI: UiPrefs = {
   prPollingEnabled: false,
@@ -86,6 +87,7 @@ export function SettingsPage() {
   const [logTail, setLogTail] = useState<string>("");
   const [showLogs, setShowLogs] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const appVersion = useAppVersion();
   const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
   const [uninstallInfo, setUninstallInfo] = useState<UninstallInfo | null>(null);
 
@@ -415,7 +417,7 @@ export function SettingsPage() {
           <div className="flex flex-wrap items-center gap-3">
             <span className="w-32 text-muted-foreground">Current version</span>
             <Badge variant="outline">
-              {updateInfo?.currentVersion ?? "…"}
+              {updateInfo?.currentVersion ?? appVersion ?? "…"}
             </Badge>
             {updateInfo?.latestVersion && (
               <>
