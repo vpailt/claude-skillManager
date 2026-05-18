@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AdminDraft,
+  AppUpdateInfo,
   ArchivedSkill,
   BumpSuggestion,
   DuplicateSkill,
@@ -201,6 +202,11 @@ export const api = {
     }),
   adminSuggestBumps: (version: string) =>
     invoke<BumpSuggestion>("admin_suggest_bumps", { version }),
+
+  // --- app self-update ---
+  appCheckUpdate: () => invoke<AppUpdateInfo>("app_check_update"),
+  appInstallUpdate: (assetUrl: string, assetName: string) =>
+    invoke<void>("app_install_update", { assetUrl, assetName }),
 
   // --- duplicate skills ---
   listDuplicateSkills: () =>

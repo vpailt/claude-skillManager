@@ -10,6 +10,9 @@ import {
   RefreshCw,
   FolderOpen,
   Bell,
+  CheckCircle2,
+  ArrowUpCircle,
+  ExternalLink,
 } from "lucide-react";
 import {
   save as saveDialog,
@@ -18,6 +21,7 @@ import {
 import { api } from "@/lib/api";
 import { openExternal } from "@/lib/utils";
 import type {
+  AppUpdateInfo,
   LogLevel,
   LoggingConfig,
   Settings as SettingsType,
@@ -71,6 +75,7 @@ export function SettingsPage() {
   });
   const [logTail, setLogTail] = useState<string>("");
   const [showLogs, setShowLogs] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
 
   useEffect(() => {
     if (settingsQuery.data) {
@@ -214,6 +219,65 @@ export function SettingsPage() {
     queryFn: api.githubAuthCheck,
   });
 
+  const checkUpdateMutation = useMutation({
+    mutationFn: api.appCheckUpdate,
+    onSuccess: (info) => {
+      setUpdateInfo(info);
+      if (info.status === "no_release") {
+        push({
+          kind: "info",
+          title: "No release published yet",
+          body: "The repo doesn't have a release on GitHub yet.",
+        });
+      } else if (info.hasUpdate) {
+        push({
+          kind: "info",
+          title: `Update available: ${info.latestVersion}`,
+          body: `You're on ${info.currentVersion}.`,
+        });
+      } else {
+        push({
+          kind: "success",
+          title: "You're up to date",
+          body: `Version ${info.currentVersion}`,
+        });
+      }
+    },
+    onError: (e) =>
+      push({
+        kind: "error",
+        title: "Check for updates failed",
+        body: errMsg(e),
+      }),
+  });
+
+  const installUpdateMutation = useMutation({
+    mutationFn: () => {
+      if (!updateInfo?.installerAssetUrl || !updateInfo.installerAssetName) {
+        return Promise.reject(
+          new Error("No installer asset attached to the latest release.")
+        );
+      }
+      return api.appInstallUpdate(
+        updateInfo.installerAssetUrl,
+        updateInfo.installerAssetName
+      );
+    },
+    onSuccess: () => {
+      push({
+        kind: "info",
+        title: "Installer launched",
+        body: "SkillManager will exit so the installer can complete.",
+      });
+    },
+    onError: (e) =>
+      push({
+        kind: "error",
+        title: "Install failed",
+        body: errMsg(e),
+      }),
+  });
+
   const updateUi = (partial: Partial<UiPrefs>) => {
     const next = { ...ui, ...partial };
     setUi(next);
@@ -290,6 +354,107 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       )}
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ArrowUpCircle className="h-4 w-4" />
+            App update
+          </CardTitle>
+          <CardDescription>
+            Check the SkillManager GitHub repo for a newer release. The
+            installer is downloaded to <code>%TEMP%</code> and launched; the
+            app then exits so it can replace files.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="w-32 text-muted-foreground">Current version</span>
+            <Badge variant="outline">
+              {updateInfo?.currentVersion ?? "…"}
+            </Badge>
+            {updateInfo?.latestVersion && (
+              <>
+                <span className="w-32 pl-4 text-muted-foreground">
+                  Latest on GitHub
+                </span>
+                <Badge variant={updateInfo.hasUpdate ? "warning" : "success"}>
+                  {updateInfo.latestVersion}
+                </Badge>
+              </>
+            )}
+          </div>
+
+          {updateInfo?.status === "no_release" && (
+            <div className="text-xs text-muted-foreground">
+              No release has been published yet on{" "}
+              <code>vpailt/claude-skillManager</code>.
+            </div>
+          )}
+
+          {updateInfo && updateInfo.status === "ok" && !updateInfo.hasUpdate && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+              You're running the latest version.
+            </div>
+          )}
+
+          {updateInfo?.hasUpdate &&
+            !updateInfo.installerAssetUrl && (
+              <div className="text-xs text-amber-600 dark:text-amber-400">
+                A newer version is available but no <code>.exe</code> installer
+                is attached to the release. Open the release page to download
+                manually.
+              </div>
+            )}
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => checkUpdateMutation.mutate()}
+              disabled={checkUpdateMutation.isPending}
+            >
+              <RefreshCw
+                className={`mr-1 h-3 w-3 ${checkUpdateMutation.isPending ? "animate-spin" : ""}`}
+              />
+              Check for updates
+            </Button>
+
+            {updateInfo?.hasUpdate && updateInfo.installerAssetUrl && (
+              <Button
+                size="sm"
+                onClick={() => installUpdateMutation.mutate()}
+                disabled={installUpdateMutation.isPending}
+              >
+                <Download
+                  className={`mr-1 h-3 w-3 ${installUpdateMutation.isPending ? "animate-pulse" : ""}`}
+                />
+                {installUpdateMutation.isPending
+                  ? "Downloading…"
+                  : `Download & install ${updateInfo.latestVersion}`}
+              </Button>
+            )}
+
+            {updateInfo?.releaseUrl && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => openExternal(updateInfo.releaseUrl!)}
+              >
+                <ExternalLink className="mr-1 h-3 w-3" />
+                Open release page
+              </Button>
+            )}
+          </div>
+
+          {updateInfo?.hasUpdate && updateInfo.releaseNotes && (
+            <pre className="mt-2 max-h-48 overflow-auto rounded-md border bg-muted/40 p-3 text-[11px] leading-snug whitespace-pre-wrap">
+              {updateInfo.releaseNotes}
+            </pre>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="mb-6">
         <CardHeader>

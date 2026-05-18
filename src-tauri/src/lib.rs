@@ -5,6 +5,7 @@
 
 pub mod admin;
 pub mod admin_drafts;
+pub mod app_updater;
 pub mod commands;
 pub mod config;
 pub mod error;
@@ -150,6 +151,8 @@ pub fn run() {
             archive_user_skill,
             list_archived_skills,
             restore_archived_skill,
+            app_check_update,
+            app_install_update,
             tray::show_main_window,
             tray::hide_main_window,
         ])

@@ -248,3 +248,16 @@ export interface ArchivedSkill {
   archivedAt: string;
   version: string;
 }
+
+export interface AppUpdateInfo {
+  currentVersion: string;
+  latestVersion: string | null;
+  hasUpdate: boolean;
+  releaseUrl: string | null;
+  installerAssetName: string | null;
+  installerAssetUrl: string | null;
+  installerAssetSize: number;
+  releaseNotes: string;
+  /** "no_release" or "ok" */
+  status: string;
+}

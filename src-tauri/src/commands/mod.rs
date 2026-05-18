@@ -8,6 +8,7 @@ use crate::admin::{self, FileChange, UploadResult};
 use crate::admin_drafts::{
     self, AdminDraft, BumpSuggestion, LocalSkill, RemoteSkillInfo, UploadSkillArgs,
 };
+use crate::app_updater::{self, AppUpdateInfo};
 use crate::config::{self, LoggingConfig, MarketplaceConfig, Settings, UiPrefs};
 use crate::logger;
 use crate::error::Result;
@@ -891,4 +892,33 @@ pub async fn list_archived_skills() -> Vec<local_scanner::ArchivedSkill> {
 pub async fn restore_archived_skill(folder: PathBuf) -> Result<PathBuf> {
     tracing::info!("restore_archived_skill: {}", folder.display());
     local_scanner::restore_archived_skill_folder(&folder)
+}
+
+// ---------- App self-update ----------
+
+#[tauri::command]
+pub async fn app_check_update() -> Result<AppUpdateInfo> {
+    app_updater::check_for_update()
+}
+
+/// Downloads the installer asset to %TEMP%, spawns it, then exits SkillManager
+/// so NSIS can replace files in-place. The caller (front-end) will see the
+/// window disappear and the OS-level UAC prompt from the installer take over.
+#[tauri::command]
+pub async fn app_install_update(
+    app: AppHandle,
+    asset_url: String,
+    asset_name: String,
+) -> Result<()> {
+    let path = app_updater::download_installer(&asset_url, &asset_name)?;
+    app_updater::launch_installer(&path)?;
+    tracing::info!("app_install_update: installer launched, exiting app");
+    // Tiny delay so the spawned process is fully detached, then quit. Without
+    // this the installer occasionally fails to grab the file lock on the
+    // running .exe before we exit and Windows blocks it.
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        app.exit(0);
+    });
+    Ok(())
 }
