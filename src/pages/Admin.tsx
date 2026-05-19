@@ -237,9 +237,19 @@ function PluginAdminCard({
     return out;
   }, [remote.data, pendingBySkill, remoteByName]);
 
-  const refreshAll = () => {
+  // Re-checks each pending PR on this plugin against GitHub before refreshing
+  // the local data. Otherwise the "update pending" badges stick around after
+  // a merge until the opt-in polling job runs (which may be disabled).
+  const refreshAll = async () => {
+    const items = (pending.data ?? []).filter(
+      (p) => p.marketplaceName === marketplace && p.pluginName === plugin.name,
+    );
+    await Promise.allSettled(
+      items.map((p) => api.prHistoryRefreshStatus(p.targetRepo, p.prNumber)),
+    );
     qc.invalidateQueries({ queryKey: ["remote-skills", marketplace, plugin.name] });
     qc.invalidateQueries({ queryKey: ["pending-prs"] });
+    qc.invalidateQueries({ queryKey: ["pr-history"] });
   };
 
   return (
