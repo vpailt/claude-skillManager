@@ -76,6 +76,12 @@ export function usePrPolling() {
               },
               { native: true }
             );
+            // The backend already drops matching pending records when status
+            // leaves "open"; refresh the query so the Admin badges clear.
+            if (newStatus !== "open") {
+              qc.invalidateQueries({ queryKey: ["pending-prs"] });
+              qc.invalidateQueries({ queryKey: ["remote-skills"] });
+            }
           }
         } catch (err) {
           log.warn(`polling PR #${it.number} failed:`, err);

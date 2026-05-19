@@ -333,6 +333,42 @@ pub fn update_plugin_in_registry(
     Ok(Value::Object(new_reg))
 }
 
+/// Updates only the `source.ref` field of the named plugin's source object,
+/// preserving every other key (kind/url/repo/path). Used when bumping a plugin
+/// version: the registry's source.ref must follow the new tag, but anything
+/// else in the source object should stay untouched.
+pub fn bump_plugin_source_ref(registry: &Value, name: &str, new_ref: &str) -> Result<Value> {
+    let mut new_reg = registry.as_object().cloned().unwrap_or_default();
+    let mut plugins = new_reg
+        .get("plugins")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut updated = false;
+    for entry in plugins.iter_mut() {
+        let Some(o) = entry.as_object_mut() else { continue };
+        if o.get("name").and_then(|v| v.as_str()).unwrap_or("") != name {
+            continue;
+        }
+        let mut src_obj = o
+            .get("source")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        src_obj.insert("ref".to_string(), json!(new_ref));
+        o.insert("source".to_string(), Value::Object(src_obj));
+        updated = true;
+        break;
+    }
+    if !updated {
+        return Err(Error::Invalid(format!(
+            "Plugin '{name}' not found in this marketplace."
+        )));
+    }
+    new_reg.insert("plugins".to_string(), Value::Array(plugins));
+    Ok(Value::Object(new_reg))
+}
+
 // ---------- helpers ----------
 
 pub fn make_branch_name(prefix: &str, parts: &[&str]) -> String {

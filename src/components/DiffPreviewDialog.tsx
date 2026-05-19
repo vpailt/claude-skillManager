@@ -158,7 +158,14 @@ export function DiffPreviewDialog({
 
   const hasErrors = draft.problems.length > 0;
   const hasConflicts = draft.conflicts.length > 0;
-  const tagBlocked = draft.needsTag !== null && !tagCreated;
+  // When the tag points at the same repo as the PR (upload-skill / delete-skill),
+  // submit_draft creates it from the PR branch SHA after the PR is opened.
+  // Don't require an upfront manual tag in that case — it would target the
+  // wrong commit (default-branch HEAD doesn't yet contain the manifest bump).
+  const tagIsAutoCreated =
+    draft.needsTag !== null && draft.needsTag.repo === draft.targetRepo;
+  const tagBlocked =
+    draft.needsTag !== null && !tagIsAutoCreated && !tagCreated;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -193,6 +200,11 @@ export function DiffPreviewDialog({
                   <div className="flex-1">
                     Tag <code className="font-mono">{draft.needsTag.tag}</code> is
                     missing on <code className="font-mono">{draft.needsTag.repo}</code>.
+                    {tagIsAutoCreated && (
+                      <span className="ml-2 text-muted-foreground">
+                        Will be created automatically from this PR's branch.
+                      </span>
+                    )}
                     {tagCreated && (
                       <span className="ml-2 text-emerald-600">Created.</span>
                     )}
@@ -200,7 +212,7 @@ export function DiffPreviewDialog({
                       <div className="text-destructive">{tagError}</div>
                     )}
                   </div>
-                  {!tagCreated && (
+                  {!tagIsAutoCreated && !tagCreated && (
                     <Button
                       size="sm"
                       onClick={() =>
@@ -267,7 +279,7 @@ export function DiffPreviewDialog({
               </Card>
             )}
 
-            {!hasErrors && !hasConflicts && !draft.needsTag && (
+            {!hasErrors && !hasConflicts && (!draft.needsTag || tagIsAutoCreated) && (
               <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-400">
                 <CheckCircle2 className="h-4 w-4" />
                 Ready to submit. {draft.changes.length} file change(s),{" "}

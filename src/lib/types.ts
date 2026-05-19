@@ -123,13 +123,21 @@ export interface PRRecord {
 export interface PendingPR {
   marketplaceName: string;
   pluginName: string;
-  action: "add" | "bump" | "remove" | string;
+  action:
+    | "add"
+    | "bump"
+    | "remove"
+    | "add-skill"
+    | "update-skill"
+    | "delete-skill"
+    | string;
   prUrl: string;
   prNumber: number;
   branch: string;
   targetRepo: string;
   newVersion: string;
   pluginSourceRepo: string;
+  skillName: string;
   createdAt: string;
 }
 
@@ -162,6 +170,7 @@ export interface PendingMeta {
   action: string;
   newVersion: string;
   pluginSourceRepo: string;
+  skillName: string;
 }
 
 export interface FileChange {

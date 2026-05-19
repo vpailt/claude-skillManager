@@ -27,7 +27,7 @@ import {
 import { AdminLocalPanel } from "@/components/AdminLocalPanel";
 import { useApp } from "@/stores/app";
 import { useNotifications } from "@/stores/notifications";
-import type { Plugin } from "@/lib/types";
+import type { PendingPR, Plugin, RemoteSkillInfo } from "@/lib/types";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -167,12 +167,80 @@ function PluginAdminCard({
   plugin: Plugin;
   onLaunch: (w: WizardKind) => void;
 }) {
+  const qc = useQueryClient();
   const [showSkills, setShowSkills] = useState(false);
   const remote = useQuery({
     enabled: showSkills,
     queryKey: ["remote-skills", marketplace, plugin.name],
     queryFn: () => api.adminListRemoteSkills(marketplace, plugin.name),
   });
+  const pending = useQuery({
+    enabled: showSkills,
+    queryKey: ["pending-prs"],
+    queryFn: api.pendingPrsList,
+    staleTime: 10_000,
+  });
+
+  // Index pending PRs by skill name so each row can show its in-flight state.
+  // Also surface skills that exist only in a pending PR (add-skill not yet
+  // merged), so a refresh doesn't make them disappear.
+  const pendingBySkill = useMemo(() => {
+    const map = new Map<string, PendingPR>();
+    for (const p of pending.data ?? []) {
+      if (
+        p.marketplaceName !== marketplace ||
+        p.pluginName !== plugin.name ||
+        !p.skillName
+      ) {
+        continue;
+      }
+      map.set(p.skillName, p);
+    }
+    return map;
+  }, [pending.data, marketplace, plugin.name]);
+
+  const remoteByName = useMemo(() => {
+    const m = new Map<string, RemoteSkillInfo>();
+    for (const r of remote.data ?? []) m.set(r.name, r);
+    return m;
+  }, [remote.data]);
+
+  // Merge real remote skills with skill-scoped pending PRs so users see
+  // "still in review" entries even before the merge propagates upstream.
+  const merged = useMemo(() => {
+    const out: {
+      name: string;
+      version: string;
+      localFolder?: string;
+      localVersion?: string;
+      pending?: PendingPR;
+    }[] = [];
+    for (const r of remote.data ?? []) {
+      out.push({
+        name: r.name,
+        version: r.version,
+        localFolder: r.localMatch?.folder,
+        localVersion: r.localMatch?.version,
+        pending: pendingBySkill.get(r.name),
+      });
+    }
+    for (const [name, p] of pendingBySkill) {
+      if (!remoteByName.has(name)) {
+        out.push({
+          name,
+          version: p.newVersion,
+          pending: p,
+        });
+      }
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  }, [remote.data, pendingBySkill, remoteByName]);
+
+  const refreshAll = () => {
+    qc.invalidateQueries({ queryKey: ["remote-skills", marketplace, plugin.name] });
+    qc.invalidateQueries({ queryKey: ["pending-prs"] });
+  };
 
   return (
     <Card>
@@ -207,14 +275,34 @@ function PluginAdminCard({
           onLaunch={onLaunch}
         />
         <div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setShowSkills((v) => !v)}
-          >
-            <Sparkles className="mr-1 h-3 w-3" />
-            {showSkills ? "Hide" : "Show"} remote skills
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowSkills((v) => !v)}
+            >
+              <Sparkles className="mr-1 h-3 w-3" />
+              {showSkills ? "Hide" : "Show"} remote skills
+            </Button>
+            {showSkills && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 w-7 p-0"
+                onClick={refreshAll}
+                disabled={remote.isFetching || pending.isFetching}
+                title="Refresh remote skills (including pending PRs)"
+              >
+                <RefreshCw
+                  className={`h-3 w-3 ${
+                    remote.isFetching || pending.isFetching
+                      ? "animate-spin"
+                      : ""
+                  }`}
+                />
+              </Button>
+            )}
+          </div>
           {showSkills && (
             <div className="mt-2 space-y-1">
               {remote.isLoading && (
@@ -227,66 +315,106 @@ function PluginAdminCard({
                   {(remote.error as Error).message}
                 </div>
               )}
-              {remote.data?.length === 0 && (
+              {merged.length === 0 && !remote.isLoading && (
                 <div className="text-xs text-muted-foreground">
                   No skills found in plugin source repo.
                 </div>
               )}
-              {remote.data?.map((s) => (
-                <div
-                  key={s.name}
-                  className="flex items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-xs"
-                >
-                  <Sparkles className="h-3 w-3" />
-                  <span className="font-medium">{s.name}</span>
-                  {s.version && (
-                    <Badge variant="outline" className="text-[10px]">
-                      v{s.version}
-                    </Badge>
-                  )}
-                  {s.localMatch && (
-                    <Badge variant="success" className="text-[10px]">
-                      local: v{s.localMatch.version || "?"}
-                    </Badge>
-                  )}
-                  <div className="ml-auto flex gap-1">
-                    {s.localMatch && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 px-2 text-xs"
-                        onClick={() =>
-                          onLaunch({
-                            kind: "uploadSkill",
-                            marketplace,
-                            plugin,
-                            initialTargetName: s.name,
-                            initialLocalFolder: s.localMatch!.folder,
-                          })
-                        }
-                      >
-                        <Upload className="mr-1 h-3 w-3" />
-                        Upgrade
-                      </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-6 px-2 text-xs text-destructive"
-                      onClick={() =>
-                        onLaunch({
-                          kind: "deleteSkill",
-                          marketplace,
-                          plugin,
-                          skillName: s.name,
-                        })
-                      }
+              {merged.map((s) => {
+                const action = s.pending?.action;
+                const isDeleting = action === "delete-skill";
+                const isAdding = action === "add-skill";
+                const isUpdating = action === "update-skill";
+                const inReview = isAdding || isUpdating || isDeleting;
+                return (
+                  <div
+                    key={s.name}
+                    className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs ${
+                      isDeleting
+                        ? "border-destructive/40 bg-destructive/5"
+                        : inReview
+                        ? "border-amber-500/40 bg-amber-500/5"
+                        : "bg-muted/30"
+                    }`}
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    <span
+                      className={`font-medium ${
+                        isDeleting ? "line-through opacity-70" : ""
+                      }`}
                     >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
+                      {s.name}
+                    </span>
+                    {s.version && (
+                      <Badge variant="outline" className="text-[10px]">
+                        v{s.version}
+                      </Badge>
+                    )}
+                    {s.localFolder && (
+                      <Badge variant="success" className="text-[10px]">
+                        local: v{s.localVersion || "?"}
+                      </Badge>
+                    )}
+                    {inReview && s.pending && (
+                      <button
+                        type="button"
+                        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium hover:underline ${
+                          isDeleting
+                            ? "bg-destructive/10 text-destructive"
+                            : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                        }`}
+                        title={`Open PR #${s.pending.prNumber}`}
+                        onClick={() => openExternal(s.pending!.prUrl)}
+                      >
+                        {isDeleting
+                          ? "deletion pending"
+                          : isAdding
+                          ? "add pending"
+                          : "update pending"}
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </button>
+                    )}
+                    <div className="ml-auto flex gap-1">
+                      {s.localFolder && !isDeleting && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 text-xs"
+                          onClick={() =>
+                            onLaunch({
+                              kind: "uploadSkill",
+                              marketplace,
+                              plugin,
+                              initialTargetName: s.name,
+                              initialLocalFolder: s.localFolder,
+                            })
+                          }
+                        >
+                          <Upload className="mr-1 h-3 w-3" />
+                          Upgrade
+                        </Button>
+                      )}
+                      {!isDeleting && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 text-xs text-destructive"
+                          onClick={() =>
+                            onLaunch({
+                              kind: "deleteSkill",
+                              marketplace,
+                              plugin,
+                              skillName: s.name,
+                            })
+                          }
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

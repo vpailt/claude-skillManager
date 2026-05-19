@@ -651,6 +651,11 @@ pub async fn pr_history_refresh_status(repo: String, number: i64) -> Result<Stri
         "open"
     };
     pr_history::update_status(&repo, number, status)?;
+    // Once a PR leaves the "open" state, drop any matching pending record so
+    // the Admin tab stops showing the skill as "in review".
+    if status != "open" {
+        let _ = pending_prs::remove_by_pr(&repo, number);
+    }
     Ok(status.to_string())
 }
 

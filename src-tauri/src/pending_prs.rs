@@ -14,7 +14,7 @@ const PENDING_FILE_NAME: &str = "pending_prs.json";
 pub struct PendingPR {
     pub marketplace_name: String,
     pub plugin_name: String,
-    /// "add" | "bump" | "remove"
+    /// "add" | "bump" | "remove" | "add-skill" | "update-skill" | "delete-skill"
     pub action: String,
     pub pr_url: String,
     pub pr_number: i64,
@@ -24,6 +24,10 @@ pub struct PendingPR {
     pub new_version: String,
     #[serde(default)]
     pub plugin_source_repo: String,
+    /// Set for skill-scoped PRs (add-skill / update-skill / delete-skill). Lets
+    /// the Skills UI tag the row currently under review.
+    #[serde(default)]
+    pub skill_name: String,
     #[serde(default)]
     pub created_at: String,
 }
@@ -71,9 +75,12 @@ pub fn upsert(mut item: PendingPR) -> Result<()> {
     }
     let mut items = load_all();
     items.retain(|p| {
+        // Skill-scoped actions can coexist on the same plugin (e.g. delete on
+        // skill A + update on skill B), so the de-dup key includes skill_name.
         !(p.marketplace_name == item.marketplace_name
             && p.plugin_name == item.plugin_name
-            && p.action == item.action)
+            && p.action == item.action
+            && p.skill_name == item.skill_name)
     });
     items.push(item);
     save_all(&items)
@@ -91,6 +98,22 @@ pub fn remove(marketplace_name: &str, plugin_name: &str, action: &str) -> Result
                 true
             }
         })
+        .collect();
+    if kept.len() != before {
+        save_all(&kept)?;
+    }
+    Ok(())
+}
+
+/// Removes any pending PR record matching the given (target_repo, pr_number).
+/// Called from the PR status refresher so merged/closed PRs stop appearing as
+/// "in review" on the Admin tab.
+pub fn remove_by_pr(target_repo: &str, pr_number: i64) -> Result<()> {
+    let items = load_all();
+    let before = items.len();
+    let kept: Vec<PendingPR> = items
+        .into_iter()
+        .filter(|p| !(p.target_repo == target_repo && p.pr_number == pr_number))
         .collect();
     if kept.len() != before {
         save_all(&kept)?;
