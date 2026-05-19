@@ -410,6 +410,9 @@ export function UploadSkillDialog({
   const [localFolder, setLocalFolder] = useState(initialLocalFolder ?? "");
   const [targetName, setTargetName] = useState(initialTargetName ?? "");
   const [newVersion, setNewVersion] = useState("");
+  const [pluginBumpLevel, setPluginBumpLevel] = useState<
+    "patch" | "minor" | "major"
+  >("patch");
   const [alsoBump, setAlsoBump] = useState(true);
   const [draft, setDraft] = useState<AdminDraft | null>(null);
 
@@ -426,6 +429,7 @@ export function UploadSkillDialog({
       setLocalFolder(initialLocalFolder ?? "");
       setTargetName(initialTargetName ?? "");
       setNewVersion("");
+      setPluginBumpLevel("patch");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -438,6 +442,7 @@ export function UploadSkillDialog({
         localFolder: localFolder.trim(),
         targetName: targetName.trim() || undefined,
         newVersion: newVersion.trim() || undefined,
+        pluginBumpLevel,
         alsoBumpMarketplace: alsoBump,
       }),
     onSuccess: (d) => setDraft(d),
@@ -537,7 +542,7 @@ export function UploadSkillDialog({
               </div>
               <div>
                 <label className="mb-1 block text-xs text-muted-foreground">
-                  New version (optional)
+                  Skill version (optional)
                 </label>
                 <Input
                   placeholder="e.g. 1.7.6"
@@ -547,12 +552,32 @@ export function UploadSkillDialog({
               </div>
             </div>
 
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Plugin version bump
+              </label>
+              <div className="flex gap-1">
+                {(["patch", "minor", "major"] as const).map((lvl) => (
+                  <Button
+                    key={lvl}
+                    type="button"
+                    size="sm"
+                    variant={pluginBumpLevel === lvl ? "default" : "outline"}
+                    className="h-7 flex-1 text-xs"
+                    onClick={() => setPluginBumpLevel(lvl)}
+                  >
+                    {lvl}
+                  </Button>
+                ))}
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                The plugin version always bumps when a skill is uploaded — pick
+                how. Independent from the skill version above.
+              </p>
+            </div>
+
             <label className="flex cursor-pointer items-center gap-2">
-              <Switch
-                checked={alsoBump}
-                onCheckedChange={setAlsoBump}
-                disabled={!newVersion.trim()}
-              />
+              <Switch checked={alsoBump} onCheckedChange={setAlsoBump} />
               <span>
                 Also open companion PR bumping{" "}
                 <code className="text-xs">{plugin.name}</code> in the

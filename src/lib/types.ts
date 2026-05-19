@@ -207,7 +207,10 @@ export interface UploadSkillArgs {
   pluginName: string;
   localFolder: string;
   targetName?: string;
+  /** Skill version stamped on SKILL.md. Independent from the plugin version. */
   newVersion?: string;
+  /** How to bump the plugin's own version: "patch" (default), "minor", "major". */
+  pluginBumpLevel?: "patch" | "minor" | "major";
   alsoBumpMarketplace?: boolean;
 }
 

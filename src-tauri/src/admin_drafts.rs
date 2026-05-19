@@ -28,6 +28,50 @@ fn skill_version_from_fm(fm: &Fields) -> String {
         .cloned()
         .unwrap_or_default()
 }
+
+/// The two locations Claude Code looks at for the plugin's own metadata. Older
+/// plugins ship `manifest.json` at the root; newer ones use
+/// `.claude-plugin/plugin.json`. Some are migrating and have both — keep them
+/// in lockstep.
+const PLUGIN_MANIFEST_PATHS: &[&str] = &["manifest.json", ".claude-plugin/plugin.json"];
+
+/// One manifest file as fetched from the plugin repo. We hold both the parsed
+/// JSON (to rewrite the `version` key) and the raw text (to compute the diff).
+struct PluginManifestFile {
+    path: String,
+    text: String,
+    json: Value,
+}
+
+/// Fetches whichever of [`PLUGIN_MANIFEST_PATHS`] exist on the target repo and
+/// reports the highest declared version. Returning all present files lets the
+/// caller stamp the new version into each one so the two locations never drift.
+fn fetch_plugin_manifests(
+    gh: &GitHubClient,
+    repo: &str,
+    branch: &str,
+) -> (Vec<PluginManifestFile>, String) {
+    let mut files: Vec<PluginManifestFile> = Vec::new();
+    let mut current_version = String::new();
+    for path in PLUGIN_MANIFEST_PATHS {
+        let Ok((text, _)) = gh.get_file(repo, path, branch) else {
+            continue;
+        };
+        let json: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if let Some(v) = json.get("version").and_then(|v| v.as_str()) {
+            let v = v.trim();
+            if !v.is_empty() && current_version.is_empty() {
+                current_version = v.to_string();
+            }
+        }
+        files.push(PluginManifestFile {
+            path: (*path).to_string(),
+            text,
+            json,
+        });
+    }
+    (files, current_version)
+}
 use crate::github_client::GitHubClient;
 use crate::local_scanner;
 use crate::pending_prs::{self, PendingPR};
@@ -449,11 +493,17 @@ pub struct UploadSkillArgs {
     /// Defaults to the local folder name when empty.
     #[serde(default)]
     pub target_name: String,
+    /// Skill version stamped on SKILL.md. Independent from the plugin version
+    /// (the plugin always bumps by `plugin_bump_level`).
     #[serde(default)]
     pub new_version: String,
+    /// How to bump the plugin's own version (manifest.json +
+    /// .claude-plugin/plugin.json). Accepts "patch" (default), "minor", "major".
+    #[serde(default)]
+    pub plugin_bump_level: String,
     /// Open a companion PR on the marketplace registry that bumps the plugin
     /// version. Only meaningful when the plugin lives in a different repo than
-    /// the marketplace, and `new_version` is set.
+    /// the marketplace.
     #[serde(default)]
     pub also_bump_marketplace: bool,
 }
@@ -516,7 +566,6 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
     // common case (separate plugin repo) cleanly; for monorepos we drop files
     // at the repo root which matches the Python fallback.
     let target_subpath = format!("skills/{target_name}").trim_end_matches('/').to_string();
-    let manifest_path = "manifest.json".to_string();
 
     let mut changes = collect_skill_folder_changes(local_folder, &target_subpath)?;
     if changes.is_empty() {
@@ -543,12 +592,11 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         problems.push("No SKILL.md found in the local folder.".into());
     }
 
-    // Effective version applied to skill frontmatter + plugin manifest +
-    // marketplace registry. Priority:
+    // Skill version is stamped on SKILL.md only. Priority:
     //   1. user-supplied newVersion
     //   2. existing skill version in SKILL.md frontmatter
     //   3. "0.1.0" (auto-initialised for brand-new skills)
-    let effective_version = if !args.new_version.trim().is_empty() {
+    let effective_skill_version = if !args.new_version.trim().is_empty() {
         args.new_version.trim().to_string()
     } else if !skill_existing_version.is_empty() {
         skill_existing_version.clone()
@@ -556,13 +604,12 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         "0.1.0".to_string()
     };
 
-    // Always stamp SKILL.md with the effective version so the skill and plugin
-    // stay aligned. Without this, an "add new skill" flow would ship a skill
-    // with no version, then the next bump would diverge from the manifest.
+    // Always stamp SKILL.md with the effective skill version. Without this,
+    // an "add new skill" flow would ship a skill with no version.
     if let Some(idx) = skill_md_idx {
         let text = String::from_utf8_lossy(&changes[idx].content).to_string();
         let mut updates = Fields::new();
-        updates.insert("version".to_string(), effective_version.clone());
+        updates.insert("version".to_string(), effective_skill_version.clone());
         let new_text = update_frontmatter(&text, &updates);
         changes[idx] = FileChange {
             path: changes[idx].path.clone(),
@@ -604,24 +651,39 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         });
     }
 
-    // Always bump the plugin's manifest.json so the plugin version follows the
-    // skill change. Skipping the bump leaves Claude clients seeing the same
-    // version even though the plugin contents changed.
-    match gh.get_file(&target_repo, &manifest_path, &base_branch) {
-        Ok((manifest_text, _)) => {
-            let manifest: Value = serde_json::from_str(&manifest_text).unwrap_or(Value::Null);
-            if !manifest.is_object() {
-                problems.push("manifest.json root is not a JSON object.".into());
-            }
-            let new_manifest = build_manifest_bump(&manifest, &effective_version);
-            changes.push(FileChange {
-                path: manifest_path.clone(),
-                content: new_manifest.clone(),
-            });
-            let new_text = String::from_utf8_lossy(&new_manifest).to_string();
-            entries.push(diff_entry_modify(&manifest_path, &manifest_text, &new_text));
+    // Plugin version is independent from the skill version: any upload bumps
+    // the plugin. Otherwise Claude clients keep seeing the same version even
+    // though the plugin contents changed. Bump level (patch/minor/major)
+    // defaults to "patch" but the user can promote it from the upload dialog.
+    let bump_level = match args.plugin_bump_level.trim().to_lowercase().as_str() {
+        "major" => "major",
+        "minor" => "minor",
+        _ => "patch",
+    };
+    let (manifest_files, current_plugin_version) =
+        fetch_plugin_manifests(gh, &target_repo, &base_branch);
+    if manifest_files.is_empty() {
+        problems.push(
+            "No manifest.json or .claude-plugin/plugin.json found on the plugin repo.".into(),
+        );
+    }
+    let current_for_bump = if current_plugin_version.is_empty() {
+        "0.0.0".to_string()
+    } else {
+        current_plugin_version.clone()
+    };
+    let new_plugin_version = bump_version(&current_for_bump, bump_level);
+    for mf in &manifest_files {
+        if !mf.json.is_object() {
+            problems.push(format!("{} root is not a JSON object.", mf.path));
         }
-        Err(e) => problems.push(format!("Could not fetch manifest.json: {e}")),
+        let new_bytes = build_manifest_bump(&mf.json, &new_plugin_version);
+        let new_text = String::from_utf8_lossy(&new_bytes).to_string();
+        entries.push(diff_entry_modify(&mf.path, &mf.text, &new_text));
+        changes.push(FileChange {
+            path: mf.path.clone(),
+            content: new_bytes,
+        });
     }
 
     let conflict_paths: Vec<String> = changes.iter().map(|c| c.path.clone()).collect();
@@ -631,26 +693,33 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
     } else {
         "skillmanager/add-skill"
     };
-    let branch_name = make_branch_name(branch_prefix, &[&target_name, &effective_version]);
-    let pr_title = format!("{action_word} skill: {target_name} (v{effective_version})");
+    let branch_name = make_branch_name(
+        branch_prefix,
+        &[&target_name, &new_plugin_version],
+    );
+    let pr_title = format!(
+        "{action_word} skill: {target_name} (skill v{effective_skill_version}, plugin v{new_plugin_version})"
+    );
     let pr_body = format!(
-        "{action_word}s skill `{target_name}` ({} file(s)) on plugin `{}` from local folder `{}`.\n\nAlso bumps `{}` to v{}.",
+        "{action_word}s skill `{target_name}` (v{effective_skill_version}, {} file(s)) on plugin `{}` from local folder `{}`.\n\nBumps plugin `{}` from v{} to v{} ({} bump).",
         changes.len(),
         args.plugin_name,
         local_folder.display(),
         args.plugin_name,
-        effective_version
+        if current_plugin_version.is_empty() { "?" } else { &current_plugin_version },
+        new_plugin_version,
+        bump_level
     );
 
-    // Companion PR bumps the marketplace registry (version + source.ref). We
-    // always emit it when the plugin lives in its own repo — the marketplace
-    // is useless if the registry keeps pointing at the previous tag.
+    // Companion PR bumps the marketplace registry (version + source.ref) to
+    // the new plugin version. The registry is useless if it keeps pointing at
+    // the previous tag.
     let companion = if args.also_bump_marketplace && target_repo != mp_repo {
-        match prepare_bump_plugin(gh, &args.marketplace, &args.plugin_name, &effective_version) {
+        match prepare_bump_plugin(gh, &args.marketplace, &args.plugin_name, &new_plugin_version) {
             Ok(mut d) => {
                 d.pr_body = format!(
                     "Companion PR.\n\nUpdates `{}` to v`{}` in the registry (version + source.ref).",
-                    args.plugin_name, effective_version
+                    args.plugin_name, new_plugin_version
                 );
                 // The companion's needs_tag triggers a tag-creation step that
                 // expects the manifest bump to already be on the plugin
@@ -674,10 +743,10 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
     // the tag must point at the PR branch (not default-branch HEAD). Storing
     // needs_tag here makes submit_draft create the tag automatically once the
     // branch exists.
-    let needs_tag = if target_repo != mp_repo && !gh.ref_exists(&target_repo, &effective_version) {
+    let needs_tag = if target_repo != mp_repo && !gh.ref_exists(&target_repo, &new_plugin_version) {
         Some(NeedsTag {
             repo: target_repo.clone(),
-            tag: effective_version.clone(),
+            tag: new_plugin_version.clone(),
         })
     } else {
         None
@@ -705,7 +774,7 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
             } else {
                 "add-skill".to_string()
             },
-            new_version: effective_version,
+            new_version: new_plugin_version,
             plugin_source_repo: plugin_repo,
             skill_name: target_name.clone(),
         }),
@@ -736,7 +805,6 @@ pub fn prepare_delete_skill(
         gh.get_default_branch(&target_repo)?
     };
     let skill_subpath = format!("skills/{skill_name}");
-    let manifest_path = "manifest.json".to_string();
 
     let files = gh.list_dir_recursive(&target_repo, &skill_subpath, &base_branch)?;
     if files.is_empty() {
@@ -764,37 +832,41 @@ pub fn prepare_delete_skill(
         });
     }
 
-    // Fetch the current manifest to figure out the next plugin version. A
-    // deletion shifts plugin contents, so the version must move; otherwise
-    // Claude clients won't pull the change.
+    // Fetch every plugin-manifest file present (manifest.json and/or
+    // .claude-plugin/plugin.json) and bump them in lockstep. A deletion shifts
+    // plugin contents, so the version must move; otherwise Claude clients
+    // won't pull the change.
     let mut problems: Vec<String> = Vec::new();
     let mut changes: Vec<FileChange> = Vec::new();
-    let mut new_version = String::new();
-    match gh.get_file(&target_repo, &manifest_path, &base_branch) {
-        Ok((manifest_text, _)) => {
-            let manifest: Value = serde_json::from_str(&manifest_text).unwrap_or(Value::Null);
-            if !manifest.is_object() {
-                problems.push("manifest.json root is not a JSON object.".into());
-            }
-            let cur = manifest
-                .get("version")
-                .and_then(|v| v.as_str())
-                .unwrap_or("0.0.0");
-            new_version = bump_version(cur, "patch");
-            let new_manifest = build_manifest_bump(&manifest, &new_version);
-            let new_text = String::from_utf8_lossy(&new_manifest).to_string();
-            entries.push(diff_entry_modify(&manifest_path, &manifest_text, &new_text));
-            changes.push(FileChange {
-                path: manifest_path.clone(),
-                content: new_manifest,
-            });
+    let (manifest_files, current_plugin_version) =
+        fetch_plugin_manifests(gh, &target_repo, &base_branch);
+    if manifest_files.is_empty() {
+        problems.push(
+            "No manifest.json or .claude-plugin/plugin.json found on the plugin repo.".into(),
+        );
+    }
+    let current_for_bump = if current_plugin_version.is_empty() {
+        "0.0.0".to_string()
+    } else {
+        current_plugin_version.clone()
+    };
+    let new_version = bump_version(&current_for_bump, "patch");
+    for mf in &manifest_files {
+        if !mf.json.is_object() {
+            problems.push(format!("{} root is not a JSON object.", mf.path));
         }
-        Err(e) => problems.push(format!("Could not fetch manifest.json: {e}")),
+        let new_bytes = build_manifest_bump(&mf.json, &new_version);
+        let new_text = String::from_utf8_lossy(&new_bytes).to_string();
+        entries.push(diff_entry_modify(&mf.path, &mf.text, &new_text));
+        changes.push(FileChange {
+            path: mf.path.clone(),
+            content: new_bytes,
+        });
     }
 
     let mut conflict_paths: Vec<String> = deletions.clone();
-    if !changes.is_empty() {
-        conflict_paths.push(manifest_path.clone());
+    for mf in &manifest_files {
+        conflict_paths.push(mf.path.clone());
     }
     let conflicts = detect_conflicts(gh, &target_repo, &conflict_paths, &base_branch);
     let branch_name = make_branch_name("skillmanager/delete-skill", &[skill_name, &new_version]);
