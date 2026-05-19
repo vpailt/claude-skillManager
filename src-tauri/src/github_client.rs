@@ -355,6 +355,47 @@ impl GitHubClient {
         Ok(resp.json()?)
     }
 
+    /// Create a GitHub release on an existing tag. Returns Ok with the
+    /// existing release JSON when the release for that tag already exists
+    /// (so the caller doesn't have to special-case re-runs).
+    pub fn create_release(
+        &self,
+        repo: &str,
+        tag: &str,
+        name: &str,
+        body: &str,
+    ) -> Result<Value> {
+        let url = format!("/repos/{repo}/releases");
+        let payload = json!({
+            "tag_name": tag,
+            "name": name,
+            "body": body,
+            "draft": false,
+            "prerelease": false,
+        });
+        let resp = self
+            .request(reqwest::Method::POST, &url)
+            .json(&payload)
+            .send()?;
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(resp.json()?);
+        }
+        // 422 "already_exists" — fetch the existing release for the tag.
+        if status.as_u16() == 422 {
+            let existing_url = format!("/repos/{repo}/releases/tags/{tag}");
+            if let Ok(r) = Self::check(
+                self.request(reqwest::Method::GET, &existing_url).send()?,
+                "GET",
+                &existing_url,
+            ) {
+                return Ok(r.json()?);
+            }
+        }
+        let text = resp.text().unwrap_or_default();
+        Err(Error::GitHub(format!("POST {url} -> {status}: {text}")))
+    }
+
     pub fn create_branch(
         &self,
         repo: &str,

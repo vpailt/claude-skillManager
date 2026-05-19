@@ -985,6 +985,41 @@ pub fn submit_draft(gh: &GitHubClient, draft: &AdminDraft) -> Result<UploadResul
                             draft.target_repo,
                             sha
                         );
+                        // Release is best-effort: a failure here shouldn't
+                        // block the PR (the tag still exists and the user
+                        // can publish a release manually).
+                        let plugin = draft
+                            .pending_meta
+                            .as_ref()
+                            .map(|m| m.plugin_name.as_str())
+                            .unwrap_or("");
+                        let release_name = if plugin.is_empty() {
+                            format!("v{}", nt.tag)
+                        } else {
+                            format!("{plugin} v{}", nt.tag)
+                        };
+                        let release_body = format!(
+                            "Auto-created by SkillManager from PR [{}]({}).",
+                            result.pr_number, result.pr_url
+                        );
+                        match gh.create_release(
+                            &draft.target_repo,
+                            &nt.tag,
+                            &release_name,
+                            &release_body,
+                        ) {
+                            Ok(_) => tracing::info!(
+                                "auto-created release {} on {}",
+                                nt.tag,
+                                draft.target_repo
+                            ),
+                            Err(e) => tracing::warn!(
+                                "auto-create release {} on {} failed: {}",
+                                nt.tag,
+                                draft.target_repo,
+                                e
+                            ),
+                        }
                     }
                 }
                 Err(e) => tracing::warn!(
@@ -1010,7 +1045,24 @@ pub fn create_tag_if_missing(gh: &GitHubClient, repo: &str, tag: &str) -> Result
     let default_branch = gh.get_default_branch(repo)?;
     let head_sha = gh.get_branch_sha(repo, &default_branch)?;
     gh.create_tag(repo, tag, &head_sha)?;
-    Ok(format!("Tag `{tag}` created on {repo}@{head_sha}."))
+    let mut msg = format!("Tag `{tag}` created on {repo}@{head_sha}.");
+    // Release is best-effort; surface a hint in the message but never fail.
+    match gh.create_release(
+        repo,
+        tag,
+        &format!("v{tag}"),
+        "Auto-created by SkillManager.",
+    ) {
+        Ok(_) => {
+            msg.push_str(" Release published.");
+            tracing::info!("auto-created release {tag} on {repo}");
+        }
+        Err(e) => {
+            msg.push_str(&format!(" Release creation failed: {e}"));
+            tracing::warn!("auto-create release {tag} on {repo} failed: {e}");
+        }
+    }
+    Ok(msg)
 }
 
 // ============================================================
