@@ -1116,6 +1116,11 @@ pub struct RemoteSkillInfo {
 /// Lists `skills/*/` directories in the plugin's source repo and pairs each
 /// with the matching local skill folder if any (used by the React skills tab
 /// to surface "upgrade this skill" affordances).
+///
+/// Reads from the plugin repo's default branch (not the marketplace registry's
+/// `source.ref`) so that admins see the live state right after a merge —
+/// otherwise a deletion stays "visible" until both the plugin tag and the
+/// marketplace bump propagate.
 pub fn list_remote_skills(
     gh: &GitHubClient,
     marketplace: &str,
@@ -1127,20 +1132,9 @@ pub fn list_remote_skills(
     if plugin_repo.is_empty() {
         return Ok(Vec::new());
     }
-    let plugin_ref = registry
-        .get("plugins")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| {
-            arr.iter().find_map(|p| {
-                let o = p.as_object()?;
-                if o.get("name").and_then(|v| v.as_str())? != plugin_name {
-                    return None;
-                }
-                let src = o.get("source")?;
-                src.get("ref").and_then(|v| v.as_str()).map(String::from)
-            })
-        })
-        .unwrap_or_default();
+    let plugin_ref = gh
+        .get_default_branch(&plugin_repo)
+        .unwrap_or_else(|_| "main".to_string());
 
     let entries = match gh.list_dir(&plugin_repo, "skills", &plugin_ref) {
         Ok(v) => v,
