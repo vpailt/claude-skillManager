@@ -58,13 +58,29 @@ export interface Marketplace {
   lastUpdated: string;
 }
 
+export type Provider = "github" | "gitea";
+
 export interface MarketplaceConfig {
   name: string;
+  /** `owner/repo` on the marketplace's host (field name kept for back-compat). */
   githubRepo: string;
   defaultBranch: string;
   owned: boolean;
   sourcePath: string;
   autoUpdate: boolean;
+  /** Forge hosting this marketplace. Absent → "github". */
+  provider?: Provider;
+  /** Gitea instance root (e.g. https://git.almaviacx.local). Empty for GitHub. */
+  baseUrl?: string;
+}
+
+export interface GiteaInstance {
+  /** Instance root, e.g. https://git.almaviacx.local */
+  baseUrl: string;
+  /** Skip TLS verification — internal/self-signed CAs only. */
+  insecureTls: boolean;
+  /** Computed: whether a token is stored for this host. */
+  hasToken: boolean;
 }
 
 export type UiDensity = "compact" | "comfortable";
@@ -101,6 +117,7 @@ export interface SettingsPaths {
 export interface Settings {
   githubToken: string;
   marketplaces: MarketplaceConfig[];
+  giteaInstances: GiteaInstance[];
   ui: UiPrefs;
 }
 
@@ -118,6 +135,10 @@ export interface PRRecord {
   createdAt: string;
   status: string;
   kind: string;
+  /** Forge hosting this PR. Absent (old records) → "github". */
+  provider?: Provider;
+  /** Gitea instance root for Gitea PRs; empty for GitHub. */
+  baseUrl?: string;
 }
 
 export interface PendingPR {

@@ -14,6 +14,7 @@ import type {
   PendingPR,
   Plugin,
   PRRecord,
+  Provider,
   RefreshResult,
   RemoteSkillInfo,
   Settings,
@@ -70,13 +71,17 @@ export const api = {
     name: string,
     repo: string,
     ref: string,
-    autoUpdate: boolean | null
+    autoUpdate: boolean | null,
+    provider?: Provider,
+    baseUrl?: string
   ) =>
     invoke<string>("install_marketplace_cmd", {
       name,
       repo,
       ref,
       autoUpdate,
+      provider: provider ?? "github",
+      baseUrl: baseUrl ?? "",
     }),
   uninstallMarketplace: (name: string) =>
     invoke<void>("uninstall_marketplace_cmd", { name }),
@@ -112,6 +117,16 @@ export const api = {
   githubCanPush: (repo: string) =>
     invoke<boolean>("github_can_push", { repo }),
   githubTokenScopes: () => invoke<string[]>("github_token_scopes"),
+
+  // --- gitea ---
+  giteaAuthCheck: (baseUrl: string) =>
+    invoke<[boolean, string]>("gitea_auth_check", { baseUrl }),
+  settingsUpsertGiteaInstance: (baseUrl: string, insecureTls: boolean) =>
+    invoke<Settings>("settings_upsert_gitea_instance", { baseUrl, insecureTls }),
+  settingsRemoveGiteaInstance: (baseUrl: string) =>
+    invoke<Settings>("settings_remove_gitea_instance", { baseUrl }),
+  settingsSetGiteaToken: (baseUrl: string, token: string) =>
+    invoke<Settings>("settings_set_gitea_token", { baseUrl, token }),
 
   // --- admin ---
   adminSubmitChanges: (args: {
@@ -193,8 +208,8 @@ export const api = {
     }),
   adminSubmitDraft: (draft: AdminDraft) =>
     invoke<UploadResult>("admin_submit_draft", { draft }),
-  adminCreateTag: (repo: string, tag: string) =>
-    invoke<string>("admin_create_tag", { repo, tag }),
+  adminCreateTag: (repo: string, tag: string, marketplace?: string) =>
+    invoke<string>("admin_create_tag", { repo, tag, marketplace: marketplace ?? null }),
   adminListUserSkills: () => invoke<LocalSkill[]>("admin_list_user_skills"),
   adminListRemoteSkills: (marketplace: string, pluginName: string) =>
     invoke<RemoteSkillInfo[]>("admin_list_remote_skills", {

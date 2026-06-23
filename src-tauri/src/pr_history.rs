@@ -2,6 +2,7 @@
 
 use crate::config;
 use crate::error::{Error, Result};
+use crate::github_client::Provider;
 use crate::installer::{atomic_write_json, now_iso};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,6 +25,13 @@ pub struct PRRecord {
     pub status: String,
     #[serde(default)]
     pub kind: String,
+    /// Forge that hosts this PR. Absent (old records) → GitHub. Lets a later
+    /// status refresh target the right instance.
+    #[serde(default)]
+    pub provider: Provider,
+    /// Gitea instance root for Gitea PRs; empty for GitHub.
+    #[serde(default)]
+    pub base_url: String,
 }
 
 fn default_status() -> String {

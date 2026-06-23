@@ -45,6 +45,7 @@ import {
 import { useNotifications } from "@/stores/notifications";
 import { setFrontendLogLevel } from "@/lib/logger";
 import { useAppVersion } from "@/hooks/useAppVersion";
+import { GiteaInstancesCard } from "@/components/GiteaInstancesCard";
 
 const DEFAULT_UI: UiPrefs = {
   prPollingEnabled: false,
@@ -538,6 +539,8 @@ export function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      <GiteaInstancesCard />
 
       <Card className="mb-6">
         <CardHeader>

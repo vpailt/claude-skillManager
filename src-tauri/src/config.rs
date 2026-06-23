@@ -19,6 +19,7 @@
 //! we migrate it into the portable layout.
 
 use crate::error::{Error, Result};
+use crate::github_client::{host_of, Provider};
 use crate::properties::{write_atomic, Properties};
 use crate::token_store;
 use serde::{Deserialize, Serialize};
@@ -103,6 +104,10 @@ pub fn marketplaces_file() -> PathBuf {
     app_settings_dir().join("marketplaces.json")
 }
 
+pub fn gitea_instances_file() -> PathBuf {
+    app_settings_dir().join("gitea.json")
+}
+
 /// Legacy single-blob JSON settings file under `%APPDATA%\SkillManager`.
 /// Only consulted for one-shot migration to the portable layout.
 fn legacy_appdata_settings_file() -> Option<PathBuf> {
@@ -129,6 +134,9 @@ fn default_branch() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct MarketplaceConfig {
     pub name: String,
+    /// `owner/repo` on the marketplace's host. Field name kept (`githubRepo`)
+    /// for back-compat with existing `marketplaces.json`; it holds the repo
+    /// path for Gitea marketplaces too.
     #[serde(default)]
     pub github_repo: String,
     #[serde(default = "default_branch")]
@@ -139,6 +147,29 @@ pub struct MarketplaceConfig {
     pub source_path: String,
     #[serde(default)]
     pub auto_update: bool,
+    /// Which forge hosts this marketplace. Absent → GitHub (back-compat).
+    #[serde(default)]
+    pub provider: Provider,
+    /// Gitea instance root (e.g. `https://git.almaviacx.local`). Empty for
+    /// GitHub. Identifies which [`GiteaInstance`] supplies the token + TLS mode.
+    #[serde(default)]
+    pub base_url: String,
+}
+
+/// A registered self-hosted Gitea instance. The token lives in the OS
+/// credential vault (keyed by host), never on disk; `has_token` is recomputed
+/// at load and is meaningless in `gitea.json`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiteaInstance {
+    /// Instance root, e.g. `https://git.almaviacx.local`.
+    pub base_url: String,
+    /// Skip TLS certificate verification — for internal/self-signed CAs only.
+    #[serde(default)]
+    pub insecure_tls: bool,
+    /// Computed: whether a token is stored for this host. Not trusted on disk.
+    #[serde(default)]
+    pub has_token: bool,
 }
 
 fn default_pr_polling_interval() -> u32 {
@@ -209,12 +240,22 @@ pub struct Settings {
     #[serde(default)]
     pub marketplaces: Vec<MarketplaceConfig>,
     #[serde(default)]
+    pub gitea_instances: Vec<GiteaInstance>,
+    #[serde(default)]
     pub ui: UiPrefs,
 }
 
 impl Settings {
     pub fn get_marketplace(&self, name: &str) -> Option<&MarketplaceConfig> {
         self.marketplaces.iter().find(|m| m.name == name)
+    }
+
+    /// The Gitea instance whose host matches `base_url`, if registered.
+    pub fn get_gitea_instance(&self, base_url: &str) -> Option<&GiteaInstance> {
+        let host = host_of(base_url);
+        self.gitea_instances
+            .iter()
+            .find(|i| host_of(&i.base_url) == host)
     }
 }
 
@@ -266,11 +307,13 @@ const PROPS_SECTIONS: &[(&str, &[&str])] = &[
 fn settings_from_properties_and_marketplaces(
     props: &Properties,
     marketplaces: Vec<MarketplaceConfig>,
+    gitea_instances: Vec<GiteaInstance>,
     github_token: String,
 ) -> Settings {
     Settings {
         github_token,
         marketplaces,
+        gitea_instances,
         ui: UiPrefs {
             pr_polling_enabled: props.get_bool(PROP_POLLING_ENABLED, false),
             pr_polling_interval_seconds: props.get_u32(PROP_POLLING_INTERVAL, 60),
@@ -315,6 +358,49 @@ fn save_marketplaces(items: &[MarketplaceConfig]) -> Result<()> {
         fs::create_dir_all(parent).map_err(Error::from)?;
     }
     let payload = serde_json::to_string_pretty(items).map_err(Error::from)?;
+    let tmp = f.with_extension("tmp");
+    fs::write(&tmp, payload).map_err(Error::from)?;
+    fs::rename(&tmp, &f).map_err(Error::from)?;
+    Ok(())
+}
+
+/// Load registered Gitea instances and stamp `has_token` from the credential
+/// vault (the on-disk value is ignored — see [`GiteaInstance`]).
+fn load_gitea_instances() -> Vec<GiteaInstance> {
+    let f = gitea_instances_file();
+    if !f.exists() {
+        return Vec::new();
+    }
+    let mut items: Vec<GiteaInstance> = fs::read_to_string(&f)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<GiteaInstance>>(&s).ok())
+        .unwrap_or_default();
+    for it in items.iter_mut() {
+        let host = host_of(&it.base_url);
+        it.has_token = token_store::load_host(&host)
+            .ok()
+            .flatten()
+            .is_some();
+    }
+    items
+}
+
+fn save_gitea_instances(items: &[GiteaInstance]) -> Result<()> {
+    let f = gitea_instances_file();
+    if let Some(parent) = f.parent() {
+        fs::create_dir_all(parent).map_err(Error::from)?;
+    }
+    // Never persist the computed `has_token` as truth — zero it so a human
+    // reading gitea.json isn't misled; it's recomputed from the vault on load.
+    let persisted: Vec<GiteaInstance> = items
+        .iter()
+        .map(|i| GiteaInstance {
+            base_url: i.base_url.clone(),
+            insecure_tls: i.insecure_tls,
+            has_token: false,
+        })
+        .collect();
+    let payload = serde_json::to_string_pretty(&persisted).map_err(Error::from)?;
     let tmp = f.with_extension("tmp");
     fs::write(&tmp, payload).map_err(Error::from)?;
     fs::rename(&tmp, &f).map_err(Error::from)?;
@@ -408,6 +494,7 @@ pub fn load_settings() -> Settings {
     migrate_legacy_if_needed();
     let props = Properties::load(&config_properties_file()).unwrap_or_default();
     let marketplaces = load_marketplaces();
+    let gitea_instances = load_gitea_instances();
     let token_from_vault = token_store::load().unwrap_or_else(|e| {
         tracing::warn!("token_store::load failed: {e}");
         None
@@ -415,7 +502,7 @@ pub fn load_settings() -> Settings {
     let github_token = token_from_vault
         .or_else(|| migrate_token_to_keyring_if_needed(&props))
         .unwrap_or_default();
-    settings_from_properties_and_marketplaces(&props, marketplaces, github_token)
+    settings_from_properties_and_marketplaces(&props, marketplaces, gitea_instances, github_token)
 }
 
 pub fn save_settings(s: &Settings) -> Result<()> {
@@ -425,6 +512,7 @@ pub fn save_settings(s: &Settings) -> Result<()> {
     let rendered = render_config_properties(&props);
     write_atomic(&config_properties_file(), &rendered)?;
     save_marketplaces(&s.marketplaces)?;
+    save_gitea_instances(&s.gitea_instances)?;
     Ok(())
 }
 

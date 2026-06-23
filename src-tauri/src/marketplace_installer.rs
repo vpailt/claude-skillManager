@@ -2,7 +2,7 @@
 
 use crate::config;
 use crate::error::{Error, Result};
-use crate::github_client::GitHubClient;
+use crate::github_client::{GitHubClient, Provider};
 use crate::installer::{atomic_write_json, now_iso, rmtree_robust};
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -82,8 +82,19 @@ pub fn install_marketplace(
         .and_then(|v| v.as_object())
         .cloned()
         .unwrap_or_default();
+    // Record the source so Claude Code (and the orphan-detection in
+    // local_scanner) can re-resolve the marketplace. GitHub keeps the historic
+    // `{"source":"github","repo":…}` shape; Gitea records a `git` source with
+    // the instance web URL so the host isn't lost.
+    let source = match gh.provider() {
+        Provider::Github => json!({"source": "github", "repo": repo}),
+        Provider::Gitea => {
+            let base = gh.base_url();
+            json!({"source": "git", "repo": repo, "url": format!("{base}/{repo}")})
+        }
+    };
     let mut record = json!({
-        "source": {"source": "github", "repo": repo},
+        "source": source,
         "installLocation": install_path.to_string_lossy(),
         "lastUpdated": now_iso(),
     });

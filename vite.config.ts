@@ -23,4 +23,12 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    // The single-chunk bundle sits a bit over Vite's default 500 kB warning
+    // threshold. The warning is harmless, but it goes to stderr and `build.ps1`
+    // runs under `$ErrorActionPreference = "Stop"`, which promotes any native
+    // stderr line to a fatal error — aborting the build before the Rust step.
+    // Raise the limit so a clean build stays quiet on stderr.
+    chunkSizeWarningLimit: 1500,
+  },
 });

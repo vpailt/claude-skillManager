@@ -114,6 +114,8 @@ pub fn submit_changes(
         created_at: String::new(),
         status: "open".to_string(),
         kind: branch_prefix.to_string(),
+        provider: gh.provider(),
+        base_url: gh.base_url(),
     });
 
     tracing::info!(

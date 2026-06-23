@@ -122,7 +122,7 @@ export function DiffPreviewDialog({
 
   const createTagMutation = useMutation({
     mutationFn: ({ repo, tag }: { repo: string; tag: string }) =>
-      api.adminCreateTag(repo, tag),
+      api.adminCreateTag(repo, tag, draft?.pendingMeta?.marketplaceName),
     onSuccess: () => {
       setTagCreated(true);
       setTagError(null);

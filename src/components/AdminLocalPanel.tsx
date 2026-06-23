@@ -31,7 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import { useApp } from "@/stores/app";
 import { useNotifications } from "@/stores/notifications";
-import type { InstallState, Marketplace, Plugin } from "@/lib/types";
+import type { InstallState, Marketplace, Plugin, Provider } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -83,12 +83,22 @@ function AddMarketplaceDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const qc = useQueryClient();
+  const settingsQuery = useQuery({
+    queryKey: ["app-settings"],
+    queryFn: api.loadAppSettings,
+  });
+  const giteaInstances = settingsQuery.data?.giteaInstances ?? [];
+
+  const [provider, setProvider] = useState<Provider>("github");
+  const [giteaBaseUrl, setGiteaBaseUrl] = useState("");
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [parsedRepo, setParsedRepo] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   const reset = () => {
+    setProvider("github");
+    setGiteaBaseUrl("");
     setUrl("");
     setName("");
     setParsedRepo(null);
@@ -115,6 +125,9 @@ function AddMarketplaceDialog({
     mutationFn: async () => {
       if (!parsedRepo) throw new Error("URL is invalid");
       if (!name.trim()) throw new Error("Marketplace name is required");
+      if (provider === "gitea" && !giteaBaseUrl) {
+        throw new Error("Pick a Gitea instance (add one in Settings first)");
+      }
       return api.settingsUpsertMarketplace({
         name: name.trim(),
         githubRepo: parsedRepo,
@@ -122,6 +135,8 @@ function AddMarketplaceDialog({
         owned: false,
         sourcePath: "",
         autoUpdate: false,
+        provider,
+        baseUrl: provider === "gitea" ? giteaBaseUrl : "",
       });
     },
     onSuccess: () => {
@@ -152,10 +167,61 @@ function AddMarketplaceDialog({
         <div className="space-y-3">
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">
+              Provider
+            </label>
+            <div className="flex gap-1">
+              {(["github", "gitea"] as const).map((p) => (
+                <Button
+                  key={p}
+                  size="sm"
+                  variant={provider === p ? "default" : "outline"}
+                  className="h-7 px-3 text-xs capitalize"
+                  onClick={() => setProvider(p)}
+                >
+                  {p}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          {provider === "gitea" && (
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Gitea instance
+              </label>
+              {giteaInstances.length === 0 ? (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-amber-600 dark:text-amber-400">
+                  No Gitea instance registered yet. Add one (URL + token) in{" "}
+                  <strong>Settings → Gitea instances</strong> first.
+                </div>
+              ) : (
+                <select
+                  className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                  value={giteaBaseUrl}
+                  onChange={(e) => setGiteaBaseUrl(e.target.value)}
+                >
+                  <option value="">— choose —</option>
+                  {giteaInstances.map((i) => (
+                    <option key={i.baseUrl} value={i.baseUrl}>
+                      {i.baseUrl}
+                      {i.hasToken ? "" : " (no token)"}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
               Git URL
             </label>
             <Input
-              placeholder="https://github.com/owner/repo"
+              placeholder={
+                provider === "gitea"
+                  ? "https://git.example.com/owner/repo"
+                  : "https://github.com/owner/repo"
+              }
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               onBlur={onUrlBlur}
@@ -189,7 +255,12 @@ function AddMarketplaceDialog({
           </DialogClose>
           <Button
             onClick={() => upsert.mutate()}
-            disabled={!parsedRepo || !name.trim() || upsert.isPending}
+            disabled={
+              !parsedRepo ||
+              !name.trim() ||
+              (provider === "gitea" && !giteaBaseUrl) ||
+              upsert.isPending
+            }
           >
             {upsert.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
             Add
@@ -410,8 +481,15 @@ function MarketplaceRow({
       const repo = cfg?.githubRepo || mp.sourceRepo;
       const branch = cfg?.defaultBranch || "main";
       const auto = cfg?.autoUpdate ?? null;
-      if (!repo) throw new Error("No GitHub repo configured for this marketplace");
-      return api.installMarketplace(mp.name, repo, branch, auto);
+      if (!repo) throw new Error("No repo configured for this marketplace");
+      return api.installMarketplace(
+        mp.name,
+        repo,
+        branch,
+        auto,
+        cfg?.provider ?? "github",
+        cfg?.baseUrl ?? ""
+      );
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["refresh"] });

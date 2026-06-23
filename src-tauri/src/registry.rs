@@ -1,19 +1,48 @@
 //! Parse `.claude-plugin/marketplace.json` — port of src/registry.py.
 
 use crate::models::{InstallState, Plugin, PluginSource};
-use regex::Regex;
 use serde_json::Value;
 use std::path::Path;
-use std::sync::OnceLock;
 
-fn github_url_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(
-            r"^(?:https?://(?:www\.)?github\.com/|git@github\.com:|github\.com/)(?P<owner>[^/\s]+)/(?P<repo>[^/\s\.]+?)(?:\.git)?(?:/(?:tree|blob|commits?|releases|pulls?|issues|wiki|actions)(?:/[^\s]*)?)?/?(?:\?[^\s]*)?(?:\#[^\s]*)?$",
-        )
-        .unwrap()
-    })
+/// Extract `owner/repo` from a clone/web URL on **any** host (github.com or a
+/// self-hosted Gitea instance like `https://git.almaviacx.local`).
+///
+/// Handles `https://host/owner/repo[.git][/tree/…][?…][#…]` and the SSH form
+/// `git@host:owner/repo[.git]`. Takes the first two path segments as
+/// owner/repo, which is correct for both forges' web and clone URLs.
+pub fn parse_repo_from_url(url: &str) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    // SSH form: git@host:owner/repo(.git)
+    if let Some(rest) = url.strip_prefix("git@") {
+        if let Some((_host, path)) = rest.split_once(':') {
+            return owner_repo_from_path(path);
+        }
+    }
+    let no_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let no_scheme = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
+    // Drop the host; keep the path.
+    let (_host, path) = no_scheme.split_once('/')?;
+    owner_repo_from_path(path)
+}
+
+fn owner_repo_from_path(path: &str) -> Option<String> {
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if segs.len() < 2 {
+        return None;
+    }
+    let owner = segs[0];
+    let repo = segs[1].trim_end_matches(".git");
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
 }
 
 pub fn parse_marketplace_json(text: &str, marketplace_name: &str) -> Vec<Plugin> {
@@ -104,8 +133,8 @@ fn parse_source(raw: Value) -> PluginSource {
         .unwrap_or("")
         .to_string();
     if repo.is_empty() && !url.is_empty() {
-        if let Some(caps) = github_url_re().captures(url.trim()) {
-            repo = format!("{}/{}", &caps["owner"], &caps["repo"]);
+        if let Some(parsed) = parse_repo_from_url(&url) {
+            repo = parsed;
         }
     }
     PluginSource {
@@ -117,13 +146,11 @@ fn parse_source(raw: Value) -> PluginSource {
     }
 }
 
+/// Back-compat alias. Historically GitHub-only; now resolves owner/repo from
+/// any forge host via [`parse_repo_from_url`]. Kept under the old name because
+/// admin/command call sites import it.
 pub fn parse_github_marketplace_url(url: &str) -> Option<String> {
-    if url.is_empty() {
-        return None;
-    }
-    github_url_re()
-        .captures(url.trim())
-        .map(|c| format!("{}/{}", &c["owner"], &c["repo"]))
+    parse_repo_from_url(url)
 }
 
 pub fn read_git_remote_origin(repo_dir: &Path) -> Option<String> {

@@ -10,11 +10,11 @@ use crate::admin_drafts::{
 };
 use crate::app_uninstaller::{self, UninstallInfo};
 use crate::app_updater::{self, AppUpdateInfo};
-use crate::config::{self, LoggingConfig, MarketplaceConfig, Settings, UiPrefs};
+use crate::config::{self, GiteaInstance, LoggingConfig, MarketplaceConfig, Settings, UiPrefs};
 use crate::logger;
 use crate::error::Result;
 use crate::frontmatter::parse_frontmatter;
-use crate::github_client::GitHubClient;
+use crate::github_client::{host_of, GitHubClient, Provider};
 use crate::installer;
 use crate::local_scanner;
 use crate::marketplace_installer;
@@ -32,6 +32,33 @@ use tauri::{AppHandle, Emitter};
 fn gh() -> Result<GitHubClient> {
     let token = config::load_settings().github_token;
     GitHubClient::new(&token)
+}
+
+/// Build a client for a self-hosted Gitea instance: token from the credential
+/// vault (keyed by host), TLS mode from the registered [`GiteaInstance`].
+fn gitea_client(s: &Settings, base_url: &str) -> Result<GitHubClient> {
+    let insecure = s
+        .get_gitea_instance(base_url)
+        .map(|i| i.insecure_tls)
+        .unwrap_or(false);
+    let host = host_of(base_url);
+    let token = token_store::load_host(&host)?.unwrap_or_default();
+    GitHubClient::for_provider(Provider::Gitea, base_url, &token, insecure)
+}
+
+/// Resolve the right client for a marketplace config: Gitea → its instance,
+/// anything else (or absent) → GitHub with the stored PAT.
+fn client_for_cfg(s: &Settings, cfg: Option<&MarketplaceConfig>) -> Result<GitHubClient> {
+    match cfg {
+        Some(c) if c.provider == Provider::Gitea => gitea_client(s, &c.base_url),
+        _ => GitHubClient::new(&s.github_token),
+    }
+}
+
+/// Resolve the client for a marketplace by name (looks up app settings).
+fn client_for_marketplace(name: &str) -> Result<GitHubClient> {
+    let s = config::load_settings();
+    client_for_cfg(&s, s.get_marketplace(name))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,16 +82,13 @@ pub async fn save_app_settings(settings: Settings) -> Result<()> {
 pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
     tracing::info!("refresh_all started");
     let settings = config::load_settings();
-    let gh = GitHubClient::new(&settings.github_token).map_err(|e| {
-        tracing::error!("github client init failed: {}", e);
-        e
-    })?;
 
     // 1) Auto-update marketplaces flagged with `autoUpdate=true`.
     //
-    // Failures here are non-fatal: the local install stays usable even if the
-    // network is down. We surface them via `tracing::warn!` so they show up in
-    // the log file users can attach to a bug report.
+    // Each marketplace gets a client matching its provider (GitHub or its Gitea
+    // instance). Failures here are non-fatal: the local install stays usable
+    // even if the network is down. We surface them via `tracing::warn!` so they
+    // show up in the log file users can attach to a bug report.
     for cfg in &settings.marketplaces {
         if !cfg.github_repo.is_empty() {
             let info = marketplace_installer::get_install_info(&cfg.name);
@@ -78,6 +102,13 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
                 {
                     tracing::debug!("emit refresh-progress failed (ignored): {}", e);
                 }
+                let gh = match client_for_cfg(&settings, Some(cfg)) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("client init failed for {}: {}", cfg.name, e);
+                        continue;
+                    }
+                };
                 let (updated, msg) = marketplace_installer::auto_update_if_changed(
                     &gh,
                     &cfg.name,
@@ -110,6 +141,13 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
         }
         let cfg = settings.get_marketplace(&mp.name);
         let r#ref = cfg.map(|c| c.default_branch.as_str()).unwrap_or("");
+        let gh = match client_for_cfg(&settings, cfg) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("client init failed for {}: {}", mp.name, e);
+                continue;
+            }
+        };
         let remote =
             marketplace_remote::fetch_marketplace_plugins(&gh, &mp.source_repo, r#ref, &mp.name);
         if remote.is_empty() {
@@ -171,7 +209,7 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
 
 #[tauri::command]
 pub async fn install_plugin_cmd(plugin: Plugin) -> Result<PathBuf> {
-    let gh = gh()?;
+    let gh = client_for_marketplace(&plugin.marketplace_name)?;
     let name = plugin.name.clone();
     let mp = plugin.marketplace_name.clone();
     match installer::install_plugin(&gh, &plugin) {
@@ -208,8 +246,18 @@ pub async fn install_marketplace_cmd(
     repo: String,
     r#ref: String,
     auto_update: Option<bool>,
+    provider: Option<Provider>,
+    base_url: Option<String>,
 ) -> Result<PathBuf> {
-    let gh = gh()?;
+    // Build the client from the explicit provider/base_url passed by the
+    // frontend so install doesn't depend on the marketplace config having been
+    // saved first.
+    let provider = provider.unwrap_or(Provider::Github);
+    let base_url = base_url.unwrap_or_default();
+    let gh = match provider {
+        Provider::Gitea => gitea_client(&config::load_settings(), &base_url)?,
+        Provider::Github => gh()?,
+    };
     let label = name.clone();
     let repo_label = repo.clone();
     match marketplace_installer::install_marketplace(&gh, &name, &repo, &r#ref, auto_update) {
@@ -301,9 +349,6 @@ pub struct UpdateCheckResult {
 #[tauri::command]
 pub async fn check_marketplace_updates(only: Option<String>) -> Vec<UpdateCheckResult> {
     let settings = config::load_settings();
-    let Ok(gh) = GitHubClient::new(&settings.github_token) else {
-        return Vec::new();
-    };
     let mut out = Vec::new();
     for cfg in &settings.marketplaces {
         if cfg.github_repo.is_empty() {
@@ -315,6 +360,9 @@ pub async fn check_marketplace_updates(only: Option<String>) -> Vec<UpdateCheckR
         if only.as_deref().is_some_and(|n| n != cfg.name) {
             continue;
         }
+        let Ok(gh) = client_for_cfg(&settings, Some(cfg)) else {
+            continue;
+        };
         let r#ref = if cfg.default_branch.is_empty() {
             "main"
         } else {
@@ -544,6 +592,74 @@ pub async fn github_token_scopes() -> Vec<String> {
     }
 }
 
+// ---------- Gitea instance commands ----------
+
+#[tauri::command]
+pub async fn gitea_auth_check(base_url: String) -> (bool, String) {
+    let s = config::load_settings();
+    match gitea_client(&s, &base_url) {
+        Ok(g) => g.auth_check(),
+        Err(e) => (false, e.to_string()),
+    }
+}
+
+/// Register or update a Gitea instance (host + TLS mode). The token is set
+/// separately via [`settings_set_gitea_token`].
+#[tauri::command]
+pub async fn settings_upsert_gitea_instance(
+    base_url: String,
+    insecure_tls: bool,
+) -> Result<Settings> {
+    let base_url = base_url.trim().to_string();
+    if base_url.is_empty() {
+        return Err(crate::error::Error::Invalid(
+            "Gitea instance URL is required.".into(),
+        ));
+    }
+    let mut s = config::load_settings();
+    let host = host_of(&base_url);
+    match s
+        .gitea_instances
+        .iter_mut()
+        .find(|i| host_of(&i.base_url) == host)
+    {
+        Some(existing) => {
+            existing.base_url = base_url.clone();
+            existing.insecure_tls = insecure_tls;
+        }
+        None => s.gitea_instances.push(GiteaInstance {
+            base_url: base_url.clone(),
+            insecure_tls,
+            has_token: false,
+        }),
+    }
+    config::save_settings(&s)?;
+    tracing::info!("gitea instance upserted: {} (insecureTls={})", base_url, insecure_tls);
+    Ok(config::load_settings())
+}
+
+/// Remove a Gitea instance and clear its stored token.
+#[tauri::command]
+pub async fn settings_remove_gitea_instance(base_url: String) -> Result<Settings> {
+    let host = host_of(&base_url);
+    let mut s = config::load_settings();
+    s.gitea_instances.retain(|i| host_of(&i.base_url) != host);
+    config::save_settings(&s)?;
+    if let Err(e) = token_store::save_host(&host, "") {
+        tracing::warn!("could not clear gitea token for {}: {}", host, e);
+    }
+    tracing::info!("gitea instance removed: {}", base_url);
+    Ok(config::load_settings())
+}
+
+#[tauri::command]
+pub async fn settings_set_gitea_token(base_url: String, token: String) -> Result<Settings> {
+    let host = host_of(&base_url);
+    tracing::info!("gitea token updated for {} (len={})", host, token.len());
+    token_store::save_host(&host, &token)?;
+    Ok(config::load_settings())
+}
+
 // ---------- Admin commands ----------
 
 #[derive(Debug, Deserialize)]
@@ -636,7 +752,16 @@ pub async fn pr_history_clear() -> Result<()> {
 
 #[tauri::command]
 pub async fn pr_history_refresh_status(repo: String, number: i64) -> Result<String> {
-    let gh = gh()?;
+    // Target the forge the PR actually lives on (recorded at creation time).
+    let rec = pr_history::load_all()
+        .into_iter()
+        .find(|r| r.repo == repo && r.number == number);
+    let gh = match rec {
+        Some(r) if r.provider == Provider::Gitea => {
+            gitea_client(&config::load_settings(), &r.base_url)?
+        }
+        _ => gh()?,
+    };
     let pr = gh.get_pull_request(&repo, number)?;
     let status = if pr.get("merged_at").and_then(|v| v.as_str()).is_some() {
         "merged"
@@ -807,7 +932,7 @@ pub async fn admin_prepare_add_plugin(
     marketplace: String,
     source_url: String,
 ) -> Result<AdminDraft> {
-    let gh = gh()?;
+    let gh = client_for_marketplace(&marketplace)?;
     admin_drafts::prepare_add_plugin(&gh, &marketplace, &source_url)
 }
 
@@ -817,7 +942,7 @@ pub async fn admin_prepare_bump_plugin(
     plugin_name: String,
     new_version: String,
 ) -> Result<AdminDraft> {
-    let gh = gh()?;
+    let gh = client_for_marketplace(&marketplace)?;
     admin_drafts::prepare_bump_plugin(&gh, &marketplace, &plugin_name, &new_version)
 }
 
@@ -826,13 +951,13 @@ pub async fn admin_prepare_remove_plugin(
     marketplace: String,
     plugin_name: String,
 ) -> Result<AdminDraft> {
-    let gh = gh()?;
+    let gh = client_for_marketplace(&marketplace)?;
     admin_drafts::prepare_remove_plugin(&gh, &marketplace, &plugin_name)
 }
 
 #[tauri::command]
 pub async fn admin_prepare_upload_skill(args: UploadSkillArgs) -> Result<AdminDraft> {
-    let gh = gh()?;
+    let gh = client_for_marketplace(&args.marketplace)?;
     admin_drafts::prepare_upload_skill(&gh, &args)
 }
 
@@ -842,13 +967,20 @@ pub async fn admin_prepare_delete_skill(
     plugin_name: String,
     skill_name: String,
 ) -> Result<AdminDraft> {
-    let gh = gh()?;
+    let gh = client_for_marketplace(&marketplace)?;
     admin_drafts::prepare_delete_skill(&gh, &marketplace, &plugin_name, &skill_name)
 }
 
 #[tauri::command]
 pub async fn admin_submit_draft(draft: AdminDraft) -> Result<UploadResult> {
-    let gh = gh()?;
+    // Resolve the client from the draft's marketplace so PRs land on the right
+    // forge (the plugin source repo is on the same host as its marketplace).
+    let marketplace = draft
+        .pending_meta
+        .as_ref()
+        .map(|m| m.marketplace_name.clone())
+        .unwrap_or_default();
+    let gh = client_for_marketplace(&marketplace)?;
     let title = draft.pr_title.clone();
     match admin_drafts::submit_draft(&gh, &draft) {
         Ok(r) => Ok(r),
@@ -860,8 +992,11 @@ pub async fn admin_submit_draft(draft: AdminDraft) -> Result<UploadResult> {
 }
 
 #[tauri::command]
-pub async fn admin_create_tag(repo: String, tag: String) -> Result<String> {
-    let gh = gh()?;
+pub async fn admin_create_tag(repo: String, tag: String, marketplace: Option<String>) -> Result<String> {
+    let gh = match marketplace {
+        Some(m) if !m.is_empty() => client_for_marketplace(&m)?,
+        _ => gh()?,
+    };
     admin_drafts::create_tag_if_missing(&gh, &repo, &tag)
 }
 
@@ -875,7 +1010,7 @@ pub async fn admin_list_remote_skills(
     marketplace: String,
     plugin_name: String,
 ) -> Result<Vec<RemoteSkillInfo>> {
-    let gh = gh()?;
+    let gh = client_for_marketplace(&marketplace)?;
     admin_drafts::list_remote_skills(&gh, &marketplace, &plugin_name)
 }
 
