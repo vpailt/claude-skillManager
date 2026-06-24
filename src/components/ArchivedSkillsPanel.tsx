@@ -41,7 +41,7 @@ export function ArchivedSkillsPanel({
             <ChevronRight className="h-3 w-3 text-muted-foreground" />
           )}
           <Archive className="h-4 w-4 text-muted-foreground" />
-          <span className="font-semibold">Archived skills ({items.length})</span>
+          <span className="font-semibold">Skills archivés ({items.length})</span>
         </button>
         {open && (
           <div className="space-y-1">

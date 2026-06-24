@@ -50,7 +50,7 @@ function PRSubmittedToast({
   if (!result) return null;
   return (
     <div className="fixed bottom-4 right-4 z-50 max-w-sm space-y-2 rounded-md border bg-card p-4 shadow-lg">
-      <div className="text-sm font-medium">PR opened</div>
+      <div className="text-sm font-medium">PR ouverte</div>
       <Button
         variant="ghost"
         size="sm"
@@ -119,11 +119,11 @@ export function AddPluginDialog({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add plugin to “{marketplace}”</DialogTitle>
+            <DialogTitle>Ajouter un plugin à « {marketplace} »</DialogTitle>
             <DialogDescription>
-              Paste the Git URL of the plugin's source repository (must contain
-              <code> manifest.json</code> at root). SkillManager fetches name /
-              version / description from there.
+              Colle l'URL Git du repo source du plugin (il doit contenir
+              <code> manifest.json</code> à la racine). SkillManager y récupère le
+              nom / la version / la description.
             </DialogDescription>
           </DialogHeader>
           <Input
@@ -135,7 +135,7 @@ export function AddPluginDialog({
           <ErrorBox error={prepare.error} />
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline">Cancel</Button>
+              <Button variant="outline">Annuler</Button>
             </DialogClose>
             <Button
               onClick={() => prepare.mutate()}
@@ -144,7 +144,7 @@ export function AddPluginDialog({
               {prepare.isPending && (
                 <Loader2 className="mr-1 h-3 w-3 animate-spin" />
               )}
-              Continue
+              Continuer
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -226,21 +226,21 @@ export function BumpPluginDialog({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Bump “{plugin.name}”</DialogTitle>
+            <DialogTitle>Incrémenter « {plugin.name} »</DialogTitle>
             <DialogDescription>
-              Current latest: {plugin.latestVersion || "—"}
+              Dernière version actuelle : {plugin.latestVersion || "—"}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <Input
-              placeholder="New version (e.g. 1.2.3)"
+              placeholder="Nouvelle version (ex. 1.2.3)"
               value={version}
               onChange={(e) => setVersion(e.target.value)}
               autoFocus
             />
             {suggestion.data && (
               <div className="flex flex-wrap gap-2 text-xs">
-                <span className="text-muted-foreground">Quick picks:</span>
+                <span className="text-muted-foreground">Choix rapides :</span>
                 {(["patch", "minor", "major"] as const).map((k) => (
                   <Button
                     key={k}
@@ -260,7 +260,7 @@ export function BumpPluginDialog({
           </div>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline">Cancel</Button>
+              <Button variant="outline">Annuler</Button>
             </DialogClose>
             <Button
               onClick={() => prepare.mutate()}
@@ -269,7 +269,7 @@ export function BumpPluginDialog({
               {prepare.isPending && (
                 <Loader2 className="mr-1 h-3 w-3 animate-spin" />
               )}
-              Continue
+              Continuer
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -335,11 +335,11 @@ export function RemovePluginDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Preparing removal of “{plugin.name}”…</DialogTitle>
+            <DialogTitle>Préparation du retrait de « {plugin.name} »…</DialogTitle>
           </DialogHeader>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Fetching marketplace
-            registry…
+            <Loader2 className="h-4 w-4 animate-spin" /> Récupération du registre
+            de la marketplace…
           </div>
         </DialogContent>
       </Dialog>
@@ -351,12 +351,12 @@ export function RemovePluginDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Remove “{plugin.name}”</DialogTitle>
+            <DialogTitle>Retirer « {plugin.name} »</DialogTitle>
           </DialogHeader>
           <ErrorBox error={prepare.error} />
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline">Close</Button>
+              <Button variant="outline">Fermer</Button>
             </DialogClose>
           </DialogFooter>
         </DialogContent>
@@ -452,7 +452,7 @@ export function UploadSkillDialog({
     const sel = (await openDialog({
       directory: true,
       multiple: false,
-      title: "Pick a local skill folder",
+      title: "Choisir un dossier de skill local",
     })) as string | null;
     if (sel) {
       setLocalFolder(sel);
@@ -478,17 +478,17 @@ export function UploadSkillDialog({
       >
         <DialogContent className="max-w-xl">
           <DialogHeader>
-            <DialogTitle>Upload skill to “{plugin.name}”</DialogTitle>
+            <DialogTitle>Téléverser un skill vers « {plugin.name} »</DialogTitle>
             <DialogDescription>
-              Pick a folder under <code>~/.claude/skills/</code>, or pick any
-              local folder. SKILL.md frontmatter is validated before the PR is
-              opened.
+              Choisis un dossier sous <code>~/.claude/skills/</code>, ou n'importe
+              quel dossier local. Le frontmatter du SKILL.md est validé avant
+              l'ouverture de la PR.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 text-sm">
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">
-                Local folder
+                Dossier local
               </label>
               <div className="flex gap-2">
                 <Input
@@ -497,13 +497,13 @@ export function UploadSkillDialog({
                   onChange={(e) => setLocalFolder(e.target.value)}
                 />
                 <Button variant="outline" onClick={pickFolder}>
-                  Browse
+                  Parcourir
                 </Button>
               </div>
               {localSkills.data && localSkills.data.length > 0 && (
                 <div className="mt-2 space-y-1">
                   <div className="text-xs text-muted-foreground">
-                    From <code>~/.claude/skills/</code>:
+                    Depuis <code>~/.claude/skills/</code> :
                   </div>
                   <div className="flex flex-wrap gap-1">
                     {localSkills.data.map((s) => (
@@ -532,20 +532,20 @@ export function UploadSkillDialog({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="mb-1 block text-xs text-muted-foreground">
-                  Skill name in repo
+                  Nom du skill dans le repo
                 </label>
                 <Input
-                  placeholder="(defaults to folder name)"
+                  placeholder="(par défaut le nom du dossier)"
                   value={targetName}
                   onChange={(e) => setTargetName(e.target.value)}
                 />
               </div>
               <div>
                 <label className="mb-1 block text-xs text-muted-foreground">
-                  Skill version (optional)
+                  Version du skill (optionnel)
                 </label>
                 <Input
-                  placeholder="e.g. 1.7.6"
+                  placeholder="ex. 1.7.6"
                   value={newVersion}
                   onChange={(e) => setNewVersion(e.target.value)}
                 />
@@ -554,7 +554,7 @@ export function UploadSkillDialog({
 
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">
-                Plugin version bump
+                Incrément de version du plugin
               </label>
               <div className="flex gap-1">
                 {(["patch", "minor", "major"] as const).map((lvl) => (
@@ -571,17 +571,18 @@ export function UploadSkillDialog({
                 ))}
               </div>
               <p className="mt-1 text-[11px] text-muted-foreground">
-                The plugin version always bumps when a skill is uploaded — pick
-                how. Independent from the skill version above.
+                La version du plugin est toujours incrémentée lors du
+                téléversement d'un skill — choisis comment. Indépendant de la
+                version du skill ci-dessus.
               </p>
             </div>
 
             <label className="flex cursor-pointer items-center gap-2">
               <Switch checked={alsoBump} onCheckedChange={setAlsoBump} />
               <span>
-                Also open companion PR bumping{" "}
-                <code className="text-xs">{plugin.name}</code> in the
-                marketplace registry
+                Ouvrir aussi une PR compagnon incrémentant{" "}
+                <code className="text-xs">{plugin.name}</code> dans le registre
+                de la marketplace
               </span>
             </label>
 
@@ -589,7 +590,7 @@ export function UploadSkillDialog({
           </div>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline">Cancel</Button>
+              <Button variant="outline">Annuler</Button>
             </DialogClose>
             <Button
               onClick={() => prepare.mutate()}
@@ -598,7 +599,7 @@ export function UploadSkillDialog({
               {prepare.isPending && (
                 <Loader2 className="mr-1 h-3 w-3 animate-spin" />
               )}
-              Continue
+              Continuer
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -667,10 +668,10 @@ export function DeleteSkillDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Preparing deletion of “{skillName}”…</DialogTitle>
+            <DialogTitle>Préparation de la suppression de « {skillName} »…</DialogTitle>
           </DialogHeader>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Listing remote files…
+            <Loader2 className="h-4 w-4 animate-spin" /> Listage des fichiers distants…
           </div>
         </DialogContent>
       </Dialog>
@@ -682,12 +683,12 @@ export function DeleteSkillDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete skill “{skillName}”</DialogTitle>
+            <DialogTitle>Supprimer le skill « {skillName} »</DialogTitle>
           </DialogHeader>
           <ErrorBox error={prepare.error} />
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline">Close</Button>
+              <Button variant="outline">Fermer</Button>
             </DialogClose>
           </DialogFooter>
         </DialogContent>
@@ -841,10 +842,10 @@ export function PluginActionsRow({
         onClick={() =>
           onLaunch({ kind: "uploadSkill", marketplace, plugin })
         }
-        title="Upload a skill folder to this plugin"
+        title="Téléverser un dossier de skill vers ce plugin"
       >
         <Upload className="mr-1 h-3 w-3" />
-        Upload skill
+        Téléverser un skill
       </Button>
       <Button
         size="sm"
@@ -852,7 +853,7 @@ export function PluginActionsRow({
         onClick={() => onLaunch({ kind: "bumpPlugin", marketplace, plugin })}
       >
         <ArrowUpCircle className="mr-1 h-3 w-3" />
-        Bump
+        Incrémenter
       </Button>
       <Button
         size="sm"
@@ -861,7 +862,7 @@ export function PluginActionsRow({
         className="text-destructive"
       >
         <Trash className="mr-1 h-3 w-3" />
-        Remove from marketplace
+        Retirer de la marketplace
       </Button>
     </div>
   );
@@ -880,7 +881,7 @@ export function AddPluginButton({
       onClick={() => onLaunch({ kind: "addPlugin", marketplace })}
     >
       <Plus className="mr-1 h-3 w-3" />
-      Add plugin
+      Ajouter un plugin
     </Button>
   );
 }

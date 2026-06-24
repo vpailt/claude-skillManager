@@ -49,19 +49,19 @@ function pluginsOutdated(mp: Marketplace) {
 }
 
 function freshness(mp: Marketplace): { text: string; tone: "muted" | "ok" | "warn" } {
-  if (!mp.installed) return { text: "not installed", tone: "muted" };
+  if (!mp.installed) return { text: "non installé", tone: "muted" };
   const out = pluginsOutdated(mp);
-  if (out > 0) return { text: `⚠ ${out} outdated`, tone: "warn" };
-  if (pluginsInstalled(mp) === 0) return { text: "nothing installed", tone: "muted" };
-  return { text: "up to date", tone: "ok" };
+  if (out > 0) return { text: `⚠ ${out} obsolète(s)`, tone: "warn" };
+  if (pluginsInstalled(mp) === 0) return { text: "rien d'installé", tone: "muted" };
+  return { text: "à jour", tone: "ok" };
 }
 
 const STATE_LABEL: Record<InstallState, string> = {
-  not_installed: "not installed",
-  installed: "up to date",
-  outdated: "outdated",
-  local_only: "local only",
-  unknown: "unknown",
+  not_installed: "non installé",
+  installed: "à jour",
+  outdated: "obsolète",
+  local_only: "local uniquement",
+  unknown: "inconnu",
 };
 
 function stateVariant(s: InstallState) {
@@ -113,7 +113,7 @@ function AddMarketplaceDialog({
     }
     const repo = await api.parseMarketplaceUrl(url.trim());
     if (!repo) {
-      setError(`Cannot parse owner/repo from: ${url}`);
+      setError(`Impossible d'extraire owner/repo depuis : ${url}`);
       setParsedRepo(null);
       return;
     }
@@ -123,10 +123,10 @@ function AddMarketplaceDialog({
 
   const upsert = useMutation({
     mutationFn: async () => {
-      if (!parsedRepo) throw new Error("URL is invalid");
-      if (!name.trim()) throw new Error("Marketplace name is required");
+      if (!parsedRepo) throw new Error("L'URL est invalide");
+      if (!name.trim()) throw new Error("Le nom du marketplace est requis");
       if (provider === "gitea" && !giteaBaseUrl) {
-        throw new Error("Pick a Gitea instance (add one in Settings first)");
+        throw new Error("Choisis une instance Gitea (ajoutes-en une dans Paramètres d'abord)");
       }
       return api.settingsUpsertMarketplace({
         name: name.trim(),
@@ -158,16 +158,16 @@ function AddMarketplaceDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Add marketplace from Git URL</DialogTitle>
+          <DialogTitle>Ajouter un marketplace depuis une URL Git</DialogTitle>
           <DialogDescription>
-            Pulls the marketplace registry (<code>.claude-plugin/marketplace.json</code>) and
-            registers it in this app's settings. Use “Install” afterwards to download it locally.
+            Récupère le registre du marketplace (<code>.claude-plugin/marketplace.json</code>) et
+            l'enregistre dans les paramètres de l'app. Utilise « Installer » ensuite pour le télécharger localement.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">
-              Provider
+              Fournisseur
             </label>
             <div className="flex gap-1">
               {(["github", "gitea"] as const).map((p) => (
@@ -187,12 +187,12 @@ function AddMarketplaceDialog({
           {provider === "gitea" && (
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">
-                Gitea instance
+                Instance Gitea
               </label>
               {giteaInstances.length === 0 ? (
                 <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-amber-600 dark:text-amber-400">
-                  No Gitea instance registered yet. Add one (URL + token) in{" "}
-                  <strong>Settings → Gitea instances</strong> first.
+                  Aucune instance Gitea enregistrée pour le moment. Ajoutes-en une (URL + token) dans{" "}
+                  <strong>Paramètres → Instances Gitea</strong> d'abord.
                 </div>
               ) : (
                 <select
@@ -200,11 +200,11 @@ function AddMarketplaceDialog({
                   value={giteaBaseUrl}
                   onChange={(e) => setGiteaBaseUrl(e.target.value)}
                 >
-                  <option value="">— choose —</option>
+                  <option value="">— choisir —</option>
                   {giteaInstances.map((i) => (
                     <option key={i.baseUrl} value={i.baseUrl}>
                       {i.baseUrl}
-                      {i.hasToken ? "" : " (no token)"}
+                      {i.hasToken ? "" : " (sans token)"}
                     </option>
                   ))}
                 </select>
@@ -214,7 +214,7 @@ function AddMarketplaceDialog({
 
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">
-              Git URL
+              URL Git
             </label>
             <Input
               placeholder={
@@ -229,16 +229,16 @@ function AddMarketplaceDialog({
             />
             {parsedRepo && (
               <div className="mt-1 text-xs text-muted-foreground">
-                Parsed: <code>{parsedRepo}</code>
+                Extrait : <code>{parsedRepo}</code>
               </div>
             )}
           </div>
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">
-              Marketplace name
+              Nom du marketplace
             </label>
             <Input
-              placeholder="(defaults to repo name)"
+              placeholder="(par défaut : nom du repo)"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
@@ -251,7 +251,7 @@ function AddMarketplaceDialog({
         </div>
         <DialogFooter>
           <DialogClose asChild>
-            <Button variant="outline">Cancel</Button>
+            <Button variant="outline">Annuler</Button>
           </DialogClose>
           <Button
             onClick={() => upsert.mutate()}
@@ -263,7 +263,7 @@ function AddMarketplaceDialog({
             }
           >
             {upsert.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-            Add
+            Ajouter
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -310,16 +310,16 @@ function UninstallMarketplaceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Uninstall marketplace “{marketplace ?? ""}”</DialogTitle>
+          <DialogTitle>Désinstaller le marketplace « {marketplace ?? ""} »</DialogTitle>
           <DialogDescription>
-            Removes the entry from <code>known_marketplaces.json</code> and deletes the
-            folder under <code>~/.claude/plugins/marketplaces/{marketplace ?? ""}/</code>.
-            Plugin install records are not touched.
+            Retire l'entrée de <code>known_marketplaces.json</code> et supprime le
+            dossier sous <code>~/.claude/plugins/marketplaces/{marketplace ?? ""}/</code>.
+            Les enregistrements d'installation des plugins ne sont pas modifiés.
           </DialogDescription>
         </DialogHeader>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
           <Switch checked={alsoForget} onCheckedChange={setAlsoForget} />
-          Also remove from this app's marketplace list
+          Retirer aussi de la liste des marketplaces de l'app
         </label>
         {error && (
           <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
@@ -328,7 +328,7 @@ function UninstallMarketplaceDialog({
         )}
         <DialogFooter>
           <DialogClose asChild>
-            <Button variant="outline">Cancel</Button>
+            <Button variant="outline">Annuler</Button>
           </DialogClose>
           <Button
             variant="destructive"
@@ -336,7 +336,7 @@ function UninstallMarketplaceDialog({
             disabled={mutation.isPending}
           >
             {mutation.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-            Uninstall
+            Désinstaller
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -398,29 +398,30 @@ function DeleteMarketplaceDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Delete marketplace “{marketplace ?? ""}”</DialogTitle>
+          <DialogTitle>Supprimer le marketplace « {marketplace ?? ""} »</DialogTitle>
           <DialogDescription>
             {installed ? (
               <>
-                Removes the entry from <code>known_marketplaces.json</code>, deletes
-                the folder under{" "}
+                Retire l'entrée de <code>known_marketplaces.json</code>, supprime
+                le dossier sous{" "}
                 <code>~/.claude/plugins/marketplaces/{marketplace ?? ""}/</code>,
                 {installedPluginCount > 0 ? (
                   <>
-                    {" "}uninstalls{" "}
+                    {" "}désinstalle{" "}
                     <strong>
-                      {installedPluginCount} installed plugin
+                      {installedPluginCount} plugin
+                      {installedPluginCount > 1 ? "s" : ""} installé
                       {installedPluginCount > 1 ? "s" : ""}
                     </strong>{" "}
-                    from it,
+                    de celui-ci,
                   </>
                 ) : null}{" "}
-                and forgets it from this app's settings.
+                et l'oublie des paramètres de l'app.
               </>
             ) : (
               <>
-                Removes this marketplace from this app's settings. No local files
-                are touched (nothing was installed for it).
+                Retire ce marketplace des paramètres de l'app. Aucun fichier local
+                n'est touché (rien n'avait été installé pour lui).
               </>
             )}
           </DialogDescription>
@@ -432,7 +433,7 @@ function DeleteMarketplaceDialog({
         )}
         <DialogFooter>
           <DialogClose asChild>
-            <Button variant="outline">Cancel</Button>
+            <Button variant="outline">Annuler</Button>
           </DialogClose>
           <Button
             variant="destructive"
@@ -440,7 +441,7 @@ function DeleteMarketplaceDialog({
             disabled={mutation.isPending}
           >
             {mutation.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-            Delete
+            Supprimer
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -455,6 +456,7 @@ function DeleteMarketplaceDialog({
 function MarketplaceRow({
   mp,
   cfgAutoUpdate,
+  cfgTrackPrs,
   selected,
   onSelect,
   onUninstallRequest,
@@ -464,6 +466,7 @@ function MarketplaceRow({
 }: {
   mp: Marketplace;
   cfgAutoUpdate: boolean;
+  cfgTrackPrs: boolean;
   selected: boolean;
   onSelect: () => void;
   onUninstallRequest: () => void;
@@ -481,7 +484,7 @@ function MarketplaceRow({
       const repo = cfg?.githubRepo || mp.sourceRepo;
       const branch = cfg?.defaultBranch || "main";
       const auto = cfg?.autoUpdate ?? null;
-      if (!repo) throw new Error("No repo configured for this marketplace");
+      if (!repo) throw new Error("Aucun repo configuré pour ce marketplace");
       return api.installMarketplace(
         mp.name,
         repo,
@@ -495,7 +498,7 @@ function MarketplaceRow({
       qc.invalidateQueries({ queryKey: ["refresh"] });
       notify({
         kind: "success",
-        title: "Marketplace installed",
+        title: "Marketplace installé",
         body: mp.name,
       });
     },
@@ -506,7 +509,7 @@ function MarketplaceRow({
     onError: (e) =>
       notify({
         kind: "error",
-        title: `Install failed: ${mp.name}`,
+        title: `Échec de l'installation : ${mp.name}`,
         body: errMsg(e),
       }),
   });
@@ -528,7 +531,26 @@ function MarketplaceRow({
     onError: (e) =>
       notify({
         kind: "error",
-        title: `Auto-update toggle failed: ${mp.name}`,
+        title: `Échec du basculement de la mise à jour auto : ${mp.name}`,
+        body: errMsg(e),
+      }),
+  });
+  const toggleTrack = useMutation({
+    mutationFn: async (next: boolean) => {
+      const settings = await api.loadAppSettings();
+      const cfg = settings.marketplaces.find((m) => m.name === mp.name);
+      if (cfg) {
+        await api.settingsUpsertMarketplace({ ...cfg, trackPrs: next });
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      qc.invalidateQueries({ queryKey: ["tracked-prs"] });
+    },
+    onError: (e) =>
+      notify({
+        kind: "error",
+        title: `Échec du basculement du suivi des PR : ${mp.name}`,
         body: errMsg(e),
       }),
   });
@@ -547,9 +569,9 @@ function MarketplaceRow({
       <td className="px-3 py-2 font-medium">{mp.name}</td>
       <td className="px-3 py-2 text-xs">
         {mp.installed ? (
-          <Badge variant="success">installed</Badge>
+          <Badge variant="success">installé</Badge>
         ) : (
-          <Badge variant="outline">not installed</Badge>
+          <Badge variant="outline">non installé</Badge>
         )}
       </td>
       <td className="px-3 py-2 text-xs">
@@ -566,27 +588,42 @@ function MarketplaceRow({
           <Loader2 className="ml-1 inline h-3 w-3 animate-spin text-muted-foreground" />
         )}
         {status === "updated" && (
-          <span className="ml-1 text-xs text-emerald-500">· updated</span>
+          <span className="ml-1 text-xs text-emerald-500">· mis à jour</span>
         )}
         {status === "ok" && (
-          <span className="ml-1 text-xs text-muted-foreground">· checked</span>
+          <span className="ml-1 text-xs text-muted-foreground">· vérifié</span>
         )}
         {status === "error" && (
-          <span className="ml-1 text-xs text-destructive">· failed</span>
+          <span className="ml-1 text-xs text-destructive">· échec</span>
         )}
       </td>
       <td className="px-3 py-2 text-xs text-muted-foreground">
         {mp.sourceRepo || mp.sourcePath || "—"}
       </td>
       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2" title="Auto-update on every refresh if the remote SHA changed">
+        <div className="flex items-center gap-2" title="Mettre à jour auto à chaque rafraîchissement si le SHA distant a changé">
           <Switch
             checked={cfgAutoUpdate}
             onCheckedChange={(v) => toggleAuto.mutate(v)}
             disabled={!mp.sourceRepo || toggleAuto.isPending}
           />
           <span className="text-[11px] text-muted-foreground">
-            {cfgAutoUpdate ? "on" : "off"}
+            {cfgAutoUpdate ? "activé" : "désactivé"}
+          </span>
+        </div>
+      </td>
+      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="flex items-center gap-2"
+          title="Suivre les PR ouvertes de ce marketplace et de ses plugins (onglet Suivi Marketplace + Dashboard)"
+        >
+          <Switch
+            checked={cfgTrackPrs}
+            onCheckedChange={(v) => toggleTrack.mutate(v)}
+            disabled={!mp.sourceRepo || toggleTrack.isPending}
+          />
+          <span className="text-[11px] text-muted-foreground">
+            {cfgTrackPrs ? "activé" : "désactivé"}
           </span>
         </div>
       </td>
@@ -601,18 +638,18 @@ function MarketplaceRow({
                 onClick={onUninstallRequest}
               >
                 <Trash2 className="mr-1 h-3 w-3" />
-                Uninstall
+                Désinstaller
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
                 className="h-7 px-2 text-xs"
                 onClick={onCheckOne}
-                title="Re-pull this marketplace if its remote SHA changed"
+                title="Re-télécharger ce marketplace si son SHA distant a changé"
                 disabled={status === "checking"}
               >
                 <RefreshCw className="mr-1 h-3 w-3" />
-                Check
+                Vérifier
               </Button>
             </>
           ) : (
@@ -628,7 +665,7 @@ function MarketplaceRow({
               ) : (
                 <Download className="mr-1 h-3 w-3" />
               )}
-              Install
+              Installer
             </Button>
           )}
           {out > 0 && (
@@ -643,8 +680,8 @@ function MarketplaceRow({
             onClick={onDeleteRequest}
             title={
               mp.installed
-                ? "Delete this marketplace (uninstall local files and forget from settings)"
-                : "Delete this marketplace from the app's settings"
+                ? "Supprimer ce marketplace (désinstaller les fichiers locaux et l'oublier des paramètres)"
+                : "Supprimer ce marketplace des paramètres de l'app"
             }
           >
             <Trash2 className="h-3 w-3" />
@@ -676,12 +713,12 @@ function PluginsTable({
     mutationFn: (p: Plugin) => api.installPlugin(p),
     onSuccess: (_, p) => {
       qc.invalidateQueries({ queryKey: ["refresh"] });
-      notify({ kind: "success", title: "Plugin updated", body: p.name });
+      notify({ kind: "success", title: "Plugin mis à jour", body: p.name });
     },
     onError: (e, p) =>
       notify({
         kind: "error",
-        title: `Update failed: ${p.name}`,
+        title: `Échec de la mise à jour : ${p.name}`,
         body: errMsg(e),
       }),
   });
@@ -695,14 +732,14 @@ function PluginsTable({
   if (!marketplace) {
     return (
       <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-        Pick a marketplace above to see its plugins.
+        Choisis un marketplace ci-dessus pour voir ses plugins.
       </div>
     );
   }
   if (plugins.length === 0) {
     return (
       <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-        No plugins {filter.trim() && `matching “${filter}” `}in this marketplace.
+        Aucun plugin {filter.trim() && `correspondant à « ${filter} » `}dans ce marketplace.
       </div>
     );
   }
@@ -719,16 +756,16 @@ function PluginsTable({
             <th className="w-8 px-2 py-2">
               <input
                 type="checkbox"
-                aria-label="Toggle all"
+                aria-label="Tout sélectionner"
                 checked={checked.size === plugins.length && plugins.length > 0}
                 onChange={(e) => toggleAll(e.target.checked)}
               />
             </th>
             <th className="px-3 py-2 text-left">Plugin</th>
-            <th className="px-3 py-2 text-left">Installed</th>
-            <th className="px-3 py-2 text-left">Latest</th>
-            <th className="px-3 py-2 text-left">State</th>
-            <th className="px-3 py-2 text-left">Enabled</th>
+            <th className="px-3 py-2 text-left">Installé</th>
+            <th className="px-3 py-2 text-left">Dernière</th>
+            <th className="px-3 py-2 text-left">État</th>
+            <th className="px-3 py-2 text-left">Activé</th>
             <th className="px-3 py-2 text-left">Description</th>
             <th className="px-3 py-2 text-left">Actions</th>
           </tr>
@@ -758,9 +795,9 @@ function PluginsTable({
               </td>
               <td className="px-3 py-2 text-xs">
                 {p.enabled === true ? (
-                  <span className="text-emerald-500">enabled</span>
+                  <span className="text-emerald-500">activé</span>
                 ) : p.enabled === false ? (
-                  <span className="text-muted-foreground">disabled</span>
+                  <span className="text-muted-foreground">désactivé</span>
                 ) : (
                   <span className="text-muted-foreground">—</span>
                 )}
@@ -778,7 +815,7 @@ function PluginsTable({
                     disabled={updateOne.isPending}
                   >
                     <RefreshCw className="mr-1 h-3 w-3" />
-                    Update
+                    Mettre à jour
                   </Button>
                 )}
               </td>
@@ -868,19 +905,19 @@ export function AdminLocalPanel() {
       qc.invalidateQueries({ queryKey: ["refresh"] });
       if (updatedNames.length > 0) {
         setBottomMsg({
-          text: `Updated ${updatedNames.length} marketplace(s): ${updatedNames.join(", ")}`,
+          text: `${updatedNames.length} marketplace(s) mis à jour : ${updatedNames.join(", ")}`,
           ok: true,
         });
       } else if (errors.length > 0) {
         setBottomMsg({
-          text: `${errors.length} check error(s): ${errors.slice(0, 3).join("; ")}`,
+          text: `${errors.length} erreur(s) de vérification : ${errors.slice(0, 3).join("; ")}`,
           ok: false,
         });
       } else if (results.length > 0) {
-        setBottomMsg({ text: "All checked marketplaces are up to date.", ok: true });
+        setBottomMsg({ text: "Tous les marketplaces vérifiés sont à jour.", ok: true });
       } else {
         setBottomMsg({
-          text: "No installed marketplace with a GitHub repo to check.",
+          text: "Aucun marketplace installé avec un repo GitHub à vérifier.",
           ok: true,
         });
       }
@@ -894,7 +931,7 @@ export function AdminLocalPanel() {
 
   const setEnabledBatch = useMutation({
     mutationFn: async (value: boolean) => {
-      if (!selected) throw new Error("Pick a marketplace");
+      if (!selected) throw new Error("Choisis un marketplace");
       const failures: string[] = [];
       for (const name of checked) {
         try {
@@ -906,10 +943,10 @@ export function AdminLocalPanel() {
       return { count: checked.size, failures, value };
     },
     onSuccess: ({ count, failures, value }) => {
-      const verb = value ? "enabled" : "disabled";
+      const verb = value ? "activé(s)" : "désactivé(s)";
       if (failures.length > 0) {
         setBottomMsg({
-          text: `${count - failures.length}/${count} ${verb}; ${failures.slice(0, 3).join("; ")}`,
+          text: `${count - failures.length}/${count} ${verb} ; ${failures.slice(0, 3).join("; ")}`,
           ok: false,
         });
       } else {
@@ -925,7 +962,7 @@ export function AdminLocalPanel() {
 
   const updateOutdated = useMutation({
     mutationFn: async () => {
-      if (!selected) throw new Error("Pick a marketplace");
+      if (!selected) throw new Error("Choisis un marketplace");
       const targets = selected.plugins.filter(
         (p) => p.installState === "outdated" && p.source && (p.source.repo || p.source.path)
       );
@@ -942,17 +979,17 @@ export function AdminLocalPanel() {
     onSuccess: ({ count, failures }) => {
       if (count === 0) {
         setBottomMsg({
-          text: `No outdated plugins in '${selected?.name ?? ""}'.`,
+          text: `Aucun plugin obsolète dans '${selected?.name ?? ""}'.`,
           ok: true,
         });
       } else if (failures.length > 0) {
         setBottomMsg({
-          text: `${count - failures.length}/${count} updated; ${failures.slice(0, 3).join("; ")}`,
+          text: `${count - failures.length}/${count} mis à jour ; ${failures.slice(0, 3).join("; ")}`,
           ok: false,
         });
       } else {
         setBottomMsg({
-          text: `Updated ${count} plugin(s) in '${selected?.name ?? ""}'.`,
+          text: `${count} plugin(s) mis à jour dans '${selected?.name ?? ""}'.`,
           ok: true,
         });
       }
@@ -971,8 +1008,8 @@ export function AdminLocalPanel() {
   return (
     <div className="space-y-4">
       <p className="text-xs text-muted-foreground">
-        Manage marketplaces and plugins installed locally under{" "}
-        <code>~/.claude/plugins/</code>. No pull requests are opened from this tab.
+        Gère les marketplaces et plugins installés localement sous{" "}
+        <code>~/.claude/plugins/</code>. Aucune pull request n'est ouverte depuis cet onglet.
       </p>
 
       {/* Marketplaces section */}
@@ -987,7 +1024,7 @@ export function AdminLocalPanel() {
                 onClick={() => setAddOpen(true)}
               >
                 <Plus className="mr-1 h-3 w-3" />
-                Add from URL
+                Ajouter depuis URL
               </Button>
               <Button
                 size="sm"
@@ -1000,7 +1037,7 @@ export function AdminLocalPanel() {
                 ) : (
                   <RefreshCw className="mr-1 h-3 w-3" />
                 )}
-                Check updates
+                Vérifier les mises à jour
               </Button>
             </div>
           </div>
@@ -1008,7 +1045,7 @@ export function AdminLocalPanel() {
             <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="pl-7"
-              placeholder="Filter marketplaces…"
+              placeholder="Filtrer les marketplaces…"
               value={mpFilter}
               onChange={(e) => setMpFilter(e.target.value)}
             />
@@ -1018,11 +1055,12 @@ export function AdminLocalPanel() {
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-xs text-muted-foreground">
                 <tr className="border-b">
-                  <th className="px-3 py-2 text-left">Name</th>
-                  <th className="px-3 py-2 text-left">Install</th>
-                  <th className="px-3 py-2 text-left">Freshness</th>
-                  <th className="px-3 py-2 text-left">Source repo</th>
-                  <th className="px-3 py-2 text-left">Auto-update</th>
+                  <th className="px-3 py-2 text-left">Nom</th>
+                  <th className="px-3 py-2 text-left">Installation</th>
+                  <th className="px-3 py-2 text-left">Fraîcheur</th>
+                  <th className="px-3 py-2 text-left">Repo source</th>
+                  <th className="px-3 py-2 text-left">Mise à jour auto</th>
+                  <th className="px-3 py-2 text-left">Suivi PR</th>
                   <th className="px-3 py-2 text-left">Actions</th>
                 </tr>
               </thead>
@@ -1035,6 +1073,11 @@ export function AdminLocalPanel() {
                       settingsQuery.data?.marketplaces.find(
                         (m) => m.name === mp.name
                       )?.autoUpdate ?? false
+                    }
+                    cfgTrackPrs={
+                      settingsQuery.data?.marketplaces.find(
+                        (m) => m.name === mp.name
+                      )?.trackPrs ?? false
                     }
                     selected={selected?.name === mp.name}
                     onSelect={() => onSelect(mp.name)}
@@ -1053,10 +1096,10 @@ export function AdminLocalPanel() {
                 {filteredMps.length === 0 && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={7}
                       className="px-3 py-6 text-center text-xs text-muted-foreground"
                     >
-                      No marketplaces. Click <em>Add from URL</em>.
+                      Aucun marketplace. Clique sur <em>Ajouter depuis URL</em>.
                     </td>
                   </tr>
                 )}
@@ -1071,8 +1114,8 @@ export function AdminLocalPanel() {
         <CardContent className="space-y-3 p-4">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">
-              Plugins of{" "}
-              <span className="text-primary">{selected?.name || "(none)"}</span>
+              Plugins de{" "}
+              <span className="text-primary">{selected?.name || "(aucun)"}</span>
             </h3>
             <div className="flex items-center gap-2">
               <Button
@@ -1082,7 +1125,7 @@ export function AdminLocalPanel() {
                 disabled={checked.size === 0 || setEnabledBatch.isPending}
               >
                 <Check className="mr-1 h-3 w-3" />
-                Enable selected
+                Activer la sélection
               </Button>
               <Button
                 size="sm"
@@ -1091,7 +1134,7 @@ export function AdminLocalPanel() {
                 disabled={checked.size === 0 || setEnabledBatch.isPending}
               >
                 <Eye className="mr-1 h-3 w-3" />
-                Disable selected
+                Désactiver la sélection
               </Button>
               <Button
                 size="sm"
@@ -1104,7 +1147,7 @@ export function AdminLocalPanel() {
                 ) : (
                   <RefreshCw className="mr-1 h-3 w-3" />
                 )}
-                Update outdated
+                Mettre à jour les obsolètes
               </Button>
             </div>
           </div>
@@ -1112,7 +1155,7 @@ export function AdminLocalPanel() {
             <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="pl-7"
-              placeholder="Filter plugins…"
+              placeholder="Filtrer les plugins…"
               value={pluginFilter}
               onChange={(e) => setPluginFilter(e.target.value)}
             />

@@ -36,29 +36,29 @@ const NAV: NavItem[] = [
   {
     to: "/",
     label: "Dashboard",
-    subtitle: "Overview & status",
-    tooltip: "Dashboard — global snapshot, recent updates, plugin status",
+    subtitle: "Aperçu & état",
+    tooltip: "Dashboard — vue d'ensemble globale, mises à jour récentes, état des plugins",
     icon: LayoutDashboard,
   },
   {
     to: "/plugins",
     label: "Plugins",
-    subtitle: "Install & enable",
-    tooltip: "Plugins — install, update, enable/disable, uninstall",
+    subtitle: "Installer & activer",
+    tooltip: "Plugins — installer, mettre à jour, activer/désactiver, désinstaller",
     icon: Package,
   },
   {
     to: "/skills",
     label: "Skills",
-    subtitle: "Browse & read",
-    tooltip: "Skills — browse SKILL.md content, manage duplicates & archived",
+    subtitle: "Parcourir & lire",
+    tooltip: "Skills — parcourir le contenu SKILL.md, gérer les doublons & archivés",
     icon: Sparkles,
   },
   {
     to: "/admin",
     label: "Administration",
-    subtitle: "PRs to marketplaces",
-    tooltip: "Administration — propose changes to marketplaces via GitHub pull requests",
+    subtitle: "PR vers les marketplaces",
+    tooltip: "Administration — proposer des changements aux marketplaces via des pull requests GitHub",
     icon: ShieldCheck,
   },
 ];
@@ -66,9 +66,9 @@ const NAV: NavItem[] = [
 const THEME_CYCLE = ["light", "dark", "auto"] as const;
 
 const THEME_TOOLTIP: Record<(typeof THEME_CYCLE)[number], string> = {
-  light: "Theme: light — click for dark",
-  dark: "Theme: dark — click for auto",
-  auto: "Theme: auto (follow OS) — click for light",
+  light: "Thème : clair — clic pour sombre",
+  dark: "Thème : sombre — clic pour auto",
+  auto: "Thème : auto (suit l'OS) — clic pour clair",
 };
 
 export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
@@ -94,6 +94,11 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const auth = useQuery({
     queryKey: ["github-auth"],
     queryFn: api.githubAuthCheck,
+    staleTime: 60_000,
+  });
+  const gitea = useQuery({
+    queryKey: ["gitea-status"],
+    queryFn: api.giteaStatusAll,
     staleTime: 60_000,
   });
 
@@ -128,7 +133,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
       >
         <button
           type="button"
-          title="Open command palette (Ctrl+K) — jump to anything"
+          title="Ouvrir la palette de commandes (Ctrl+K) — accède à tout"
           onClick={onOpenPalette}
           className={cn(
             "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
@@ -138,7 +143,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           <Search className="h-4 w-4 shrink-0" />
           {!collapsed && (
             <>
-              <span>Search</span>
+              <span>Rechercher</span>
               <kbd className="ml-auto rounded border px-1 text-[10px]">⌃K</kbd>
             </>
           )}
@@ -147,8 +152,8 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           type="button"
           title={
             isRefreshing
-              ? "Refreshing…"
-              : "Refresh — re-scan local install and GitHub (rate-limited)"
+              ? "Rafraîchissement…"
+              : "Rafraîchir — re-scanne l'installation locale et GitHub (quota limité)"
           }
           onClick={() => qc.invalidateQueries({ queryKey: ["refresh"] })}
           className={cn(
@@ -159,7 +164,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           <RefreshCw
             className={cn("h-4 w-4 shrink-0", isRefreshing && "animate-spin")}
           />
-          {!collapsed && <span>Refresh</span>}
+          {!collapsed && <span>Rafraîchir</span>}
         </button>
       </div>
 
@@ -168,7 +173,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
       {/* Navigation */}
       {!collapsed && (
         <div className="px-4 pt-3 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
-          Navigate
+          Naviguer
         </div>
       )}
       <nav className={cn("flex-1 space-y-0.5 py-2", collapsed ? "px-2" : "px-2")}>
@@ -201,27 +206,44 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
         ))}
       </nav>
 
-      {/* GitHub status (only when expanded) */}
-      {!collapsed && (auth.data || rate.data) && (
-        <>
-          <Separator />
-          <div className="space-y-1 px-3 py-2 text-[11px] text-muted-foreground">
-            {auth.data && (
-              <div
-                className="truncate"
-                title={auth.data[0] ? `Authenticated as @${auth.data[1]}` : "No GitHub token configured (Settings)"}
-              >
-                {auth.data[0] ? `@${auth.data[1]}` : "no token"}
-              </div>
-            )}
-            {rate.data && rate.data[0] >= 0 && (
-              <div title="Remaining GitHub API requests / total quota for this hour">
-                GitHub: {rate.data[0]}/{rate.data[1]}
-              </div>
-            )}
-          </div>
-        </>
-      )}
+      {/* Forge connection status (only when expanded) */}
+      {!collapsed &&
+        (auth.data || rate.data || (gitea.data?.length ?? 0) > 0) && (
+          <>
+            <Separator />
+            <div className="space-y-1 px-3 py-2 text-[11px] text-muted-foreground">
+              {auth.data && (
+                <div
+                  className="truncate"
+                  title={auth.data[0] ? `GitHub : authentifié en tant que @${auth.data[1]}` : "Aucun token GitHub configuré (Paramètres)"}
+                >
+                  GitHub : {auth.data[0] ? `@${auth.data[1]}` : "pas de token"}
+                </div>
+              )}
+              {rate.data && rate.data[0] >= 0 && (
+                <div title="Requêtes API GitHub restantes / quota total pour cette heure">
+                  GitHub : {rate.data[0]}/{rate.data[1]}
+                </div>
+              )}
+              {(gitea.data ?? []).map((g) => (
+                <div
+                  key={g.baseUrl}
+                  className="truncate"
+                  title={
+                    g.ok
+                      ? `Gitea ${g.host} : authentifié en tant que @${g.user}${
+                          g.insecureTls ? " (vérification TLS désactivée)" : ""
+                        }`
+                      : `Gitea ${g.host} : ${g.user}`
+                  }
+                >
+                  {g.host}:{" "}
+                  {g.ok ? `@${g.user}` : g.hasToken ? "échec auth" : "pas de token"}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
 
       <Separator />
 
@@ -232,13 +254,13 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           collapsed ? "flex-col" : "justify-between px-3"
         )}
       >
-        <NavLink to="/settings" title="Settings — token, polling, logging, theme">
+        <NavLink to="/settings" title="Paramètres — token, polling, logs, thème">
           {({ isActive }) => (
             <Button
               variant="ghost"
               size="icon"
               className={cn(isActive && "bg-accent")}
-              aria-label="Settings"
+              aria-label="Paramètres"
             >
               <Settings className="h-4 w-4" />
             </Button>
@@ -248,8 +270,8 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           variant="ghost"
           size="icon"
           onClick={() => setHelpOpen(true)}
-          title="Help — guide & shortcuts"
-          aria-label="Help"
+          title="Aide — guide & raccourcis"
+          aria-label="Aide"
         >
           <HelpCircle className="h-4 w-4" />
         </Button>
@@ -258,7 +280,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           size="icon"
           onClick={cycleTheme}
           title={THEME_TOOLTIP[theme]}
-          aria-label="Cycle theme"
+          aria-label="Changer de thème"
         >
           {theme === "dark" ? (
             <Sun className="h-4 w-4" />
@@ -272,8 +294,8 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           variant="ghost"
           size="icon"
           onClick={() => patch({ sidebarCollapsed: !collapsed })}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar to icons"}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Déplier la barre" : "Replier la barre en icônes"}
+          aria-label={collapsed ? "Déplier la barre" : "Replier la barre"}
         >
           {collapsed ? (
             <ChevronsRight className="h-4 w-4" />
@@ -284,7 +306,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
       </div>
       {!collapsed && (
         <div className="px-3 pb-2 text-center text-[10px] text-muted-foreground/60">
-          <div>Designed by @vpailt</div>
+          <div>Conçu par @vpailt</div>
           {version && <div>v{version}</div>}
         </div>
       )}

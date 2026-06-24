@@ -37,11 +37,11 @@ type Item =
     };
 
 const PAGES: Item[] = [
-  { kind: "page", label: "Overview", path: "/" },
+  { kind: "page", label: "Aperçu", path: "/" },
   { kind: "page", label: "Plugins", path: "/plugins" },
   { kind: "page", label: "Skills", path: "/skills" },
   { kind: "page", label: "Admin", path: "/admin" },
-  { kind: "page", label: "Settings", path: "/settings" },
+  { kind: "page", label: "Paramètres", path: "/settings" },
 ];
 
 function IconFor({ item }: { item: Item }) {
@@ -139,12 +139,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl gap-0 p-0">
-        <DialogTitle className="sr-only">Command palette</DialogTitle>
+        <DialogTitle className="sr-only">Palette de commandes</DialogTitle>
         <div className="flex items-center gap-2 border-b px-3 py-2">
           <Search className="h-4 w-4 text-muted-foreground" />
           <Input
             ref={inputRef}
-            placeholder="Jump to a page, marketplace, plugin or skill…"
+            placeholder="Accède à une page, un marketplace, un plugin ou un skill…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
@@ -167,7 +167,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         <div className="max-h-80 overflow-y-auto py-1">
           {filtered.length === 0 && (
             <div className="px-4 py-6 text-center text-xs text-muted-foreground">
-              No match
+              Aucun résultat
             </div>
           )}
           {filtered.map((it, idx) => (

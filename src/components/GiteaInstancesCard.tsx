@@ -1,6 +1,14 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save, Trash2, Plus, ShieldAlert, CheckCircle2, Loader2 } from "lucide-react";
+import {
+  Save,
+  ShieldAlert,
+  CheckCircle2,
+  Loader2,
+  HelpCircle,
+  ExternalLink,
+  KeyRound,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import type { Settings as SettingsType } from "@/lib/types";
 import {
@@ -10,16 +18,39 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useNotifications } from "@/stores/notifications";
+import { openExternal } from "@/lib/utils";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/// Manage self-hosted Gitea instances: URL + TLS mode + per-host token.
-/// GitHub keeps its own token card above; this is purely additive.
+// The single, fixed Gitea instance this app talks to. Locked by design — the
+// user can set its token / TLS mode but cannot remove it or add another.
+const ACX_GITEA_URL = "https://git.almaviacx.local";
+const ACX_GITEA_HOST = "git.almaviacx.local";
+const ACX_TOKEN_SETTINGS_URL = `${ACX_GITEA_URL}/user/settings/applications`;
+
+const hostOf = (url: string) =>
+  url
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .split("/")[0];
+
+/// Manage the AlmaviaCX Gitea instance: token + TLS mode. The instance itself
+/// is fixed (https://git.almaviacx.local) and auto-seeded — there is no add /
+/// remove. A help dialog walks through generating a Gitea access token.
 export function GiteaInstancesCard() {
   const qc = useQueryClient();
   const push = useNotifications((s) => s.push);
@@ -28,241 +59,258 @@ export function GiteaInstancesCard() {
     queryFn: api.loadAppSettings,
   });
   const instances = settingsQuery.data?.giteaInstances ?? [];
+  const inst = instances.find((i) => hostOf(i.baseUrl) === ACX_GITEA_HOST);
 
-  // New-instance form.
-  const [newUrl, setNewUrl] = useState("");
-  const [newInsecure, setNewInsecure] = useState(false);
-  const [newToken, setNewToken] = useState("");
-
-  // Per-instance token drafts and auth-check results, keyed by baseUrl.
-  const [tokenDrafts, setTokenDrafts] = useState<Record<string, string>>({});
-  const [authResults, setAuthResults] = useState<
-    Record<string, { ok: boolean; msg: string }>
-  >({});
-
-  const onSettings = (s: SettingsType) =>
-    qc.setQueryData<SettingsType>(["app-settings"], s);
-
-  const addInstance = useMutation({
-    mutationFn: async () => {
-      const url = newUrl.trim();
-      if (!url) throw new Error("Instance URL is required");
-      await api.settingsUpsertGiteaInstance(url, newInsecure);
-      if (newToken.trim()) {
-        await api.settingsSetGiteaToken(url, newToken.trim());
-      }
-      return api.loadAppSettings();
-    },
-    onSuccess: (s) => {
-      onSettings(s);
-      setNewUrl("");
-      setNewInsecure(false);
-      setNewToken("");
-      push({ kind: "success", title: "Gitea instance saved" });
-    },
-    onError: (e) =>
-      push({ kind: "error", title: "Save instance failed", body: errMsg(e) }),
+  // Auto auth-status (mirrors the GitHub card's "Authenticated as @…", shown
+  // without clicking Test). Shared query key with the dashboard/sidebar.
+  const statusQuery = useQuery({
+    queryKey: ["gitea-status"],
+    queryFn: api.giteaStatusAll,
+    staleTime: 60_000,
   });
+  const auto = statusQuery.data?.find((s) => hostOf(s.baseUrl) === ACX_GITEA_HOST);
+
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [authResult, setAuthResult] = useState<{ ok: boolean; msg: string } | null>(
+    null,
+  );
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  const onSettings = (s: SettingsType) => {
+    qc.setQueryData<SettingsType>(["app-settings"], s);
+    // Token/instance changes affect auth status — re-check (here and on the
+    // dashboard/sidebar, which share this query key).
+    qc.invalidateQueries({ queryKey: ["gitea-status"] });
+  };
+
+  // Seed the fixed instance once if it isn't registered yet, so the token vault
+  // key + TLS mode + status query have something to hang off of.
+  const seededRef = useRef(false);
+  const seed = useMutation({
+    mutationFn: () => api.settingsUpsertGiteaInstance(ACX_GITEA_URL, false),
+    onSuccess: onSettings,
+  });
+  useEffect(() => {
+    if (settingsQuery.data && !inst && !seededRef.current && !seed.isPending) {
+      seededRef.current = true;
+      seed.mutate();
+    }
+  }, [settingsQuery.data, inst, seed]);
 
   const setToken = useMutation({
-    mutationFn: ({ baseUrl, token }: { baseUrl: string; token: string }) =>
-      api.settingsSetGiteaToken(baseUrl, token),
-    onSuccess: (s, { baseUrl }) => {
+    mutationFn: (token: string) =>
+      api.settingsSetGiteaToken(ACX_GITEA_URL, token),
+    onSuccess: (s) => {
       onSettings(s);
-      setTokenDrafts((d) => ({ ...d, [baseUrl]: "" }));
-      push({ kind: "success", title: "Gitea token saved" });
+      setTokenDraft("");
+      push({ kind: "success", title: "Token Gitea enregistré" });
     },
     onError: (e) =>
-      push({ kind: "error", title: "Save token failed", body: errMsg(e) }),
+      push({ kind: "error", title: "Échec de l'enregistrement du token", body: errMsg(e) }),
   });
 
   const toggleInsecure = useMutation({
-    mutationFn: ({ baseUrl, insecure }: { baseUrl: string; insecure: boolean }) =>
-      api.settingsUpsertGiteaInstance(baseUrl, insecure),
-    onSuccess: (s) => onSettings(s),
+    mutationFn: (insecure: boolean) =>
+      api.settingsUpsertGiteaInstance(ACX_GITEA_URL, insecure),
+    onSuccess: onSettings,
     onError: (e) =>
-      push({ kind: "error", title: "Update TLS mode failed", body: errMsg(e) }),
-  });
-
-  const removeInstance = useMutation({
-    mutationFn: (baseUrl: string) => api.settingsRemoveGiteaInstance(baseUrl),
-    onSuccess: (s) => {
-      onSettings(s);
-      push({ kind: "info", title: "Gitea instance removed" });
-    },
-    onError: (e) =>
-      push({ kind: "error", title: "Remove failed", body: errMsg(e) }),
+      push({ kind: "error", title: "Échec de la mise à jour du mode TLS", body: errMsg(e) }),
   });
 
   const checkAuth = useMutation({
-    mutationFn: (baseUrl: string) => api.giteaAuthCheck(baseUrl),
-    onSuccess: ([ok, msg], baseUrl) =>
-      setAuthResults((r) => ({ ...r, [baseUrl]: { ok, msg } })),
-    onError: (e, baseUrl) =>
-      setAuthResults((r) => ({
-        ...r,
-        [baseUrl]: { ok: false, msg: errMsg(e) },
-      })),
+    mutationFn: () => api.giteaAuthCheck(ACX_GITEA_URL),
+    onSuccess: ([ok, msg]) => setAuthResult({ ok, msg }),
+    onError: (e) => setAuthResult({ ok: false, msg: errMsg(e) }),
   });
 
+  const res = authResult ?? (auto ? { ok: auto.ok, msg: auto.user } : null);
+
   return (
-    <Card className="mb-6">
+    <Card id="gitea" className="mb-6 scroll-mt-6">
       <CardHeader>
-        <CardTitle>Gitea instances</CardTitle>
-        <CardDescription>
-          Self-hosted Gitea servers (e.g. an internal{" "}
-          <code>https://git.example.com</code> reachable over VPN). Each instance
-          has its own token, stored in the OS credential vault keyed by host.
-          Marketplaces can then be added against a Gitea instance from the Admin
-          tab.
-        </CardDescription>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <CardTitle>Gitea — AlmaviaCX</CardTitle>
+            <CardDescription>
+              Forge interne <code>{ACX_GITEA_URL}</code>, accessible via le VPN
+              GlobalProtect. Le token est stocké dans le coffre d'identifiants
+              Windows (clé par hôte), jamais sur disque. Les marketplaces Gitea
+              peuvent ensuite être ajoutées depuis l'onglet Administration.
+            </CardDescription>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            onClick={() => setHelpOpen(true)}
+          >
+            <HelpCircle className="mr-1 h-3 w-3" />
+            Comment générer un token ?
+          </Button>
+        </div>
       </CardHeader>
-      <CardContent className="space-y-4 text-sm">
-        {/* Existing instances */}
-        {instances.length > 0 && (
-          <div className="space-y-3">
-            {instances.map((inst) => {
-              const draft = tokenDrafts[inst.baseUrl] ?? "";
-              const res = authResults[inst.baseUrl];
-              return (
-                <div
-                  key={inst.baseUrl}
-                  className="space-y-2 rounded-md border p-3"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <code className="text-xs">{inst.baseUrl}</code>
-                    <Badge variant={inst.hasToken ? "success" : "warning"}>
-                      {inst.hasToken ? "token set" : "no token"}
-                    </Badge>
-                    {inst.insecureTls && (
-                      <Badge variant="outline" className="gap-1 text-amber-600">
-                        <ShieldAlert className="h-3 w-3" />
-                        TLS verify off
-                      </Badge>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="ml-auto h-7 px-2 text-destructive"
-                      onClick={() => removeInstance.mutate(inst.baseUrl)}
-                      disabled={removeInstance.isPending}
-                    >
-                      <Trash2 className="mr-1 h-3 w-3" />
-                      Remove
-                    </Button>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="password"
-                      placeholder="Gitea token (set / replace)"
-                      value={draft}
-                      onChange={(e) =>
-                        setTokenDrafts((d) => ({
-                          ...d,
-                          [inst.baseUrl]: e.target.value,
-                        }))
-                      }
-                    />
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        setToken.mutate({ baseUrl: inst.baseUrl, token: draft })
-                      }
-                      disabled={!draft.trim() || setToken.isPending}
-                    >
-                      <Save className="mr-1 h-3 w-3" />
-                      Save
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => checkAuth.mutate(inst.baseUrl)}
-                      disabled={checkAuth.isPending}
-                    >
-                      {checkAuth.isPending && checkAuth.variables === inst.baseUrl ? (
-                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="mr-1 h-3 w-3" />
-                      )}
-                      Test
-                    </Button>
-                  </div>
-
-                  <label className="flex cursor-pointer items-center gap-2 text-xs">
-                    <Switch
-                      checked={inst.insecureTls}
-                      onCheckedChange={(v) =>
-                        toggleInsecure.mutate({
-                          baseUrl: inst.baseUrl,
-                          insecure: v,
-                        })
-                      }
-                    />
-                    <span>
-                      Skip TLS certificate verification
-                      <span className="ml-1 text-muted-foreground">
-                        (for internal / self-signed CAs only)
-                      </span>
-                    </span>
-                  </label>
-
-                  {res && (
-                    <div className="text-xs">
-                      {res.ok ? (
-                        <Badge variant="success">
-                          Authenticated as @{res.msg}
-                        </Badge>
-                      ) : (
-                        <Badge variant="warning">{res.msg}</Badge>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+      <CardContent className="space-y-3 text-sm">
+        <div className="space-y-2 rounded-md border p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="text-xs">{ACX_GITEA_URL}</code>
+            <Badge variant={inst?.hasToken ? "success" : "warning"}>
+              {inst?.hasToken ? "token défini" : "aucun token"}
+            </Badge>
+            {inst?.insecureTls && (
+              <Badge variant="outline" className="gap-1 text-amber-600">
+                <ShieldAlert className="h-3 w-3" />
+                vérif. TLS désactivée
+              </Badge>
+            )}
+            <Badge variant="secondary" className="ml-auto">
+              instance par défaut
+            </Badge>
           </div>
-        )}
 
-        {/* Add instance */}
-        <div className="space-y-2 rounded-md border border-dashed p-3">
-          <div className="text-xs font-medium text-muted-foreground">
-            Add a Gitea instance
+          <div className="flex items-center gap-2">
+            <Input
+              type="password"
+              placeholder="Token Gitea (définir / remplacer)"
+              value={tokenDraft}
+              onChange={(e) => setTokenDraft(e.target.value)}
+            />
+            <Button
+              size="sm"
+              onClick={() => setToken.mutate(tokenDraft)}
+              disabled={!tokenDraft.trim() || setToken.isPending}
+            >
+              <Save className="mr-1 h-3 w-3" />
+              Enregistrer
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => checkAuth.mutate()}
+              disabled={checkAuth.isPending}
+            >
+              {checkAuth.isPending ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : (
+                <CheckCircle2 className="mr-1 h-3 w-3" />
+              )}
+              Tester
+            </Button>
           </div>
-          <Input
-            placeholder="https://git.almaviacx.local"
-            value={newUrl}
-            onChange={(e) => setNewUrl(e.target.value)}
-          />
-          <Input
-            type="password"
-            placeholder="Gitea token (optional now, can set later)"
-            value={newToken}
-            onChange={(e) => setNewToken(e.target.value)}
-          />
+
           <label className="flex cursor-pointer items-center gap-2 text-xs">
-            <Switch checked={newInsecure} onCheckedChange={setNewInsecure} />
+            <Switch
+              checked={inst?.insecureTls ?? false}
+              onCheckedChange={(v) => toggleInsecure.mutate(v)}
+              disabled={!inst || toggleInsecure.isPending}
+            />
             <span>
-              Skip TLS certificate verification
+              Ignorer la vérification du certificat TLS
               <span className="ml-1 text-muted-foreground">
-                (internal / self-signed CA)
+                (CA interne / auto-signée uniquement)
               </span>
             </span>
           </label>
-          <Button
-            size="sm"
-            onClick={() => addInstance.mutate()}
-            disabled={!newUrl.trim() || addInstance.isPending}
-          >
-            {addInstance.isPending ? (
-              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-            ) : (
-              <Plus className="mr-1 h-3 w-3" />
-            )}
-            Add instance
-          </Button>
+
+          {res && (
+            <div className="text-xs">
+              {res.ok ? (
+                <Badge variant="success">Authentifié en tant que @{res.msg}</Badge>
+              ) : (
+                <Badge variant="warning">{res.msg}</Badge>
+              )}
+            </div>
+          )}
         </div>
       </CardContent>
+
+      <GiteaTokenHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </Card>
+  );
+}
+
+// ============================================================
+// Token generation help dialog
+// ============================================================
+
+function GiteaTokenHelpDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4" />
+            Générer un token Gitea
+          </DialogTitle>
+          <DialogDescription>
+            Un token d'accès personnel autorise SkillManager à lire et proposer
+            des changements sur la forge AlmaviaCX. Il faut être connecté au VPN.
+          </DialogDescription>
+        </DialogHeader>
+
+        <ol className="list-decimal space-y-3 pl-5 text-sm">
+          <li>
+            Ouvrir{" "}
+            <button
+              type="button"
+              className="font-medium text-primary hover:underline"
+              onClick={() => openExternal(ACX_GITEA_URL)}
+            >
+              {ACX_GITEA_URL}
+            </button>{" "}
+            via <strong>Trustelem</strong> et se connecter (VPN{" "}
+            <strong>GlobalProtect</strong> requis).
+          </li>
+          <li>
+            <strong>
+              Paramètres → Applications → Gérer les jetons d'accès → Générer un
+              nouveau jeton
+            </strong>
+            .
+          </li>
+          <li>
+            Nom : <code>SkillManager</code>. Sélectionner les autorisations
+            (scopes) :
+            <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs">
+              <li>
+                <code>read:repository</code> + <code>write:repository</code>{" "}
+                <span className="text-muted-foreground">
+                  (lecture/écriture du contenu + ouverture de PR)
+                </span>
+              </li>
+              <li>
+                <code>read:user</code>
+              </li>
+              <li>
+                <code>read:organization</code>
+              </li>
+            </ul>
+          </li>
+          <li>
+            Copier le jeton généré, le coller dans le champ{" "}
+            <em>Token Gitea</em> puis cliquer <strong>Enregistrer</strong>.
+          </li>
+        </ol>
+
+        <DialogFooter className="sm:justify-between">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => openExternal(ACX_TOKEN_SETTINGS_URL)}
+          >
+            <ExternalLink className="mr-1 h-3 w-3" />
+            Ouvrir la page des jetons
+          </Button>
+          <DialogClose asChild>
+            <Button size="sm">Fermer</Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

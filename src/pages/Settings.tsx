@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Save,
@@ -63,6 +64,7 @@ const LEVELS: LogLevel[] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
 export function SettingsPage() {
   const qc = useQueryClient();
   const push = useNotifications((s) => s.push);
+  const location = useLocation();
   const settingsQuery = useQuery({
     queryKey: ["app-settings"],
     queryFn: api.loadAppSettings,
@@ -105,6 +107,19 @@ export function SettingsPage() {
     if (loggingQuery.data) setLogCfg(loggingQuery.data);
   }, [loggingQuery.data]);
 
+  // Deep-link from the dashboard ("Paramètres → Gitea"): scroll to the Gitea
+  // card once the page has rendered.
+  useEffect(() => {
+    const target = (location.state as { scrollTo?: string } | null)?.scrollTo;
+    if (!target) return;
+    const t = window.setTimeout(() => {
+      document
+        .getElementById(target)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, [location.state]);
+
   const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   const setTokenMutation = useMutation({
@@ -113,10 +128,10 @@ export function SettingsPage() {
       qc.setQueryData<SettingsType>(["app-settings"], s);
       qc.invalidateQueries({ queryKey: ["github-auth"] });
       qc.invalidateQueries({ queryKey: ["github-rate"] });
-      push({ kind: "success", title: "GitHub token saved" });
+      push({ kind: "success", title: "Token GitHub enregistré" });
     },
     onError: (e) =>
-      push({ kind: "error", title: "Save token failed", body: errMsg(e) }),
+      push({ kind: "error", title: "Échec de l'enregistrement du token", body: errMsg(e) }),
   });
 
   const setUiMutation = useMutation({
@@ -127,7 +142,7 @@ export function SettingsPage() {
     onError: (e) =>
       push({
         kind: "error",
-        title: "Save UI preferences failed",
+        title: "Échec de l'enregistrement des préférences d'interface",
         body: errMsg(e),
       }),
   });
@@ -139,14 +154,14 @@ export function SettingsPage() {
       setFrontendLogLevel(cfg.level);
       push({
         kind: "success",
-        title: `Logging ${cfg.enabled ? "enabled" : "disabled"}`,
-        body: `Level: ${cfg.level} (changes apply on next start for the file)`,
+        title: `Logs ${cfg.enabled ? "activés" : "désactivés"}`,
+        body: `Niveau : ${cfg.level} (les changements s'appliquent au prochain démarrage pour le fichier)`,
       });
     },
     onError: (e) =>
       push({
         kind: "error",
-        title: "Save logging config failed",
+        title: "Échec de l'enregistrement de la config des logs",
         body: errMsg(e),
       }),
   });
@@ -156,15 +171,15 @@ export function SettingsPage() {
     onSuccess: (n) => {
       push({
         kind: "success",
-        title: "Logs purged",
-        body: `${n} file(s) removed`,
+        title: "Logs purgés",
+        body: `${n} fichier(s) supprimé(s)`,
       });
       setLogTail("");
     },
     onError: (e) =>
       push({
         kind: "error",
-        title: "Purge failed",
+        title: "Échec de la purge",
         body: e instanceof Error ? e.message : String(e),
       }),
   });
@@ -173,14 +188,14 @@ export function SettingsPage() {
     mutationFn: () => api.loggingTail(64 * 1024),
     onSuccess: (text) => setLogTail(text),
     onError: (e) =>
-      push({ kind: "error", title: "Read log tail failed", body: errMsg(e) }),
+      push({ kind: "error", title: "Échec de la lecture des logs", body: errMsg(e) }),
   });
 
   const exportMutation = useMutation({
     mutationFn: async () => {
       const json = await api.settingsExport();
       const path = await saveDialog({
-        title: "Export SkillManager settings",
+        title: "Exporter les paramètres SkillManager",
         defaultPath: "skillmanager-settings.json",
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
@@ -192,14 +207,14 @@ export function SettingsPage() {
       if (p)
         push({
           kind: "success",
-          title: "Settings exported",
+          title: "Paramètres exportés",
           body: p as string,
         });
     },
     onError: (e) =>
       push({
         kind: "error",
-        title: "Export failed",
+        title: "Échec de l'export",
         body: e instanceof Error ? e.message : String(e),
       }),
   });
@@ -207,7 +222,7 @@ export function SettingsPage() {
   const importMutation = useMutation({
     mutationFn: async () => {
       const path = await openDialog({
-        title: "Import SkillManager settings",
+        title: "Importer les paramètres SkillManager",
         multiple: false,
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
@@ -219,12 +234,12 @@ export function SettingsPage() {
       if (!s) return;
       qc.setQueryData<SettingsType>(["app-settings"], s);
       qc.invalidateQueries({ queryKey: ["refresh"] });
-      push({ kind: "success", title: "Settings imported" });
+      push({ kind: "success", title: "Paramètres importés" });
     },
     onError: (e) =>
       push({
         kind: "error",
-        title: "Import failed",
+        title: "Échec de l'import",
         body: e instanceof Error ? e.message : String(e),
       }),
   });
@@ -241,19 +256,19 @@ export function SettingsPage() {
       if (info.status === "no_release") {
         push({
           kind: "info",
-          title: "No release published yet",
-          body: "The repo doesn't have a release on GitHub yet.",
+          title: "Aucune release publiée pour le moment",
+          body: "Le repo n'a pas encore de release sur GitHub.",
         });
       } else if (info.hasUpdate) {
         push({
           kind: "info",
-          title: `Update available: ${info.latestVersion}`,
-          body: `You're on ${info.currentVersion}.`,
+          title: `Mise à jour disponible : ${info.latestVersion}`,
+          body: `Tu es en ${info.currentVersion}.`,
         });
       } else {
         push({
           kind: "success",
-          title: "You're up to date",
+          title: "Tu es à jour",
           body: `Version ${info.currentVersion}`,
         });
       }
@@ -261,7 +276,7 @@ export function SettingsPage() {
     onError: (e) =>
       push({
         kind: "error",
-        title: "Check for updates failed",
+        title: "Échec de la vérification des mises à jour",
         body: errMsg(e),
       }),
   });
@@ -274,7 +289,7 @@ export function SettingsPage() {
     } catch (e) {
       push({
         kind: "error",
-        title: "Uninstall detection failed",
+        title: "Échec de la détection de la désinstallation",
         body: errMsg(e),
       });
     }
@@ -286,14 +301,14 @@ export function SettingsPage() {
       setUninstallDialogOpen(false);
       push({
         kind: "info",
-        title: "Uninstaller launched",
-        body: "SkillManager will exit so Windows can complete the uninstall.",
+        title: "Désinstallateur lancé",
+        body: "SkillManager va se fermer pour que Windows puisse terminer la désinstallation.",
       });
     },
     onError: (e) =>
       push({
         kind: "error",
-        title: "Uninstall failed",
+        title: "Échec de la désinstallation",
         body: errMsg(e),
       }),
   });
@@ -302,7 +317,7 @@ export function SettingsPage() {
     mutationFn: () => {
       if (!updateInfo?.installerAssetUrl || !updateInfo.installerAssetName) {
         return Promise.reject(
-          new Error("No installer asset attached to the latest release.")
+          new Error("Aucun installateur attaché à la dernière release.")
         );
       }
       return api.appInstallUpdate(
@@ -313,14 +328,14 @@ export function SettingsPage() {
     onSuccess: () => {
       push({
         kind: "info",
-        title: "Installer launched",
-        body: "SkillManager will exit so the installer can complete.",
+        title: "Installateur lancé",
+        body: "SkillManager va se fermer pour que l'installateur puisse terminer.",
       });
     },
     onError: (e) =>
       push({
         kind: "error",
-        title: "Install failed",
+        title: "Échec de l'installation",
         body: errMsg(e),
       }),
   });
@@ -350,27 +365,27 @@ export function SettingsPage() {
 
   return (
     <div className="h-full min-h-0 overflow-y-auto p-6">
-      <h1 className="mb-1 text-2xl font-semibold">Settings</h1>
+      <h1 className="mb-1 text-2xl font-semibold">Paramètres</h1>
       <p className="mb-6 text-sm text-muted-foreground">
-        Portable layout. Files live next to the executable.
+        Disposition portable. Les fichiers sont situés à côté de l'exécutable.
       </p>
 
       {paths && (
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle className="text-base">Paths</CardTitle>
+            <CardTitle className="text-base">Chemins</CardTitle>
             <CardDescription>
-              Everything below sits in the SkillManager folder so the whole
-              install can be zipped and moved.
+              Tout ce qui suit se trouve dans le dossier SkillManager pour que
+              l'installation complète puisse être zippée et déplacée.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-1 text-xs">
             <div className="flex items-center gap-2">
-              <span className="w-32 text-muted-foreground">Install</span>
+              <span className="w-32 text-muted-foreground">Installation</span>
               <code className="truncate">{paths.exeDir}</code>
             </div>
             <div className="flex items-center gap-2">
-              <span className="w-32 text-muted-foreground">Config dir</span>
+              <span className="w-32 text-muted-foreground">Dossier config</span>
               <code className="flex-1 truncate">{paths.configDir}</code>
               <Button
                 size="sm"
@@ -378,11 +393,11 @@ export function SettingsPage() {
                 className="h-6 px-2 text-[11px]"
                 onClick={() => openExternal(paths.configDir)}
               >
-                <FolderOpen className="mr-1 h-3 w-3" /> Open
+                <FolderOpen className="mr-1 h-3 w-3" /> Ouvrir
               </Button>
             </div>
             <div className="flex items-center gap-2">
-              <span className="w-32 text-muted-foreground">Logs dir</span>
+              <span className="w-32 text-muted-foreground">Dossier logs</span>
               <code className="flex-1 truncate">{paths.logsDir}</code>
               <Button
                 size="sm"
@@ -390,13 +405,13 @@ export function SettingsPage() {
                 className="h-6 px-2 text-[11px]"
                 onClick={() => openExternal(paths.logsDir)}
               >
-                <FolderOpen className="mr-1 h-3 w-3" /> Open
+                <FolderOpen className="mr-1 h-3 w-3" /> Ouvrir
               </Button>
             </div>
             <div className="pt-2 text-muted-foreground">
               <code>config.properties</code>, <code>logging.properties</code>,{" "}
-              <code>marketplaces.json</code>, <code>pr_history.json</code> are
-              under the config dir.
+              <code>marketplaces.json</code>, <code>pr_history.json</code> sont
+              dans le dossier config.
             </div>
           </CardContent>
         </Card>
@@ -406,24 +421,25 @@ export function SettingsPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <ArrowUpCircle className="h-4 w-4" />
-            App update
+            Mise à jour de l'app
           </CardTitle>
           <CardDescription>
-            Check the SkillManager GitHub repo for a newer release. The
-            installer is downloaded to <code>%TEMP%</code> and launched; the
-            app then exits so it can replace files.
+            Vérifie si une release plus récente est disponible sur le repo
+            GitHub de SkillManager. L'installateur est téléchargé dans{" "}
+            <code>%TEMP%</code> puis lancé ; l'app se ferme ensuite pour pouvoir
+            remplacer les fichiers.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
           <div className="flex flex-wrap items-center gap-3">
-            <span className="w-32 text-muted-foreground">Current version</span>
+            <span className="w-32 text-muted-foreground">Version actuelle</span>
             <Badge variant="outline">
               {updateInfo?.currentVersion ?? appVersion ?? "…"}
             </Badge>
             {updateInfo?.latestVersion && (
               <>
                 <span className="w-32 pl-4 text-muted-foreground">
-                  Latest on GitHub
+                  Dernière sur GitHub
                 </span>
                 <Badge variant={updateInfo.hasUpdate ? "warning" : "success"}>
                   {updateInfo.latestVersion}
@@ -434,7 +450,7 @@ export function SettingsPage() {
 
           {updateInfo?.status === "no_release" && (
             <div className="text-xs text-muted-foreground">
-              No release has been published yet on{" "}
+              Aucune release n'a encore été publiée sur{" "}
               <code>vpailt/claude-skillManager</code>.
             </div>
           )}
@@ -442,16 +458,16 @@ export function SettingsPage() {
           {updateInfo && updateInfo.status === "ok" && !updateInfo.hasUpdate && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <CheckCircle2 className="h-3 w-3 text-emerald-600" />
-              You're running the latest version.
+              Tu utilises la dernière version.
             </div>
           )}
 
           {updateInfo?.hasUpdate &&
             !updateInfo.installerAssetUrl && (
               <div className="text-xs text-amber-600 dark:text-amber-400">
-                A newer version is available but no <code>.exe</code> installer
-                is attached to the release. Open the release page to download
-                manually.
+                Une version plus récente est disponible mais aucun installateur{" "}
+                <code>.exe</code> n'est attaché à la release. Ouvre la page de la
+                release pour télécharger manuellement.
               </div>
             )}
 
@@ -465,7 +481,7 @@ export function SettingsPage() {
               <RefreshCw
                 className={`mr-1 h-3 w-3 ${checkUpdateMutation.isPending ? "animate-spin" : ""}`}
               />
-              Check for updates
+              Vérifier les mises à jour
             </Button>
 
             {updateInfo?.hasUpdate && updateInfo.installerAssetUrl && (
@@ -478,8 +494,8 @@ export function SettingsPage() {
                   className={`mr-1 h-3 w-3 ${installUpdateMutation.isPending ? "animate-pulse" : ""}`}
                 />
                 {installUpdateMutation.isPending
-                  ? "Downloading…"
-                  : `Download & install ${updateInfo.latestVersion}`}
+                  ? "Téléchargement…"
+                  : `Télécharger et installer ${updateInfo.latestVersion}`}
               </Button>
             )}
 
@@ -490,7 +506,7 @@ export function SettingsPage() {
                 onClick={() => openExternal(updateInfo.releaseUrl!)}
               >
                 <ExternalLink className="mr-1 h-3 w-3" />
-                Open release page
+                Ouvrir la page de la release
               </Button>
             )}
           </div>
@@ -505,10 +521,10 @@ export function SettingsPage() {
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>GitHub token</CardTitle>
+          <CardTitle>Token GitHub</CardTitle>
           <CardDescription>
-            Personal access token with <code>repo</code> scope (or fine-grained
-            with read+write content). Stored in{" "}
+            Personal access token avec le scope <code>repo</code> (ou
+            fine-grained avec contenu read+write). Stocké dans{" "}
             <code className="text-xs">config/config.properties</code>.
           </CardDescription>
         </CardHeader>
@@ -525,13 +541,13 @@ export function SettingsPage() {
               disabled={setTokenMutation.isPending}
             >
               <Save className="mr-1 h-3 w-3" />
-              Save
+              Enregistrer
             </Button>
           </div>
           {auth.data && (
             <div className="text-sm">
               {auth.data[0] ? (
-                <Badge variant="success">Authenticated as @{auth.data[1]}</Badge>
+                <Badge variant="success">Authentifié en tant que @{auth.data[1]}</Badge>
               ) : (
                 <Badge variant="warning">{auth.data[1]}</Badge>
               )}
@@ -544,12 +560,12 @@ export function SettingsPage() {
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Appearance</CardTitle>
-          <CardDescription>Theme and density apply immediately.</CardDescription>
+          <CardTitle>Apparence</CardTitle>
+          <CardDescription>Le thème et la densité s'appliquent immédiatement.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
           <div className="flex flex-wrap items-center gap-3">
-            <span className="w-28 text-muted-foreground">Theme</span>
+            <span className="w-28 text-muted-foreground">Thème</span>
             <div className="flex gap-1">
               {(["light", "dark", "auto"] as const).map((t) => (
                 <Button
@@ -565,7 +581,7 @@ export function SettingsPage() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <span className="w-28 text-muted-foreground">Density</span>
+            <span className="w-28 text-muted-foreground">Densité</span>
             <div className="flex gap-1">
               {(["comfortable", "compact"] as const).map((d) => (
                 <Button
@@ -585,11 +601,11 @@ export function SettingsPage() {
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>System tray</CardTitle>
+          <CardTitle>Barre d'état système</CardTitle>
           <CardDescription>
-            SkillManager lives in the Windows notification area (bottom-right,
-            near the clock). Right-click the icon for the menu, left-click to
-            show or hide the window.
+            SkillManager se loge dans la zone de notification Windows (en bas à
+            droite, près de l'horloge). Clic droit sur l'icône pour le menu, clic
+            gauche pour afficher ou masquer la fenêtre.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
@@ -599,9 +615,9 @@ export function SettingsPage() {
               onCheckedChange={(v) => updateUi({ closeToTray: v })}
             />
             <span>
-              Close window to tray
+              Réduire la fenêtre dans la barre d'état
               <span className="ml-2 text-xs text-muted-foreground">
-                (use the tray menu to actually quit)
+                (utilise le menu de la barre d'état pour quitter réellement)
               </span>
             </span>
           </label>
@@ -611,9 +627,9 @@ export function SettingsPage() {
               onCheckedChange={(v) => updateUi({ startMinimized: v })}
             />
             <span>
-              Start minimized in tray
+              Démarrer minimisé dans la barre d'état
               <span className="ml-2 text-xs text-muted-foreground">
-                (useful if added to Windows startup)
+                (utile si ajouté au démarrage de Windows)
               </span>
             </span>
           </label>
@@ -676,10 +692,11 @@ export function SettingsPage() {
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>PR status polling</CardTitle>
+          <CardTitle>Polling du statut des PR</CardTitle>
           <CardDescription>
-            Discreetly re-check the status of open PRs every N seconds. Counts
-            against your GitHub rate limit — disable on metered tokens.
+            Re-vérifie discrètement le statut des PR ouvertes toutes les N
+            secondes. Compte dans ta limite de taux GitHub — désactive-le sur
+            les tokens à quota limité.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
@@ -688,10 +705,10 @@ export function SettingsPage() {
               checked={ui.prPollingEnabled}
               onCheckedChange={(v) => updateUi({ prPollingEnabled: v })}
             />
-            <span>Enable PR status polling</span>
+            <span>Activer le polling du statut des PR</span>
           </label>
           <div className="flex flex-wrap items-center gap-3">
-            <span className="w-28 text-muted-foreground">Interval</span>
+            <span className="w-28 text-muted-foreground">Intervalle</span>
             <Input
               type="number"
               min={15}
@@ -706,7 +723,7 @@ export function SettingsPage() {
               disabled={!ui.prPollingEnabled}
             />
             <span className="text-xs text-muted-foreground">
-              seconds (min 15, default 60)
+              secondes (min 15, par défaut 60)
             </span>
           </div>
         </CardContent>
@@ -714,13 +731,14 @@ export function SettingsPage() {
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Logging</CardTitle>
+          <CardTitle>Logs</CardTitle>
           <CardDescription>
-            File logs go to{" "}
-            <code>logs/skillmanager.&lt;date&gt;.log</code>. Settings persist in{" "}
-            <code>config/logging.properties</code>. Enabling/disabling or
-            changing the level takes effect at next app start; the level filter
-            in the frontend applies immediately.
+            Les logs fichier sont écrits dans{" "}
+            <code>logs/skillmanager.&lt;date&gt;.log</code>. Les paramètres sont
+            persistés dans <code>config/logging.properties</code>.
+            L'activation/désactivation ou le changement de niveau prend effet au
+            prochain démarrage de l'app ; le filtre de niveau côté frontend
+            s'applique immédiatement.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
@@ -729,11 +747,11 @@ export function SettingsPage() {
               checked={logCfg.enabled}
               onCheckedChange={(v) => updateLog({ enabled: v })}
             />
-            <span>Enable file logging</span>
+            <span>Activer les logs fichier</span>
           </label>
 
           <div className="flex flex-wrap items-center gap-3">
-            <span className="w-28 text-muted-foreground">Level</span>
+            <span className="w-28 text-muted-foreground">Niveau</span>
             <div className="flex gap-1">
               {LEVELS.map((l) => (
                 <Button
@@ -751,7 +769,7 @@ export function SettingsPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <span className="w-28 text-muted-foreground">Max files</span>
+            <span className="w-28 text-muted-foreground">Fichiers max</span>
             <Input
               type="number"
               min={1}
@@ -766,7 +784,7 @@ export function SettingsPage() {
               disabled={!logCfg.enabled}
             />
             <span className="text-xs text-muted-foreground">
-              kept on disk (daily rotation)
+              conservés sur le disque (rotation quotidienne)
             </span>
           </div>
 
@@ -781,7 +799,7 @@ export function SettingsPage() {
               disabled={tailMutation.isPending}
             >
               <Eye className="mr-1 h-3 w-3" />
-              View logs
+              Voir les logs
             </Button>
             <Button
               size="sm"
@@ -790,7 +808,7 @@ export function SettingsPage() {
               disabled={purgeMutation.isPending}
             >
               <Trash2 className="mr-1 h-3 w-3" />
-              Purge logs
+              Purger les logs
             </Button>
             {showLogs && (
               <Button
@@ -802,14 +820,14 @@ export function SettingsPage() {
                 <RefreshCw
                   className={`mr-1 h-3 w-3 ${tailMutation.isPending ? "animate-spin" : ""}`}
                 />
-                Refresh
+                Rafraîchir
               </Button>
             )}
           </div>
 
           {showLogs && (
             <pre className="mt-3 max-h-80 overflow-auto rounded-md border bg-muted/40 p-3 text-[11px] leading-snug">
-              {logTail || "(empty — write some events then click Refresh)"}
+              {logTail || "(vide — génère quelques événements puis clique sur Rafraîchir)"}
             </pre>
           )}
         </CardContent>
@@ -819,8 +837,8 @@ export function SettingsPage() {
         <CardHeader>
           <CardTitle>Export / Import</CardTitle>
           <CardDescription>
-            Share your token + marketplace registrations between machines.
-            Stored as plain JSON — keep the file private.
+            Partage ton token + les enregistrements de marketplaces entre
+            plusieurs machines. Stocké en JSON brut — garde le fichier privé.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
@@ -830,7 +848,7 @@ export function SettingsPage() {
             disabled={exportMutation.isPending}
           >
             <Download className="mr-1 h-3 w-3" />
-            Export settings
+            Exporter les paramètres
           </Button>
           <Button
             variant="outline"
@@ -838,18 +856,18 @@ export function SettingsPage() {
             disabled={importMutation.isPending}
           >
             <Upload className="mr-1 h-3 w-3" />
-            Import settings
+            Importer les paramètres
           </Button>
           <Button
             variant="ghost"
             onClick={async () => {
               const json = await api.settingsExport();
               await navigator.clipboard.writeText(json);
-              push({ kind: "success", title: "Settings copied to clipboard" });
+              push({ kind: "success", title: "Paramètres copiés dans le presse-papiers" });
             }}
           >
             <FileJson className="mr-1 h-3 w-3" />
-            Copy JSON
+            Copier le JSON
           </Button>
         </CardContent>
       </Card>
@@ -858,13 +876,14 @@ export function SettingsPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-destructive">
             <AlertTriangle className="h-4 w-4" />
-            Danger zone
+            Zone de danger
           </CardTitle>
           <CardDescription>
-            Uninstall SkillManager from this machine. Runs the Windows
-            uninstaller registered at install time; your local{" "}
-            <code>~/.claude/</code> data (plugins, skills, marketplaces) is
-            <strong> not </strong>touched — only the SkillManager app itself.
+            Désinstalle SkillManager de cette machine. Exécute le
+            désinstallateur Windows enregistré lors de l'installation ; tes
+            données locales <code>~/.claude/</code> (plugins, skills,
+            marketplaces) ne sont
+            <strong> pas </strong>touchées — seule l'app SkillManager l'est.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -874,7 +893,7 @@ export function SettingsPage() {
             disabled={uninstallMutation.isPending}
           >
             <Trash2 className="mr-1 h-3 w-3" />
-            Uninstall SkillManager
+            Désinstaller SkillManager
           </Button>
         </CardContent>
       </Card>
@@ -889,30 +908,30 @@ export function SettingsPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
               <AlertTriangle className="h-5 w-5" />
-              Uninstall SkillManager?
+              Désinstaller SkillManager ?
             </DialogTitle>
             <DialogDescription>
-              The Windows uninstaller will start and remove the SkillManager
-              application. The app will close as soon as you confirm. Your
-              Claude Code data under <code>~/.claude/</code> is left untouched.
+              Le désinstallateur Windows va démarrer et supprimer l'application
+              SkillManager. L'app se fermera dès que tu confirmes. Tes données
+              Claude Code sous <code>~/.claude/</code> restent intactes.
             </DialogDescription>
           </DialogHeader>
 
           {uninstallInfo && (
             <div className="space-y-1 rounded-md border bg-muted/40 p-3 text-xs">
               <div className="flex gap-2">
-                <span className="w-24 text-muted-foreground">Detected</span>
+                <span className="w-24 text-muted-foreground">Détecté</span>
                 <Badge variant={uninstallInfo.kind === "none" ? "warning" : "outline"}>
                   {uninstallInfo.kind === "nsis"
-                    ? "uninstall.exe found"
+                    ? "uninstall.exe trouvé"
                     : uninstallInfo.kind === "registry"
-                      ? "registry entry"
-                      : "no uninstaller (portable install)"}
+                      ? "entrée de registre"
+                      : "aucun désinstallateur (installation portable)"}
                 </Badge>
               </div>
               {uninstallInfo.installLocation && (
                 <div className="flex gap-2">
-                  <span className="w-24 text-muted-foreground">Location</span>
+                  <span className="w-24 text-muted-foreground">Emplacement</span>
                   <code className="truncate">{uninstallInfo.installLocation}</code>
                 </div>
               )}
@@ -924,8 +943,9 @@ export function SettingsPage() {
               )}
               {uninstallInfo.kind === "none" && (
                 <div className="pt-1 text-amber-600 dark:text-amber-400">
-                  No uninstaller registered. This looks like a portable
-                  install — close SkillManager and delete the folder manually.
+                  Aucun désinstallateur enregistré. Cela ressemble à une
+                  installation portable — ferme SkillManager et supprime le
+                  dossier manuellement.
                 </div>
               )}
             </div>
@@ -937,7 +957,7 @@ export function SettingsPage() {
               onClick={() => setUninstallDialogOpen(false)}
               disabled={uninstallMutation.isPending}
             >
-              Cancel
+              Annuler
             </Button>
             <Button
               variant="destructive"
@@ -947,7 +967,7 @@ export function SettingsPage() {
               }
             >
               <Trash2 className="mr-1 h-3 w-3" />
-              {uninstallMutation.isPending ? "Launching…" : "Uninstall now"}
+              {uninstallMutation.isPending ? "Lancement…" : "Désinstaller maintenant"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -70,6 +70,18 @@ pub fn host_of(url: &str) -> String {
     s.split('/').next().unwrap_or(s).to_string()
 }
 
+/// True when any `/`-separated segment of `path` starts with a dot
+/// (`.claude-plugin/marketplace.json` → true, `marketplace.json` → false).
+///
+/// Some self-hosted Gitea instances sit behind a reverse proxy / WAF with an
+/// anti-dotfile rule (e.g. nginx `location ~ /\. { deny all; }`) that returns a
+/// 403 HTML page for any URL containing a `/.` segment — before the request
+/// even reaches Gitea. We detect such paths and route their reads/writes
+/// through dot-free endpoints (Trees+Blobs / ChangeFiles).
+fn path_has_dot_segment(path: &str) -> bool {
+    path.split('/').any(|seg| seg.starts_with('.'))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteFile {
@@ -296,6 +308,11 @@ impl GitHubClient {
     }
 
     pub fn get_file(&self, repo: &str, path: &str, r#ref: &str) -> Result<(String, String)> {
+        // Proxy-blocked dot-paths on Gitea: read via Trees+Blobs (dot-free URL).
+        // See [`path_has_dot_segment`].
+        if self.provider == Provider::Gitea && path_has_dot_segment(path) {
+            return self.gitea_blob_get(repo, path, r#ref);
+        }
         let url = format!("/repos/{repo}/contents/{path}");
         let mut req = self.request(reqwest::Method::GET, &url);
         if !r#ref.is_empty() {
@@ -327,6 +344,99 @@ impl GitHubClient {
             .unwrap_or_default()
             .to_string();
         Ok((text, sha))
+    }
+
+    /// Gitea: read a file via the Git Trees + Blobs API so the file path never
+    /// appears in the request URL — only commit/blob SHAs do. This bypasses a
+    /// reverse-proxy rule that blocks `/.`-segment URLs (see
+    /// [`path_has_dot_segment`]). Returns `(text, blob_sha)` like [`get_file`],
+    /// so the blob sha can be reused as the `existing_sha` for a later update.
+    fn gitea_blob_get(&self, repo: &str, path: &str, r#ref: &str) -> Result<(String, String)> {
+        // Resolve ref (branch/tag/empty→default) to a commit sha via the
+        // commits endpoint (ref goes in the `sha` query param, not the path).
+        let commit = self.get_latest_commit(repo, r#ref)?;
+        let commit_sha = commit
+            .get("sha")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::GitHub(format!("no commit sha for {repo}@{r}", r = r#ref)))?;
+        let tree_url = format!("/repos/{repo}/git/trees/{commit_sha}");
+        let resp = Self::check(
+            self.request(reqwest::Method::GET, &tree_url)
+                .query(&[("recursive", "true")])
+                .send()?,
+            "GET",
+            &tree_url,
+        )?;
+        let tree: Value = resp.json()?;
+        let blob_sha = tree.get("tree").and_then(|v| v.as_array()).and_then(|arr| {
+            arr.iter().find_map(|e| {
+                let o = e.as_object()?;
+                if o.get("path").and_then(|v| v.as_str())? == path
+                    && o.get("type").and_then(|v| v.as_str()).unwrap_or("") == "blob"
+                {
+                    o.get("sha").and_then(|v| v.as_str()).map(String::from)
+                } else {
+                    None
+                }
+            })
+        });
+        let blob_sha = match blob_sha {
+            Some(s) => s,
+            None => {
+                if tree.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    return Err(Error::GitHub(format!(
+                        "{path} not found in {repo}@{r} (git tree truncated — repo too large)",
+                        r = r#ref
+                    )));
+                }
+                return Err(Error::NotFound(format!(
+                    "{path} not found in {repo}@{r}",
+                    r = r#ref
+                )));
+            }
+        };
+        let blob_url = format!("/repos/{repo}/git/blobs/{blob_sha}");
+        let resp = Self::check(
+            self.request(reqwest::Method::GET, &blob_url).send()?,
+            "GET",
+            &blob_url,
+        )?;
+        let data: Value = resp.json()?;
+        let content = data.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+        let encoding = data.get("encoding").and_then(|v| v.as_str()).unwrap_or("base64");
+        let text = if encoding == "base64" {
+            let cleaned: String = content.chars().filter(|c| !c.is_whitespace()).collect();
+            let raw = B64.decode(cleaned).unwrap_or_default();
+            String::from_utf8_lossy(&raw).into_owned()
+        } else {
+            content.to_string()
+        };
+        Ok((text, blob_sha))
+    }
+
+    /// Gitea: create/update/delete files via `POST /repos/{repo}/contents`
+    /// (the "ChangeFiles" batch endpoint). File paths travel in the JSON body,
+    /// so the URL stays dot-free and a proxy blocking `/.`-paths lets it
+    /// through — unlike the per-file `PUT/DELETE /contents/<path>`.
+    fn gitea_change_files(
+        &self,
+        repo: &str,
+        branch: &str,
+        message: &str,
+        files: Vec<Value>,
+    ) -> Result<Value> {
+        let url = format!("/repos/{repo}/contents");
+        let body = json!({
+            "branch": branch,
+            "message": message,
+            "files": files,
+        });
+        let resp = Self::check(
+            self.request(reqwest::Method::POST, &url).json(&body).send()?,
+            "POST",
+            &url,
+        )?;
+        Ok(resp.json()?)
     }
 
     pub fn get_latest_commit(&self, repo: &str, branch: &str) -> Result<Value> {
@@ -653,6 +763,19 @@ impl GitHubClient {
         message: &str,
         existing_sha: Option<&str>,
     ) -> Result<Value> {
+        // Proxy-blocked dot-paths on Gitea: write via the ChangeFiles batch
+        // endpoint (path in the body, dot-free URL). See [`path_has_dot_segment`].
+        if self.provider == Provider::Gitea && path_has_dot_segment(path) {
+            let mut file = json!({
+                "operation": if existing_sha.is_some() { "update" } else { "create" },
+                "path": path,
+                "content": B64.encode(content),
+            });
+            if let Some(sha) = existing_sha {
+                file["sha"] = json!(sha);
+            }
+            return self.gitea_change_files(repo, branch, message, vec![file]);
+        }
         let url = format!("/repos/{repo}/contents/{path}");
         let mut body = json!({
             "message": message,
@@ -688,6 +811,15 @@ impl GitHubClient {
         message: &str,
         sha: &str,
     ) -> Result<Value> {
+        // Proxy-blocked dot-paths on Gitea: delete via ChangeFiles (dot-free URL).
+        if self.provider == Provider::Gitea && path_has_dot_segment(path) {
+            let file = json!({
+                "operation": "delete",
+                "path": path,
+                "sha": sha,
+            });
+            return self.gitea_change_files(repo, branch, message, vec![file]);
+        }
         let url = format!("/repos/{repo}/contents/{path}");
         let body = json!({"message": message, "branch": branch, "sha": sha});
         let resp = Self::check(
@@ -886,6 +1018,24 @@ impl GitHubClient {
             &url,
         )?;
         Ok(resp.json()?)
+    }
+
+    /// List every open PR on `repo` (no file filtering — unlike
+    /// [`list_open_prs_touching`]). Used by the "Suivi Marketplace" tracker to
+    /// surface in-flight PRs on a marketplace repo and its plugins' repos.
+    /// GitHub and Gitea share the `/pulls` endpoint; `per_page`/`limit` cover
+    /// both page-size keys.
+    pub fn list_open_prs(&self, repo: &str) -> Result<Vec<Value>> {
+        let url = format!("/repos/{repo}/pulls");
+        let resp = Self::check(
+            self.request(reqwest::Method::GET, &url)
+                .query(&[("state", "open"), ("per_page", "50"), ("limit", "50")])
+                .send()?,
+            "GET",
+            &url,
+        )?;
+        let v: Value = resp.json()?;
+        Ok(v.as_array().cloned().unwrap_or_default())
     }
 }
 

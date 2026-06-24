@@ -147,6 +147,10 @@ pub struct MarketplaceConfig {
     pub source_path: String,
     #[serde(default)]
     pub auto_update: bool,
+    /// Track open PRs on this marketplace's repo (and its plugins' repos) in
+    /// the "Suivi Marketplace" admin tab and the dashboard. Absent → off.
+    #[serde(default)]
+    pub track_prs: bool,
     /// Which forge hosts this marketplace. Absent → GitHub (back-compat).
     #[serde(default)]
     pub provider: Provider,

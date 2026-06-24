@@ -19,10 +19,21 @@ pub fn fetch_marketplace_plugins(
     } else {
         r#ref.to_string()
     };
+    // Keep the underlying read error so an empty result is diagnosable — a
+    // self-hosted Gitea behind a VPN or missing its per-host token fails here
+    // and the caller otherwise only sees "no remote plugins".
+    let mut last_err = None;
     for path in [REGISTRY_PATH, "marketplace.json"] {
-        if let Ok((text, _)) = gh.get_file(repo, path, &r#ref) {
-            return parse_marketplace_json(&text, marketplace_name);
+        match gh.get_file(repo, path, &r#ref) {
+            Ok((text, _)) => return parse_marketplace_json(&text, marketplace_name),
+            Err(e) => last_err = Some(e),
         }
+    }
+    if let Some(e) = last_err {
+        tracing::warn!(
+            "fetch_marketplace_plugins: could not read registry for {repo}@{r}: {e}",
+            r = r#ref
+        );
     }
     Vec::new()
 }
@@ -55,10 +66,18 @@ pub fn merge_local_remote(
             merged.push(r);
         }
     }
-    for (_, l) in by_name {
-        let mut l = l;
+    for (_, mut l) in by_name {
+        // Plugins the remote fetch didn't return. An installed one is a genuine
+        // LocalOnly (we've lost remote knowledge of it). But a plugin we still
+        // know from a marketplace registry (`remote_present` — e.g. the local
+        // directory scan of an installed marketplace whose remote re-fetch just
+        // failed, common for self-hosted Gitea behind a VPN or without a token)
+        // is still installable. Keep it NotInstalled so the Install button shows
+        // rather than hiding it behind Unknown.
         l.install_state = if l.installed_version.is_some() {
             InstallState::LocalOnly
+        } else if l.remote_present {
+            InstallState::NotInstalled
         } else {
             InstallState::Unknown
         };

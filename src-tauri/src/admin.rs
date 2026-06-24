@@ -217,6 +217,7 @@ pub fn fetch_marketplace_registry(
     repo: &str,
     r#ref: &str,
 ) -> Result<(Value, String, String)> {
+    let ref_label = if r#ref.is_empty() { "<default>" } else { r#ref };
     let mut last_err: Option<Error> = None;
     for path in [REGISTRY_PATH, "marketplace.json"] {
         match gh.get_file(repo, path, r#ref) {
@@ -226,13 +227,20 @@ pub fn fetch_marketplace_registry(
                 if !data.is_object() {
                     return Err(Error::GitHub(format!("{path} root must be an object")));
                 }
+                tracing::debug!("fetch_marketplace_registry: {repo}@{ref_label} found {path}");
                 return Ok((data, path.to_string(), sha));
             }
-            Err(e) => last_err = Some(e),
+            Err(e) => {
+                // Per-attempt trace so a 404 is diagnosable: which path, which
+                // ref, and what the forge actually said (auth vs missing-file
+                // vs wrong-branch all look like a bare 404 otherwise).
+                tracing::warn!("fetch_marketplace_registry: {repo}@{ref_label} {path} -> {e}");
+                last_err = Some(e);
+            }
         }
     }
     Err(Error::GitHub(format!(
-        "No marketplace.json found in {repo}: {}",
+        "No marketplace.json found in {repo}@{ref_label}: {}",
         last_err.map(|e| e.to_string()).unwrap_or_default()
     )))
 }

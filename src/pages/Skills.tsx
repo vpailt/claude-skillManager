@@ -60,10 +60,10 @@ function joinPath(folder: string, rel: string): string {
 type Origin = "all" | "local" | "plugin" | "remote";
 
 const ORIGIN_LABELS: Record<Origin, string> = {
-  all: "All",
+  all: "Tous",
   local: "Local",
   plugin: "Plugin",
-  remote: "Remote",
+  remote: "Distant",
 };
 
 function skillKey(s: SkillEntry) {
@@ -249,7 +249,7 @@ function SkillRow({
           onClick={onToggle}
           className="grid h-5 w-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
           disabled={!hasFolder}
-          aria-label={expanded ? "Collapse" : "Expand"}
+          aria-label={expanded ? "Réduire" : "Développer"}
         >
           {hasFolder ? (
             expanded ? (
@@ -275,7 +275,7 @@ function SkillRow({
           </span>
           {!skill.folder && skill.remotePresent && (
             <Badge variant="outline" className="shrink-0 text-[10px]">
-              remote
+              distant
             </Badge>
           )}
           {localBadge && (
@@ -289,12 +289,12 @@ function SkillRow({
         <div className="ml-2 border-l border-border/40 pl-2">
           {filesQuery.isLoading && (
             <div className="px-2 py-1 text-[11px] text-muted-foreground">
-              Loading…
+              Chargement…
             </div>
           )}
           {filesQuery.data && filesQuery.data.length === 0 && (
             <div className="px-2 py-1 text-[11px] text-muted-foreground">
-              (empty)
+              (vide)
             </div>
           )}
           {sortedChildren(tree).map((c) => (
@@ -522,7 +522,7 @@ export function SkillsPage() {
     onSuccess: (_, vars) => {
       push({
         kind: "success",
-        title: `Plugin ${vars.value ? "enabled" : "disabled"}`,
+        title: `Plugin ${vars.value ? "activé" : "désactivé"}`,
         body: `${vars.plugin}@${vars.marketplace}`,
       });
       qc.invalidateQueries({ queryKey: ["refresh"] });
@@ -562,7 +562,7 @@ export function SkillsPage() {
           variant="ghost"
           className="h-7 w-7 p-0"
           onClick={() => setShowSearch((v) => !v)}
-          aria-label="Search"
+          aria-label="Rechercher"
         >
           <Search className="h-3.5 w-3.5" />
         </Button>
@@ -582,7 +582,7 @@ export function SkillsPage() {
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               autoFocus
-              placeholder="Filter skills…"
+              placeholder="Filtrer les skills…"
               className="h-8 pl-9 text-xs"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -607,13 +607,13 @@ export function SkillsPage() {
           <div className="flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px]">
             <Sparkles className="h-3 w-3 text-primary" />
             <span className="truncate">
-              Plugin: <span className="font-medium">{pluginFilter}</span>
+              Plugin : <span className="font-medium">{pluginFilter}</span>
             </span>
             <button
               onClick={clearPluginFilter}
               className="ml-auto grid h-4 w-4 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-              aria-label="Clear plugin filter"
-              title="Clear plugin filter"
+              aria-label="Effacer le filtre plugin"
+              title="Effacer le filtre plugin"
             >
               <X className="h-3 w-3" />
             </button>
@@ -625,7 +625,7 @@ export function SkillsPage() {
             value={marketplaceFilter}
             onChange={(e) => setMarketplaceFilter(e.target.value)}
           >
-            <option value="all">All marketplaces</option>
+            <option value="all">Tous les marketplaces</option>
             {marketplaceNames.map((n) => (
               <option key={n} value={n}>
                 {n}
@@ -634,7 +634,7 @@ export function SkillsPage() {
           </select>
         )}
         <p className="text-[11px] text-muted-foreground">
-          {filtered.length} of {all.length} skills
+          {filtered.length} sur {all.length} skills
         </p>
       </div>
 
@@ -643,7 +643,7 @@ export function SkillsPage() {
           {filtered.length === 0 && (
             <div className="flex flex-col items-center gap-2 px-4 py-10 text-center text-xs text-muted-foreground">
               <Sparkles className="h-6 w-6 opacity-40" />
-              <span>No skill matches your filters.</span>
+              <span>Aucun skill ne correspond à tes filtres.</span>
             </div>
           )}
           {sectionOrder.map((mp) => {
@@ -706,8 +706,8 @@ export function SkillsPage() {
         <div className="flex h-full flex-col items-center justify-center gap-2 p-10 text-center text-sm text-muted-foreground">
           <Sparkles className="h-8 w-8 opacity-40" />
           <span>
-            Pick a skill to see its description, expand it to browse files,
-            or open a duplicate / archived entry.
+            Choisis un skill pour voir sa description, développe-le pour parcourir
+            ses fichiers, ou ouvre un doublon / une entrée archivée.
           </span>
         </div>
       )}
@@ -796,7 +796,7 @@ function SkillDetailView({
           <Switch
             checked={skill.pluginEnabled === true}
             onCheckedChange={onTogglePlugin}
-            aria-label="Toggle plugin"
+            aria-label="Activer/désactiver le plugin"
           />
         )}
         {skill.folder && (
@@ -804,15 +804,15 @@ function SkillDetailView({
             size="sm"
             variant="ghost"
             className="h-8 gap-1.5 px-2 text-xs"
-            aria-label="Open in VS Code"
-            title="Open this skill folder in VS Code"
+            aria-label="Ouvrir dans VS Code"
+            title="Ouvrir le dossier de ce skill dans VS Code"
             onClick={async () => {
               try {
                 await api.openInVsCode(skill.folder as string);
               } catch (e) {
                 useNotifications.getState().push({
                   kind: "error",
-                  title: "Open in VS Code failed",
+                  title: "Échec de l'ouverture dans VS Code",
                   body: e instanceof Error ? e.message : String(e),
                 });
               }
@@ -826,8 +826,8 @@ function SkillDetailView({
           size="sm"
           variant="ghost"
           className="h-8 w-8 p-0 text-muted-foreground"
-          aria-label="More"
-          title="More actions (Admin tab)"
+          aria-label="Plus"
+          title="Plus d'actions (onglet Admin)"
           onClick={() => (window.location.hash = "#/admin")}
         >
           <MoreVertical className="h-4 w-4" />
@@ -845,7 +845,7 @@ function SkillDetailView({
         <button
           onClick={onToggleDescription}
           className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-accent"
-          aria-label="Toggle description"
+          aria-label="Afficher/masquer la description"
         >
           <Info className="h-3.5 w-3.5" />
         </button>
@@ -864,13 +864,13 @@ function SkillDetailView({
         )}
         {!skill.folder && (
           <div className="rounded-md border border-dashed bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-            Remote-only skill — install the plugin to browse its files.
+            Skill distant uniquement — installe le plugin pour parcourir ses fichiers.
           </div>
         )}
         {skill.folder && (
           <div className="rounded-md border border-dashed bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-            Expand the skill on the left and click a file to view its
-            contents.
+            Développe le skill à gauche et clique sur un fichier pour en voir le
+            contenu.
           </div>
         )}
       </div>
@@ -911,15 +911,15 @@ function FileDetailView({
           size="sm"
           variant="ghost"
           className="h-8 gap-1.5 px-2 text-xs"
-          aria-label="Open in VS Code"
-          title="Open this file in VS Code"
+          aria-label="Ouvrir dans VS Code"
+          title="Ouvrir ce fichier dans VS Code"
           onClick={async () => {
             try {
               await api.openInVsCode(absPath);
             } catch (e) {
               useNotifications.getState().push({
                 kind: "error",
-                title: "Open in VS Code failed",
+                title: "Échec de l'ouverture dans VS Code",
                 body: e instanceof Error ? e.message : String(e),
               });
             }
@@ -936,13 +936,13 @@ function FileDetailView({
         </div>
         <div className="min-w-0 max-w-full overflow-hidden rounded-lg border bg-card p-6 shadow-sm">
           {loading ? (
-            <div className="text-xs text-muted-foreground">Loading…</div>
+            <div className="text-xs text-muted-foreground">Chargement…</div>
           ) : error ? (
             <div className="text-xs text-destructive">
-              Failed to read file: {error.message}
+              Échec de la lecture du fichier : {error.message}
             </div>
           ) : content === undefined ? (
-            <div className="text-xs text-muted-foreground">(no content)</div>
+            <div className="text-xs text-muted-foreground">(aucun contenu)</div>
           ) : isMarkdown ? (
             <SkillMarkdown content={content} />
           ) : (

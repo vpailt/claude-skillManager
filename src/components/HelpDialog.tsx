@@ -37,7 +37,7 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
         <DialogHeader className="border-b px-6 py-4">
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
-            SkillManager — how it works
+            SkillManager — comment ça marche
             {version && (
               <Badge variant="outline" className="ml-auto font-mono text-[11px]">
                 v{version}
@@ -45,36 +45,36 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
             )}
           </DialogTitle>
           <DialogDescription>
-            A portable GUI for Claude Code plugins, marketplaces and skills.
-            Nothing here calls <code>git</code>, <code>gh</code> or{" "}
-            <code>claude</code> — everything goes through the GitHub REST API.
+            Une interface portable pour les plugins, marketplaces et skills de
+            Claude Code. Rien ici n'appelle <code>git</code>, <code>gh</code> ou{" "}
+            <code>claude</code> — tout passe par l'API REST GitHub.
           </DialogDescription>
         </DialogHeader>
         <ScrollArea className="max-h-[70vh]">
           <div className="space-y-6 px-6 py-5 text-sm">
             <section className="space-y-2">
-              <h3 className="text-base font-semibold">In a nutshell</h3>
+              <h3 className="text-base font-semibold">En résumé</h3>
               <p className="text-muted-foreground">
-                SkillManager reads and writes the same files Claude Code does
-                under <code>~/.claude/</code>: <code>installed_plugins.json</code>,
+                SkillManager lit et écrit les mêmes fichiers que Claude Code
+                sous <code>~/.claude/</code> : <code>installed_plugins.json</code>,
                 <code> known_marketplaces.json</code>, <code>settings.json</code>
-                (the <code>enabledPlugins</code> map) and the per-skill folders
-                under <code>~/.claude/skills/</code>. Anything you do in this
-                app is something Claude Code itself would have done — only the
-                UI changes.
+                (la map <code>enabledPlugins</code>) et les dossiers par skill
+                sous <code>~/.claude/skills/</code>. Tout ce que tu fais dans
+                cette app, Claude Code l'aurait fait lui-même — seule l'interface
+                change.
               </p>
             </section>
 
             <section className="space-y-2">
-              <h3 className="text-base font-semibold">The four tabs</h3>
+              <h3 className="text-base font-semibold">Les quatre onglets</h3>
               <ul className="space-y-3">
                 <li className="flex gap-3">
                   <LayoutDashboard className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                   <div>
-                    <div className="font-medium">Overview</div>
+                    <div className="font-medium">Aperçu</div>
                     <div className="text-xs text-muted-foreground">
-                      Counts (marketplaces / plugins / skills), GitHub auth
-                      status, rate-limit budget. A snapshot, no actions.
+                      Compteurs (marketplaces / plugins / skills), état d'auth
+                      GitHub, budget de quota. Un aperçu, aucune action.
                     </div>
                   </div>
                 </li>
@@ -83,10 +83,10 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
                   <div>
                     <div className="font-medium">Plugins</div>
                     <div className="text-xs text-muted-foreground">
-                      Tree of marketplaces → plugins → skills. Install, update,
-                      uninstall, or toggle a plugin's <em>enabled</em> flag
-                      (which is the only thing Claude Code looks at when
-                      deciding whether to load it).
+                      Arborescence des marketplaces → plugins → skills. Installer,
+                      mettre à jour, désinstaller, ou basculer l'indicateur{" "}
+                      <em>activé</em> d'un plugin (la seule chose que Claude Code
+                      regarde pour décider s'il doit le charger).
                     </div>
                   </div>
                 </li>
@@ -95,12 +95,12 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
                   <div>
                     <div className="font-medium">Skills</div>
                     <div className="text-xs text-muted-foreground">
-                      Flat skill search across plugins + your local
-                      <code> ~/.claude/skills/</code> folder. The Duplicate
-                      panel calls out local skills that also exist inside an
-                      installed plugin (so you can archive the local copy and
-                      keep the one Claude Code prefers). Archived skills can be
-                      restored at any time.
+                      Recherche à plat des skills dans les plugins + ton dossier
+                      local <code> ~/.claude/skills/</code>. Le panneau Doublons
+                      signale les skills locaux qui existent aussi dans un plugin
+                      installé (pour que tu puisses archiver la copie locale et
+                      garder celle que Claude Code préfère). Les skills archivés
+                      peuvent être restaurés à tout moment.
                     </div>
                   </div>
                 </li>
@@ -109,13 +109,14 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
                   <div>
                     <div className="font-medium">Admin</div>
                     <div className="text-xs text-muted-foreground">
-                      <strong>Local</strong> — manage marketplaces and bulk
-                      installs without touching GitHub.{" "}
-                      <strong>Distant</strong> — push registry changes (add
-                      plugin, bump version, upload a skill, delete a skill)
-                      through GitHub Pull Requests. <strong>PR history</strong>{" "}
-                      — track the PRs SkillManager opened and refresh their
-                      status (open / merged / closed).
+                      <strong>Local</strong> — gérer les marketplaces et les
+                      installations en masse sans toucher à GitHub.{" "}
+                      <strong>Distant</strong> — pousser des changements de
+                      registre (ajouter un plugin, incrémenter une version,
+                      envoyer un skill, supprimer un skill) via des Pull Requests
+                      GitHub. <strong>Historique des PR</strong>{" "}
+                      — suivre les PR ouvertes par SkillManager et rafraîchir
+                      leur statut (ouverte / mergée / fermée).
                     </div>
                   </div>
                 </li>
@@ -125,16 +126,16 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
             <section className="space-y-2">
               <h3 className="text-base font-semibold flex items-center gap-2">
                 <Github className="h-4 w-4" />
-                GitHub token
+                Token GitHub
               </h3>
               <div className="text-muted-foreground">
-                Required to install plugins from private repos and to use the
-                Admin → Distant workflows. A classic PAT with the{" "}
-                <code>repo</code> scope works, as does a fine-grained token
-                with <code>Contents: write</code> +{" "}
-                <code>Pull requests: write</code> on the target repos. Stored
-                in <code>config/config.properties</code> alongside the exe —
-                never written to <code>%APPDATA%</code>.
+                Requis pour installer des plugins depuis des repos privés et
+                pour utiliser les workflows Admin → Distant. Un PAT classique
+                avec le scope <code>repo</code> fonctionne, tout comme un token
+                fine-grained avec <code>Contents: write</code> +{" "}
+                <code>Pull requests: write</code> sur les repos cibles. Stocké
+                dans <code>config/config.properties</code> à côté de l'exe —
+                jamais écrit dans <code>%APPDATA%</code>.
               </div>
             </section>
 
@@ -144,11 +145,11 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
                 Marketplace vs plugin
               </h3>
               <div className="text-muted-foreground">
-                A <em>marketplace</em> is just a GitHub repo whose{" "}
-                <code>.claude-plugin/marketplace.json</code> lists plugins. Each
-                plugin's <code>source</code> usually points to a different
-                GitHub repo where the plugin code lives. Installing a plugin
-                downloads the zipball of <em>that</em> repo into{" "}
+                Un <em>marketplace</em> est simplement un repo GitHub dont le{" "}
+                <code>.claude-plugin/marketplace.json</code> liste les plugins.
+                Le <code>source</code> de chaque plugin pointe généralement vers
+                un autre repo GitHub où vit le code du plugin. Installer un
+                plugin télécharge le zipball de <em>ce</em> repo dans{" "}
                 <code>~/.claude/plugins/cache/&lt;mp&gt;/&lt;plugin&gt;/&lt;version&gt;/</code>.
               </div>
             </section>
@@ -156,56 +157,56 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
             <section className="space-y-2">
               <h3 className="text-base font-semibold flex items-center gap-2">
                 <FolderOpen className="h-4 w-4" />
-                Where files live
+                Où vivent les fichiers
               </h3>
               <div className="space-y-1 text-xs">
                 <div>
-                  <strong>App state (portable, next to the exe)</strong>
+                  <strong>État de l'app (portable, à côté de l'exe)</strong>
                 </div>
                 <ul className="ml-4 list-disc text-muted-foreground">
                   <li>
-                    <code>config/config.properties</code> — token, polling, UI
-                    prefs
+                    <code>config/config.properties</code> — token, polling,
+                    préférences UI
                   </li>
                   <li>
-                    <code>config/logging.properties</code> — log enable/level/
-                    rotation
+                    <code>config/logging.properties</code> — activation/niveau/
+                    rotation des logs
                   </li>
                   <li>
-                    <code>config/marketplaces.json</code> — list of registered
-                    marketplaces
+                    <code>config/marketplaces.json</code> — liste des
+                    marketplaces enregistrés
                   </li>
                   <li>
                     <code>config/pr_history.json</code> +{" "}
-                    <code>config/pending_prs.json</code> — admin workflow state
+                    <code>config/pending_prs.json</code> — état du workflow admin
                   </li>
                   <li>
-                    <code>logs/skillmanager.YYYY-MM-DD.log</code> — daily
-                    rolling log file
+                    <code>logs/skillmanager.YYYY-MM-DD.log</code> — fichier de
+                    log à rotation quotidienne
                   </li>
                 </ul>
                 <div className="pt-2">
-                  <strong>Claude Code state (under ~/.claude/)</strong>
+                  <strong>État de Claude Code (sous ~/.claude/)</strong>
                 </div>
                 <ul className="ml-4 list-disc text-muted-foreground">
                   <li>
-                    <code>plugins/installed_plugins.json</code> — what's
-                    installed
+                    <code>plugins/installed_plugins.json</code> — ce qui est
+                    installé
                   </li>
                   <li>
-                    <code>plugins/known_marketplaces.json</code> — registered
-                    marketplaces (incl. <code>autoUpdate</code> flag)
+                    <code>plugins/known_marketplaces.json</code> — marketplaces
+                    enregistrés (incl. l'indicateur <code>autoUpdate</code>)
                   </li>
                   <li>
-                    <code>plugins/cache/…</code> — actual plugin contents
+                    <code>plugins/cache/…</code> — contenu réel des plugins
                   </li>
                   <li>
                     <code>settings.json</code> →{" "}
                     <code>enabledPlugins["&lt;plugin&gt;@&lt;mp&gt;"]</code>
                   </li>
                   <li>
-                    <code>skills/&lt;name&gt;/</code> — your standalone user
-                    skills
+                    <code>skills/&lt;name&gt;/</code> — tes skills utilisateur
+                    autonomes
                   </li>
                 </ul>
               </div>
@@ -214,20 +215,21 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
             <section className="space-y-2">
               <h3 className="text-base font-semibold flex items-center gap-2">
                 <Keyboard className="h-4 w-4" />
-                Keyboard shortcuts
+                Raccourcis clavier
               </h3>
               <ul className="space-y-1 text-muted-foreground">
                 <li>
                   <kbd className="rounded border px-1 text-[10px]">Ctrl</kbd>+
                   <kbd className="rounded border px-1 text-[10px]">K</kbd>
-                  &nbsp;— Command palette (jump to any page / plugin / skill)
+                  &nbsp;— Palette de commandes (accède à n'importe quelle page /
+                  plugin / skill)
                 </li>
                 <li>
-                  Refresh button in the sidebar — re-scans local install +
-                  re-fetches remote registries
+                  Bouton Rafraîchir dans la barre — re-scanne l'installation
+                  locale + récupère à nouveau les registres distants
                 </li>
                 <li>
-                  Theme button in the sidebar — cycles light → dark → auto
+                  Bouton Thème dans la barre — bascule clair → sombre → auto
                 </li>
               </ul>
             </section>
@@ -235,27 +237,28 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
             <section className="space-y-2">
               <h3 className="text-base font-semibold flex items-center gap-2">
                 <HardDrive className="h-4 w-4" />
-                Portability
+                Portabilité
               </h3>
               <div className="text-muted-foreground">
-                Zip the SkillManager folder and move it — your token,
-                marketplace list, PR history and logs come with you. Nothing is
-                written to <code>%APPDATA%</code> (a one-shot migration is run
-                if a legacy blob is found there).
+                Zippe le dossier SkillManager et déplace-le — ton token, ta
+                liste de marketplaces, l'historique des PR et les logs te
+                suivent. Rien n'est écrit dans <code>%APPDATA%</code> (une
+                migration unique est lancée si un ancien blob y est trouvé).
               </div>
             </section>
 
             <section className="space-y-2">
               <h3 className="text-base font-semibold flex items-center gap-2">
                 <Bug className="h-4 w-4" />
-                Reporting an issue
+                Signaler un problème
               </h3>
               <div className="text-muted-foreground">
-                Open Settings → Logging → <em>View logs</em>, or grab the file
-                at <code>logs/skillmanager.&lt;today&gt;.log</code>. Backend
-                operations (install / uninstall / PR submission / settings
-                changes) and frontend errors are both written there. Including
-                the relevant snippet in a bug report saves a lot of guessing.
+                Ouvre Paramètres → Logging → <em>Voir les logs</em>, ou récupère
+                le fichier <code>logs/skillmanager.&lt;aujourd'hui&gt;.log</code>.
+                Les opérations backend (installation / désinstallation / envoi
+                de PR / changements de paramètres) et les erreurs frontend y sont
+                toutes écrites. Inclure l'extrait pertinent dans un rapport de
+                bug évite bien des devinettes.
               </div>
             </section>
           </div>

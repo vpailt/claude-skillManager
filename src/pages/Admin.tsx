@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ExternalLink,
   Trash2,
   RefreshCw,
   ShieldCheck,
-  ListChecks,
   Globe,
   Sparkles,
   Upload,
   HardDrive,
+  Radar,
+  GitPullRequest,
+  Package,
+  Loader2,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,16 +30,7 @@ import {
 } from "@/components/AdminWizards";
 import { AdminLocalPanel } from "@/components/AdminLocalPanel";
 import { useApp } from "@/stores/app";
-import { useNotifications } from "@/stores/notifications";
-import type { PendingPR, Plugin, RemoteSkillInfo } from "@/lib/types";
-
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-function statusVariant(status: string) {
-  if (status === "merged") return "success" as const;
-  if (status === "closed") return "destructive" as const;
-  return "secondary" as const;
-}
+import type { PendingPR, Plugin, RemoteSkillInfo, TrackedPr } from "@/lib/types";
 
 // ============================================================
 // Marketplace + plugins admin section
@@ -76,17 +71,17 @@ function MarketplaceAdminSection({
       <Card>
         <CardContent className="space-y-2 p-6 text-sm text-muted-foreground">
           <p className="font-medium text-foreground">
-            No editable marketplace available.
+            Aucun marketplace éditable disponible.
           </p>
           {allMarketplaces.length === 0 && (
             <p>
-              No marketplace registered yet. Add one from the <strong>Admin local</strong>{" "}
-              tab using <em>Add from URL</em>.
+              Aucun marketplace enregistré pour le moment. Ajoutes-en un depuis l'onglet{" "}
+              <strong>Admin local</strong> via <em>Ajouter depuis URL</em>.
             </p>
           )}
           {unconfigured.length > 0 && (
             <p>
-              These marketplaces have no GitHub repo configured:{" "}
+              Ces marketplaces n'ont aucun repo GitHub configuré :{" "}
               <span className="font-mono text-foreground">
                 {unconfigured.map((m) => m.name).join(", ")}
               </span>
@@ -95,13 +90,13 @@ function MarketplaceAdminSection({
           )}
           {githubBacked.length > 0 && (
             <p>
-              Your GitHub token does not have push access on:{" "}
+              Ton token GitHub n'a pas d'accès en écriture sur :{" "}
               <span className="font-mono text-foreground">
                 {githubBacked.map((m) => `${m.name} (${m.sourceRepo})`).join(", ")}
               </span>
-              . Use a token with the <code>repo</code> scope (classic PAT) or{" "}
+              . Utilise un token avec le scope <code>repo</code> (PAT classique) ou{" "}
               <code>Contents: write</code> + <code>Pull requests: write</code>{" "}
-              (fine-grained), then refresh.
+              (fine-grained), puis rafraîchis.
             </p>
           )}
         </CardContent>
@@ -130,7 +125,7 @@ function MarketplaceAdminSection({
       {mp && (
         <div className="space-y-3">
           <Input
-            placeholder="Filter plugins…"
+            placeholder="Filtrer les plugins…"
             value={pluginFilter}
             onChange={(e) => setPluginFilter(e.target.value)}
           />
@@ -146,8 +141,8 @@ function MarketplaceAdminSection({
             {filteredPlugins.length === 0 && (
               <Card>
                 <CardContent className="p-6 text-sm text-muted-foreground">
-                  No plugins listed in this marketplace yet. Click{" "}
-                  <em>Add plugin</em> to register one.
+                  Aucun plugin listé dans ce marketplace pour le moment. Clique sur{" "}
+                  <em>Ajouter un plugin</em> pour en enregistrer un.
                 </CardContent>
               </Card>
             )}
@@ -292,7 +287,7 @@ function PluginAdminCard({
               onClick={() => setShowSkills((v) => !v)}
             >
               <Sparkles className="mr-1 h-3 w-3" />
-              {showSkills ? "Hide" : "Show"} remote skills
+              {showSkills ? "Masquer" : "Afficher"} les skills distants
             </Button>
             {showSkills && (
               <Button
@@ -301,7 +296,7 @@ function PluginAdminCard({
                 className="h-7 w-7 p-0"
                 onClick={refreshAll}
                 disabled={remote.isFetching || pending.isFetching}
-                title="Refresh remote skills (including pending PRs)"
+                title="Rafraîchir les skills distants (y compris les PR en attente)"
               >
                 <RefreshCw
                   className={`h-3 w-3 ${
@@ -317,7 +312,7 @@ function PluginAdminCard({
             <div className="mt-2 space-y-1">
               {remote.isLoading && (
                 <div className="text-xs text-muted-foreground">
-                  Loading remote skills…
+                  Chargement des skills distants…
                 </div>
               )}
               {remote.error && (
@@ -327,7 +322,7 @@ function PluginAdminCard({
               )}
               {merged.length === 0 && !remote.isLoading && (
                 <div className="text-xs text-muted-foreground">
-                  No skills found in plugin source repo.
+                  Aucun skill trouvé dans le repo source du plugin.
                 </div>
               )}
               {merged.map((s) => {
@@ -362,7 +357,7 @@ function PluginAdminCard({
                     )}
                     {s.localFolder && (
                       <Badge variant="success" className="text-[10px]">
-                        local: v{s.localVersion || "?"}
+                        local : v{s.localVersion || "?"}
                       </Badge>
                     )}
                     {inReview && s.pending && (
@@ -373,14 +368,14 @@ function PluginAdminCard({
                             ? "bg-destructive/10 text-destructive"
                             : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
                         }`}
-                        title={`Open PR #${s.pending.prNumber}`}
+                        title={`Ouvrir la PR #${s.pending.prNumber}`}
                         onClick={() => openExternal(s.pending!.prUrl)}
                       >
                         {isDeleting
-                          ? "deletion pending"
+                          ? "suppression en attente"
                           : isAdding
-                          ? "add pending"
-                          : "update pending"}
+                          ? "ajout en attente"
+                          : "mise à jour en attente"}
                         <ExternalLink className="h-2.5 w-2.5" />
                       </button>
                     )}
@@ -401,7 +396,7 @@ function PluginAdminCard({
                           }
                         >
                           <Upload className="mr-1 h-3 w-3" />
-                          Upgrade
+                          Mettre à niveau
                         </Button>
                       )}
                       {!isDeleting && (
@@ -434,125 +429,190 @@ function PluginAdminCard({
 }
 
 // ============================================================
-// PR history
+// Marketplace PR tracking ("Suivi Marketplace")
 // ============================================================
 
-function PrHistorySection() {
-  const qc = useQueryClient();
-  const notify = useNotifications((s) => s.push);
-  const history = useQuery({ queryKey: ["pr-history"], queryFn: api.prHistoryList });
+function TrackedPrRow({ pr }: { pr: TrackedPr }) {
+  return (
+    <button
+      type="button"
+      onClick={() => openExternal(pr.url)}
+      disabled={!pr.url}
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:hover:bg-transparent"
+      title={`${pr.repo} #${pr.number} — ${pr.title}`}
+    >
+      <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+        #{pr.number}
+      </Badge>
+      <span className="min-w-0 flex-1 truncate">{pr.title || "(sans titre)"}</span>
+      {pr.author && (
+        <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
+          @{pr.author}
+        </span>
+      )}
+      {pr.createdAt && (
+        <span className="hidden shrink-0 whitespace-nowrap text-xs text-muted-foreground md:inline">
+          {shortDate(pr.createdAt)}
+        </span>
+      )}
+      <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+    </button>
+  );
+}
 
-  const refreshStatus = useMutation({
-    mutationFn: ({ repo, number }: { repo: string; number: number }) =>
-      api.prHistoryRefreshStatus(repo, number),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-history"] }),
-    onError: (e, vars) =>
-      notify({
-        kind: "error",
-        title: `Refresh PR #${vars.number} failed`,
-        body: errMsg(e),
-      }),
+function TrackingSection() {
+  const settingsQuery = useQuery({
+    queryKey: ["app-settings"],
+    queryFn: api.loadAppSettings,
   });
-  const removeRecord = useMutation({
-    mutationFn: ({ repo, number }: { repo: string; number: number }) =>
-      api.prHistoryRemove(repo, number),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-history"] }),
-    onError: (e, vars) =>
-      notify({
-        kind: "error",
-        title: `Remove PR #${vars.number} failed`,
-        body: errMsg(e),
-      }),
+  const tracked = useQuery({
+    queryKey: ["tracked-prs"],
+    queryFn: () => api.trackedMarketplacePrs(),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
-  const clearAll = useMutation({
-    mutationFn: api.prHistoryClear,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["pr-history"] }),
-    onError: (e) =>
-      notify({
-        kind: "error",
-        title: "Clear PR history failed",
-        body: errMsg(e),
-      }),
-  });
+
+  const trackedNames = useMemo(
+    () =>
+      (settingsQuery.data?.marketplaces ?? [])
+        .filter((m) => m.trackPrs)
+        .map((m) => m.name),
+    [settingsQuery.data],
+  );
+
+  // Group PRs: marketplace-scoped first, then per-plugin, under each marketplace.
+  const grouped = useMemo(() => {
+    const map = new Map<
+      string,
+      { marketplace: TrackedPr[]; plugins: Map<string, TrackedPr[]> }
+    >();
+    for (const name of trackedNames) {
+      map.set(name, { marketplace: [], plugins: new Map() });
+    }
+    for (const pr of tracked.data ?? []) {
+      if (!map.has(pr.marketplaceName)) {
+        map.set(pr.marketplaceName, { marketplace: [], plugins: new Map() });
+      }
+      const g = map.get(pr.marketplaceName)!;
+      if (pr.scope === "plugin") {
+        const arr = g.plugins.get(pr.pluginName) ?? [];
+        arr.push(pr);
+        g.plugins.set(pr.pluginName, arr);
+      } else {
+        g.marketplace.push(pr);
+      }
+    }
+    return map;
+  }, [tracked.data, trackedNames]);
+
+  const total = tracked.data?.length ?? 0;
 
   return (
-    <div className="space-y-6">
-      <section>
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-sm font-semibold">PR history</h3>
-          {history.data && history.data.length > 0 && (
-            <Button size="sm" variant="ghost" onClick={() => clearAll.mutate()}>
-              Clear all
-            </Button>
-          )}
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold">
+            <Radar className="h-4 w-4 text-primary" />
+            Suivi Marketplace
+            {total > 0 && <Badge variant="secondary">{total}</Badge>}
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            PR ouvertes sur les marketplaces dont le <strong>Suivi PR</strong> est
+            actif (onglet Admin local) et sur les repos de leurs plugins.
+          </p>
         </div>
-        <div className="space-y-2">
-          {history.data?.length === 0 && (
-            <Card>
-              <CardContent className="flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
-                <ListChecks className="h-8 w-8 opacity-40" />
-                <span>No PR history yet.</span>
-              </CardContent>
-            </Card>
-          )}
-          {history.data?.map((r) => (
-            <Card key={`${r.repo}#${r.number}`}>
-              <CardContent className="flex flex-wrap items-center gap-2 p-3 text-sm">
-                <Badge variant={statusVariant(r.status)}>{r.status}</Badge>
-                <button
-                  type="button"
-                  className="truncate text-left font-medium hover:underline"
-                  title={r.url || "no URL"}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openExternal(r.url);
-                  }}
-                >
-                  {r.title}
-                </button>
-                <Badge variant="outline" className="text-[10px]">
-                  {r.kind || "—"}
-                </Badge>
-                <span className="ml-auto text-xs text-muted-foreground">
-                  {r.repo} #{r.number} · {shortDate(r.createdAt)}
-                </span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  title={r.url || "no URL"}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openExternal(r.url);
-                  }}
-                  disabled={!r.url}
-                >
-                  <ExternalLink className="h-3 w-3" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  title="Refresh status from GitHub"
-                  onClick={() =>
-                    refreshStatus.mutate({ repo: r.repo, number: r.number })
-                  }
-                >
-                  <RefreshCw className="h-3 w-3" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  title="Remove from history"
-                  onClick={() =>
-                    removeRecord.mutate({ repo: r.repo, number: r.number })
-                  }
-                >
-                  <Trash2 className="h-3 w-3" />
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => tracked.refetch()}
+          disabled={tracked.isFetching}
+        >
+          <RefreshCw
+            className={`mr-1 h-3 w-3 ${tracked.isFetching ? "animate-spin" : ""}`}
+          />
+          Rafraîchir
+        </Button>
+      </div>
+
+      {trackedNames.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
+            <Radar className="h-8 w-8 opacity-40" />
+            <span>
+              Aucun marketplace suivi. Active le toggle <strong>Suivi PR</strong>{" "}
+              sur un marketplace dans l'onglet <strong>Admin local</strong>.
+            </span>
+          </CardContent>
+        </Card>
+      ) : tracked.isLoading ? (
+        <Card>
+          <CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Récupération des PR en cours…
+          </CardContent>
+        </Card>
+      ) : tracked.error ? (
+        <Card>
+          <CardContent className="p-6 text-sm text-destructive">
+            {(tracked.error as Error).message}
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {Array.from(grouped.entries()).map(([name, g]) => {
+            const count =
+              g.marketplace.length +
+              Array.from(g.plugins.values()).reduce((a, v) => a + v.length, 0);
+            return (
+              <Card key={name}>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Globe className="h-4 w-4 text-muted-foreground" />
+                      {name}
+                    </CardTitle>
+                    <Badge variant={count > 0 ? "secondary" : "outline"}>
+                      {count} PR
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  {count === 0 ? (
+                    <p className="px-2 text-xs text-muted-foreground">
+                      Aucune PR ouverte sur ce marketplace ni ses plugins.
+                    </p>
+                  ) : (
+                    <>
+                      {g.marketplace.length > 0 && (
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1 px-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            <GitPullRequest className="h-3 w-3" />
+                            Marketplace
+                          </div>
+                          {g.marketplace.map((pr) => (
+                            <TrackedPrRow key={`${pr.repo}#${pr.number}`} pr={pr} />
+                          ))}
+                        </div>
+                      )}
+                      {Array.from(g.plugins.entries()).map(([plugin, prs]) => (
+                        <div key={plugin} className="space-y-0.5">
+                          <div className="flex items-center gap-1 px-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            <Package className="h-3 w-3" />
+                            {plugin}
+                          </div>
+                          {prs.map((pr) => (
+                            <TrackedPrRow key={`${pr.repo}#${pr.number}`} pr={pr} />
+                          ))}
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
-      </section>
+      )}
     </div>
   );
 }
@@ -562,7 +622,11 @@ function PrHistorySection() {
 // ============================================================
 
 export function AdminPage() {
-  const [tab, setTab] = useState<"local" | "remote" | "history">("local");
+  const location = useLocation();
+  const initialTab =
+    (location.state as { tab?: "local" | "remote" | "tracking" } | null)?.tab ??
+    "local";
+  const [tab, setTab] = useState<"local" | "remote" | "tracking">(initialTab);
   const [wizard, setWizard] = useState<WizardKind | null>(null);
 
   return (
@@ -573,9 +637,9 @@ export function AdminPage() {
           <h1 className="text-xl font-semibold">Admin</h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          <strong>Local</strong> — install / uninstall / enable plugins on your
-          machine. <strong>Distant</strong> — push registry changes to GitHub
-          via Pull Requests.
+          <strong>Local</strong> — installer / désinstaller / activer des plugins sur
+          ta machine. <strong>Distant</strong> — pousser des changements de registre
+          vers GitHub via des Pull Requests.
         </p>
         <div className="mt-3 flex gap-2">
           <Button
@@ -596,11 +660,11 @@ export function AdminPage() {
           </Button>
           <Button
             size="sm"
-            variant={tab === "history" ? "default" : "ghost"}
-            onClick={() => setTab("history")}
+            variant={tab === "tracking" ? "default" : "ghost"}
+            onClick={() => setTab("tracking")}
           >
-            <ListChecks className="mr-1 h-3 w-3" />
-            PR history
+            <Radar className="mr-1 h-3 w-3" />
+            Suivi Marketplace
           </Button>
         </div>
       </header>
@@ -609,7 +673,7 @@ export function AdminPage() {
         <div className="p-4">
           {tab === "local" && <AdminLocalPanel />}
           {tab === "remote" && <MarketplaceAdminSection onLaunch={setWizard} />}
-          {tab === "history" && <PrHistorySection />}
+          {tab === "tracking" && <TrackingSection />}
         </div>
       </div>
 

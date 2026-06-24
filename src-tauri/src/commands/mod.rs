@@ -61,6 +61,67 @@ fn client_for_marketplace(name: &str) -> Result<GitHubClient> {
     client_for_cfg(&s, s.get_marketplace(name))
 }
 
+/// Pick the client for installing a *plugin* based on the plugin's own source
+/// host — not the marketplace's. A Gitea marketplace may list a GitHub-hosted
+/// plugin (or vice-versa); installing it has to hit the forge the plugin's
+/// `source.url` actually points at. Falls back to the marketplace's client when
+/// the source carries no usable host (e.g. a classic `{source:"github",repo}`
+/// entry with no url in a GitHub marketplace).
+/// Pick a client for a source identified by `url` (+ optional source `kind`):
+/// `github.com` → GitHub; a url whose host matches a registered Gitea instance
+/// → that instance; a classic `kind == "github"` with no usable url → GitHub.
+/// Returns `None` when the source gives no host hint, so the caller can fall
+/// back to the marketplace's own client.
+fn client_for_source_url(s: &Settings, url: &str, kind: &str) -> Option<Result<GitHubClient>> {
+    if !url.is_empty() {
+        let host = host_of(url);
+        if !host.is_empty() {
+            if matches!(
+                host.to_ascii_lowercase().as_str(),
+                "github.com" | "www.github.com" | "api.github.com"
+            ) {
+                return Some(GitHubClient::new(&s.github_token));
+            }
+            if let Some(inst) = s
+                .gitea_instances
+                .iter()
+                .find(|i| host_of(&i.base_url).eq_ignore_ascii_case(&host))
+            {
+                return Some(gitea_client(s, &inst.base_url));
+            }
+        }
+    }
+    if kind.eq_ignore_ascii_case("github") {
+        return Some(GitHubClient::new(&s.github_token));
+    }
+    None
+}
+
+fn client_for_source(
+    s: &Settings,
+    source: Option<&crate::models::PluginSource>,
+    marketplace_name: &str,
+) -> Result<GitHubClient> {
+    if let Some(src) = source {
+        if let Some(client) = client_for_source_url(s, &src.url, &src.kind) {
+            return client;
+        }
+    }
+    client_for_cfg(s, s.get_marketplace(marketplace_name))
+}
+
+/// Run an admin operation, logging the error to the rolling log file when it
+/// fails. Admin `prepare_*` failures were previously invisible (the error only
+/// reached the frontend toast), which made forge-side issues — auth, wrong
+/// branch, missing registry — impossible to diagnose from a shipped log.
+fn logged_admin<T>(op: &str, ctx: String, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let r = f();
+    if let Err(e) = &r {
+        tracing::warn!("{op} {ctx} failed: {e}");
+    }
+    r
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResult {
@@ -194,6 +255,11 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
         }
     }
 
+    // 4) Reconcile in-flight PR statuses so "in review" badges clear once a PR
+    // merges/closes. The dedicated PR-history tab used to drive this; the
+    // regular refresh now does it. Best-effort, provider-aware.
+    reconcile_open_prs(&settings);
+
     let local_only = local_scanner::build_local_only_marketplace();
 
     tracing::info!(
@@ -209,7 +275,8 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
 
 #[tauri::command]
 pub async fn install_plugin_cmd(plugin: Plugin) -> Result<PathBuf> {
-    let gh = client_for_marketplace(&plugin.marketplace_name)?;
+    let s = config::load_settings();
+    let gh = client_for_source(&s, plugin.source.as_ref(), &plugin.marketplace_name)?;
     let name = plugin.name.clone();
     let mp = plugin.marketplace_name.clone();
     match installer::install_plugin(&gh, &plugin) {
@@ -603,6 +670,43 @@ pub async fn gitea_auth_check(base_url: String) -> (bool, String) {
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiteaStatus {
+    pub base_url: String,
+    pub host: String,
+    pub has_token: bool,
+    pub insecure_tls: bool,
+    pub ok: bool,
+    /// Login when authenticated, otherwise a short error/status message.
+    pub user: String,
+}
+
+/// Connection status for every registered Gitea instance — the multi-host
+/// analogue of [`github_auth_check`], so the dashboard and sidebar can show
+/// each instance's auth state next to GitHub's. One network call per instance;
+/// the frontend caches the result like the GitHub checks.
+#[tauri::command]
+pub async fn gitea_status_all() -> Vec<GiteaStatus> {
+    let s = config::load_settings();
+    let mut out = Vec::new();
+    for inst in &s.gitea_instances {
+        let (ok, user) = match gitea_client(&s, &inst.base_url) {
+            Ok(g) => g.auth_check(),
+            Err(e) => (false, e.to_string()),
+        };
+        out.push(GiteaStatus {
+            host: host_of(&inst.base_url),
+            base_url: inst.base_url.clone(),
+            has_token: inst.has_token,
+            insecure_tls: inst.insecure_tls,
+            ok,
+            user,
+        });
+    }
+    out
+}
+
 /// Register or update a Gitea instance (host + TLS mode). The token is set
 /// separately via [`settings_set_gitea_token`].
 #[tauri::command]
@@ -750,6 +854,68 @@ pub async fn pr_history_clear() -> Result<()> {
     pr_history::clear_all()
 }
 
+/// Derive a PR's lifecycle status ("merged" | "closed" | "open") from a forge
+/// PR JSON object. GitHub and Gitea share these fields.
+fn pr_status_of(pr: &Value) -> &'static str {
+    if pr.get("merged_at").and_then(|v| v.as_str()).is_some() {
+        "merged"
+    } else if pr
+        .get("state")
+        .and_then(|v| v.as_str())
+        .map(|s| s.eq_ignore_ascii_case("closed"))
+        .unwrap_or(false)
+    {
+        "closed"
+    } else {
+        "open"
+    }
+}
+
+/// Re-check every PR still marked "open" in `pr_history` against its forge and,
+/// when it has merged/closed, update the history record and drop any matching
+/// `pending_prs` entry — so the Admin "in review" badges clear automatically.
+///
+/// This used to be driven by the (now removed) PR-history tab; it now runs as
+/// part of the regular refresh. Provider-aware via each record's own
+/// `provider`/`base_url`. Best-effort: per-PR failures are logged, never fatal.
+fn reconcile_open_prs(s: &Settings) {
+    for rec in pr_history::load_all()
+        .into_iter()
+        .filter(|r| r.status == "open")
+    {
+        let client = match rec.provider {
+            Provider::Gitea => gitea_client(s, &rec.base_url),
+            _ => GitHubClient::new(&s.github_token),
+        };
+        let client = match client {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    "reconcile_open_prs: client init for {}#{} failed: {}",
+                    rec.repo, rec.number, e
+                );
+                continue;
+            }
+        };
+        let pr = match client.get_pull_request(&rec.repo, rec.number) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::debug!(
+                    "reconcile_open_prs: get PR {}#{} failed: {}",
+                    rec.repo, rec.number, e
+                );
+                continue;
+            }
+        };
+        let status = pr_status_of(&pr);
+        if status != "open" {
+            let _ = pr_history::update_status(&rec.repo, rec.number, status);
+            let _ = pending_prs::remove_by_pr(&rec.repo, rec.number);
+            tracing::info!("reconcile_open_prs: PR {}#{} → {}", rec.repo, rec.number, status);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn pr_history_refresh_status(repo: String, number: i64) -> Result<String> {
     // Target the forge the PR actually lives on (recorded at creation time).
@@ -763,18 +929,7 @@ pub async fn pr_history_refresh_status(repo: String, number: i64) -> Result<Stri
         _ => gh()?,
     };
     let pr = gh.get_pull_request(&repo, number)?;
-    let status = if pr.get("merged_at").and_then(|v| v.as_str()).is_some() {
-        "merged"
-    } else if pr
-        .get("state")
-        .and_then(|v| v.as_str())
-        .map(|s| s.eq_ignore_ascii_case("closed"))
-        .unwrap_or(false)
-    {
-        "closed"
-    } else {
-        "open"
-    };
+    let status = pr_status_of(&pr);
     pr_history::update_status(&repo, number, status)?;
     // Once a PR leaves the "open" state, drop any matching pending record so
     // the Admin tab stops showing the skill as "in review".
@@ -801,6 +956,141 @@ pub async fn pending_prs_remove(
     action: String,
 ) -> Result<()> {
     pending_prs::remove(&marketplace, &plugin, &action)
+}
+
+// ---------- Marketplace PR tracking ("Suivi Marketplace") ----------
+
+/// One open PR surfaced by the marketplace tracker. Unlike [`PRRecord`] (only
+/// PRs this app opened), these are *all* open PRs on a tracked marketplace's
+/// repo and its plugins' repos, regardless of author.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedPr {
+    pub marketplace_name: String,
+    /// "marketplace" | "plugin"
+    pub scope: String,
+    /// Plugin name for plugin-scoped PRs; empty for marketplace-scoped.
+    pub plugin_name: String,
+    pub repo: String,
+    pub number: i64,
+    pub title: String,
+    pub url: String,
+    pub author: String,
+    pub created_at: String,
+    pub provider: Provider,
+    pub base_url: String,
+}
+
+/// Map a forge PR JSON object (GitHub or Gitea — same shape for these fields)
+/// into a [`TrackedPr`]. Returns `None` when the entry has no PR number.
+#[allow(clippy::too_many_arguments)]
+fn tracked_pr_from_value(
+    v: &Value,
+    marketplace_name: &str,
+    scope: &str,
+    plugin_name: &str,
+    repo: &str,
+    provider: Provider,
+    base_url: &str,
+) -> Option<TrackedPr> {
+    let number = v.get("number").and_then(|x| x.as_i64())?;
+    Some(TrackedPr {
+        marketplace_name: marketplace_name.to_string(),
+        scope: scope.to_string(),
+        plugin_name: plugin_name.to_string(),
+        repo: repo.to_string(),
+        number,
+        title: v.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        url: v.get("html_url").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        author: v
+            .get("user")
+            .and_then(|u| u.get("login"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        created_at: v.get("created_at").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        provider,
+        base_url: base_url.to_string(),
+    })
+}
+
+/// Fetch open PRs for every marketplace flagged `track_prs` (or just `only`
+/// when given) plus each of their plugins' source repos. Network-heavy and
+/// provider-aware; per-repo failures are logged and skipped, never fatal.
+///
+/// Runs the blocking forge calls inline (same pattern as `refresh_all`): it's a
+/// user-triggered fetch, not a hot path.
+#[tauri::command]
+pub async fn track_marketplace_prs(only: Option<String>) -> Result<Vec<TrackedPr>> {
+    let s = config::load_settings();
+    let mut out: Vec<TrackedPr> = Vec::new();
+    // Avoid re-querying the same plugin repo twice within one marketplace.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for cfg in &s.marketplaces {
+        if !cfg.track_prs || cfg.github_repo.is_empty() {
+            continue;
+        }
+        if let Some(name) = &only {
+            if &cfg.name != name {
+                continue;
+            }
+        }
+
+        let gh = match client_for_cfg(&s, Some(cfg)) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("track_marketplace_prs: client init failed for {}: {}", cfg.name, e);
+                continue;
+            }
+        };
+
+        match gh.list_open_prs(&cfg.github_repo) {
+            Ok(prs) => out.extend(prs.iter().filter_map(|v| {
+                tracked_pr_from_value(v, &cfg.name, "marketplace", "", &cfg.github_repo, cfg.provider, &cfg.base_url)
+            })),
+            Err(e) => tracing::warn!(
+                "track_marketplace_prs: list PRs failed for marketplace {} ({}): {}",
+                cfg.name, cfg.github_repo, e
+            ),
+        }
+
+        // Plugin-level PRs: resolve each plugin's own source repo/forge.
+        let plugins = marketplace_remote::fetch_marketplace_plugins(
+            &gh, &cfg.github_repo, &cfg.default_branch, &cfg.name,
+        );
+        for p in &plugins {
+            let Some(src) = p.source.as_ref() else { continue };
+            if src.repo.is_empty() {
+                continue;
+            }
+            if !seen.insert(format!("{}::{}", cfg.name, src.repo)) {
+                continue;
+            }
+            let pclient = match client_for_source(&s, p.source.as_ref(), &cfg.name) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        "track_marketplace_prs: plugin client init failed for {} ({}): {}",
+                        p.name, src.repo, e
+                    );
+                    continue;
+                }
+            };
+            let provider = pclient.provider();
+            let base_url = pclient.base_url();
+            match pclient.list_open_prs(&src.repo) {
+                Ok(prs) => out.extend(prs.iter().filter_map(|v| {
+                    tracked_pr_from_value(v, &cfg.name, "plugin", &p.name, &src.repo, provider, &base_url)
+                })),
+                Err(e) => tracing::warn!(
+                    "track_marketplace_prs: list PRs failed for plugin {} ({}): {}",
+                    p.name, src.repo, e
+                ),
+            }
+        }
+    }
+    Ok(out)
 }
 
 // ---------- App settings sub-commands ----------
@@ -932,8 +1222,10 @@ pub async fn admin_prepare_add_plugin(
     marketplace: String,
     source_url: String,
 ) -> Result<AdminDraft> {
-    let gh = client_for_marketplace(&marketplace)?;
-    admin_drafts::prepare_add_plugin(&gh, &marketplace, &source_url)
+    logged_admin("admin_prepare_add_plugin", format!("{source_url} -> {marketplace}"), || {
+        let gh = client_for_marketplace(&marketplace)?;
+        admin_drafts::prepare_add_plugin(&gh, &marketplace, &source_url)
+    })
 }
 
 #[tauri::command]
@@ -942,8 +1234,10 @@ pub async fn admin_prepare_bump_plugin(
     plugin_name: String,
     new_version: String,
 ) -> Result<AdminDraft> {
-    let gh = client_for_marketplace(&marketplace)?;
-    admin_drafts::prepare_bump_plugin(&gh, &marketplace, &plugin_name, &new_version)
+    logged_admin("admin_prepare_bump_plugin", format!("{plugin_name}@{marketplace} -> {new_version}"), || {
+        let gh = client_for_marketplace(&marketplace)?;
+        admin_drafts::prepare_bump_plugin(&gh, &marketplace, &plugin_name, &new_version)
+    })
 }
 
 #[tauri::command]
@@ -951,14 +1245,18 @@ pub async fn admin_prepare_remove_plugin(
     marketplace: String,
     plugin_name: String,
 ) -> Result<AdminDraft> {
-    let gh = client_for_marketplace(&marketplace)?;
-    admin_drafts::prepare_remove_plugin(&gh, &marketplace, &plugin_name)
+    logged_admin("admin_prepare_remove_plugin", format!("{plugin_name}@{marketplace}"), || {
+        let gh = client_for_marketplace(&marketplace)?;
+        admin_drafts::prepare_remove_plugin(&gh, &marketplace, &plugin_name)
+    })
 }
 
 #[tauri::command]
 pub async fn admin_prepare_upload_skill(args: UploadSkillArgs) -> Result<AdminDraft> {
-    let gh = client_for_marketplace(&args.marketplace)?;
-    admin_drafts::prepare_upload_skill(&gh, &args)
+    logged_admin("admin_prepare_upload_skill", format!("{}@{}", args.plugin_name, args.marketplace), || {
+        let gh = client_for_marketplace(&args.marketplace)?;
+        admin_drafts::prepare_upload_skill(&gh, &args)
+    })
 }
 
 #[tauri::command]
@@ -967,8 +1265,10 @@ pub async fn admin_prepare_delete_skill(
     plugin_name: String,
     skill_name: String,
 ) -> Result<AdminDraft> {
-    let gh = client_for_marketplace(&marketplace)?;
-    admin_drafts::prepare_delete_skill(&gh, &marketplace, &plugin_name, &skill_name)
+    logged_admin("admin_prepare_delete_skill", format!("{skill_name} ({plugin_name}@{marketplace})"), || {
+        let gh = client_for_marketplace(&marketplace)?;
+        admin_drafts::prepare_delete_skill(&gh, &marketplace, &plugin_name, &skill_name)
+    })
 }
 
 #[tauri::command]
@@ -1010,8 +1310,30 @@ pub async fn admin_list_remote_skills(
     marketplace: String,
     plugin_name: String,
 ) -> Result<Vec<RemoteSkillInfo>> {
-    let gh = client_for_marketplace(&marketplace)?;
-    admin_drafts::list_remote_skills(&gh, &marketplace, &plugin_name)
+    let s = config::load_settings();
+    let result = (|| {
+        // The registry lives on the marketplace's own repo → marketplace client.
+        let mp_gh = client_for_cfg(&s, s.get_marketplace(&marketplace))?;
+        let (plugin_repo, plugin_url) =
+            admin_drafts::resolve_plugin_source(&mp_gh, &marketplace, &plugin_name)?;
+        // The plugin may live on a different forge than its marketplace — read
+        // its skills with a client targeting the plugin's own host, falling back
+        // to the marketplace client when the source carries no host hint.
+        let plugin_gh = match client_for_source_url(&s, &plugin_url, "") {
+            Some(c) => c?,
+            None => mp_gh.clone(),
+        };
+        admin_drafts::list_skills_in_repo(&plugin_gh, &plugin_repo)
+    })();
+    if let Err(e) = &result {
+        tracing::warn!(
+            "admin_list_remote_skills {}@{} failed: {}",
+            plugin_name,
+            marketplace,
+            e
+        );
+    }
+    result
 }
 
 #[tauri::command]

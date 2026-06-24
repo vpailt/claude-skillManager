@@ -2,17 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity,
   ArrowRight,
   CheckCircle2,
-  Clock,
   Download,
-  Gauge,
+  ExternalLink,
   GitPullRequest,
   Globe,
   History,
   Key,
   Package,
+  Radar,
+  Server,
+  ShieldCheck,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -28,7 +29,7 @@ import { Button } from "@/components/ui/button";
 import { useApp } from "@/stores/app";
 import { useNotifications } from "@/stores/notifications";
 import { api } from "@/lib/api";
-import { cn, openExternal, shortDate } from "@/lib/utils";
+import { cn, openExternal } from "@/lib/utils";
 import type { Plugin } from "@/lib/types";
 import { useAppVersion } from "@/hooks/useAppVersion";
 
@@ -36,11 +37,11 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function relativeTime(ms: number): string {
   const diff = Date.now() - ms;
-  if (diff < 5_000) return "just now";
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
+  if (diff < 5_000) return "à l'instant";
+  if (diff < 60_000) return `il y a ${Math.floor(diff / 1000)} s`;
+  if (diff < 3_600_000) return `il y a ${Math.floor(diff / 60_000)} min`;
+  if (diff < 86_400_000) return `il y a ${Math.floor(diff / 3_600_000)} h`;
+  return `il y a ${Math.floor(diff / 86_400_000)} j`;
 }
 
 function useTicker(periodMs: number) {
@@ -51,7 +52,9 @@ function useTicker(periodMs: number) {
   }, [periodMs]);
 }
 
-function StatCard({
+// A single counter inside the grouped counters card. Clickable cell (not its
+// own Card) so the three counters read as one unit.
+function CounterCell({
   icon: Icon,
   label,
   value,
@@ -64,36 +67,19 @@ function StatCard({
   hint?: string;
   onClick?: () => void;
 }) {
-  const clickable = !!onClick;
   return (
-    <Card
-      role={clickable ? "button" : undefined}
-      tabIndex={clickable ? 0 : undefined}
+    <button
+      type="button"
       onClick={onClick}
-      onKeyDown={
-        clickable
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onClick?.();
-              }
-            }
-          : undefined
-      }
-      className={cn(
-        clickable &&
-          "cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      )}
+      className="flex flex-col items-start gap-1 px-5 py-4 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
-      <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardTitle className="text-sm font-medium">{label}</CardTitle>
-        <Icon className="h-4 w-4 text-muted-foreground" />
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-semibold">{value}</div>
-        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-      </CardContent>
-    </Card>
+      <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+        <Icon className="h-4 w-4" />
+        {label}
+      </span>
+      <span className="text-2xl font-semibold text-foreground">{value}</span>
+      {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
+    </button>
   );
 }
 
@@ -140,7 +126,6 @@ function HealthPill({
 
 function HealthBar() {
   const navigate = useNavigate();
-  useTicker(30_000);
 
   const auth = useQuery({
     queryKey: ["github-auth"],
@@ -152,9 +137,9 @@ function HealthBar() {
     queryFn: api.githubRateLimit,
     staleTime: 60_000,
   });
-  const refresh = useQuery({
-    queryKey: ["refresh"],
-    queryFn: api.refreshAll,
+  const gitea = useQuery({
+    queryKey: ["gitea-status"],
+    queryFn: api.giteaStatusAll,
     staleTime: 60_000,
   });
 
@@ -162,44 +147,40 @@ function HealthBar() {
   const tokenUser = auth.data?.[1] ?? "";
   const remaining = rate.data?.[0] ?? -1;
   const limit = rate.data?.[1] ?? -1;
-  const rateLow = remaining >= 0 && limit > 0 && remaining / limit < 0.1;
-  const lastRefresh = refresh.dataUpdatedAt
-    ? relativeTime(refresh.dataUpdatedAt)
-    : "never";
+  // Single locked Gitea instance (AlmaviaCX).
+  const g = (gitea.data ?? [])[0];
+  const giteaOk = !!g?.ok;
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border bg-card/40 px-3 py-1.5">
       <HealthPill
         icon={Key}
-        label="Token"
-        value={tokenOk ? `@${tokenUser}` : "missing"}
+        label="GitHub"
+        value={tokenOk ? `@${tokenUser}` : "non connecté"}
         tone={tokenOk ? "ok" : "warn"}
-        title={tokenOk ? `Signed in as @${tokenUser}` : "No GitHub token set"}
+        title={
+          tokenOk
+            ? `Connecté en tant que @${tokenUser}${
+                remaining >= 0 ? ` · quota ${remaining}/${limit}` : ""
+              }`
+            : "Aucun token GitHub configuré (Paramètres)"
+        }
         onClick={() => navigate("/settings")}
       />
       <span className="text-muted-foreground/30">·</span>
       <HealthPill
-        icon={Gauge}
-        label="Rate limit"
-        value={remaining >= 0 ? `${remaining} / ${limit}` : "n/a"}
-        tone={rateLow ? "warn" : "ok"}
-        title={
-          rateLow
-            ? "Less than 10% of your GitHub rate-limit remains"
-            : "Remaining GitHub API calls"
+        icon={Server}
+        label="Gitea"
+        value={
+          giteaOk ? `@${g?.user}` : g?.hasToken ? "auth échouée" : "non connecté"
         }
-      />
-      <span className="text-muted-foreground/30">·</span>
-      <HealthPill
-        icon={Clock}
-        label="Last refresh"
-        value={lastRefresh}
-        tone={refresh.dataUpdatedAt ? "muted" : "warn"}
+        tone={giteaOk ? "ok" : "warn"}
         title={
-          refresh.dataUpdatedAt
-            ? new Date(refresh.dataUpdatedAt).toLocaleString()
-            : "Refresh hasn't completed yet"
+          giteaOk
+            ? `Gitea: connecté en tant que @${g?.user}`
+            : "Gitea : non connecté — VPN GlobalProtect + token requis (Paramètres)"
         }
+        onClick={() => navigate("/settings")}
       />
     </div>
   );
@@ -243,7 +224,7 @@ function OutdatedRow({
         disabled={busy}
       >
         <Download className="mr-1 h-3 w-3" />
-        Update
+        Mettre à jour
       </Button>
     </div>
   );
@@ -256,12 +237,6 @@ function NeedsAttentionSection() {
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
 
-  const history = useQuery({
-    queryKey: ["pr-history"],
-    queryFn: api.prHistoryList,
-    staleTime: 60_000,
-  });
-
   const outdated = useMemo(
     () =>
       marketplaces
@@ -270,34 +245,29 @@ function NeedsAttentionSection() {
     [marketplaces]
   );
 
-  const openPRs = useMemo(
-    () => (history.data ?? []).filter((p) => p.status === "open"),
-    [history.data]
-  );
-
   const installMutation = useMutation({
     mutationFn: api.installPlugin,
     onSuccess: (_, plugin) => {
       qc.invalidateQueries({ queryKey: ["refresh"] });
-      notify({ kind: "success", title: "Plugin updated", body: plugin.name });
+      notify({ kind: "success", title: "Plugin mis à jour", body: plugin.name });
     },
     onError: (e, plugin) =>
       notify({
         kind: "error",
-        title: `Update failed: ${plugin.name}`,
+        title: `Échec de la mise à jour : ${plugin.name}`,
         body: errMsg(e),
       }),
   });
 
-  const totalItems = outdated.length + openPRs.length;
+  const totalItems = outdated.length;
   const pendingPluginName = installMutation.isPending
     ? installMutation.variables?.name
     : undefined;
 
   return (
-    <section className="mt-6">
+    <section>
       <div className="mb-3 flex items-center gap-2">
-        <h2 className="text-lg font-semibold">Needs attention</h2>
+        <h2 className="text-lg font-semibold">À traiter</h2>
         {totalItems > 0 && <Badge variant="warning">{totalItems}</Badge>}
       </div>
 
@@ -305,118 +275,52 @@ function NeedsAttentionSection() {
         <Card>
           <CardContent className="flex items-center gap-3 py-6 text-sm text-muted-foreground">
             <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-            All caught up — no outdated plugins, no open PRs.
+            Tout est à jour — aucun plugin obsolète.
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Card className="flex flex-col">
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Download className="h-4 w-4 text-amber-500" />
-                  Outdated plugins
-                </CardTitle>
-                {outdated.length > 0 && (
-                  <Badge variant="warning">{outdated.length}</Badge>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 space-y-1">
-              {outdated.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  All installed plugins are up to date.
-                </p>
-              ) : (
-                <>
-                  {outdated.slice(0, 5).map((p) => (
-                    <OutdatedRow
-                      key={`${p.marketplaceName}/${p.name}`}
-                      plugin={p}
-                      busy={pendingPluginName === p.name}
-                      onOpen={() => {
-                        setSelection({
-                          kind: "plugin",
-                          marketplace: p.marketplaceName,
-                          plugin: p.name,
-                        });
-                        navigate("/plugins");
-                      }}
-                      onUpdate={() => installMutation.mutate(p)}
-                    />
-                  ))}
-                  {outdated.length > 5 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelection(null);
-                        navigate("/plugins");
-                      }}
-                      className="mt-2 flex w-full items-center justify-center gap-1 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-                    >
-                      +{outdated.length - 5} more
-                      <ArrowRight className="h-3 w-3" />
-                    </button>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="flex flex-col">
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <GitPullRequest className="h-4 w-4 text-sky-500" />
-                  Open PRs
-                </CardTitle>
-                {openPRs.length > 0 && (
-                  <Badge variant="secondary">{openPRs.length}</Badge>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 space-y-1">
-              {openPRs.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No PRs awaiting merge.
-                </p>
-              ) : (
-                <>
-                  {openPRs.slice(0, 5).map((pr) => (
-                    <button
-                      type="button"
-                      key={`${pr.repo}#${pr.number}`}
-                      onClick={() => openExternal(pr.url)}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      title={`${pr.repo} #${pr.number} — ${pr.title}`}
-                    >
-                      <Badge
-                        variant="outline"
-                        className="shrink-0 font-mono text-[10px]"
-                      >
-                        #{pr.number}
-                      </Badge>
-                      <span className="min-w-0 flex-1 truncate">{pr.title}</span>
-                      <span className="hidden shrink-0 whitespace-nowrap text-xs text-muted-foreground sm:inline">
-                        {shortDate(pr.createdAt)}
-                      </span>
-                    </button>
-                  ))}
-                  {openPRs.length > 5 && (
-                    <button
-                      type="button"
-                      onClick={() => navigate("/admin")}
-                      className="mt-2 flex w-full items-center justify-center gap-1 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-                    >
-                      +{openPRs.length - 5} more
-                      <ArrowRight className="h-3 w-3" />
-                    </button>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        <Card className="flex flex-col">
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Download className="h-4 w-4 text-amber-500" />
+                Plugins obsolètes
+              </CardTitle>
+              <Badge variant="warning">{outdated.length}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="flex-1 space-y-1">
+            {outdated.slice(0, 5).map((p) => (
+              <OutdatedRow
+                key={`${p.marketplaceName}/${p.name}`}
+                plugin={p}
+                busy={pendingPluginName === p.name}
+                onOpen={() => {
+                  setSelection({
+                    kind: "plugin",
+                    marketplace: p.marketplaceName,
+                    plugin: p.name,
+                  });
+                  navigate("/plugins");
+                }}
+                onUpdate={() => installMutation.mutate(p)}
+              />
+            ))}
+            {outdated.length > 5 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelection(null);
+                  navigate("/plugins");
+                }}
+                className="mt-2 flex w-full items-center justify-center gap-1 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+              >
+                +{outdated.length - 5} de plus
+                <ArrowRight className="h-3 w-3" />
+              </button>
+            )}
+          </CardContent>
+        </Card>
       )}
     </section>
   );
@@ -447,7 +351,7 @@ const ACTIVITY_PATTERNS: {
     build: (m) => ({
       kind: "uninstall",
       level: "ok",
-      message: "Uninstalled plugin",
+      message: "Plugin désinstallé",
       detail: `${m[1]} · ${m[2]}`,
     }),
   },
@@ -456,7 +360,7 @@ const ACTIVITY_PATTERNS: {
     build: (m) => ({
       kind: "uninstall",
       level: "error",
-      message: "Uninstall failed",
+      message: "Échec de la désinstallation",
       detail: `${m[1]} · ${m[2]} — ${m[3]}`,
     }),
   },
@@ -466,7 +370,7 @@ const ACTIVITY_PATTERNS: {
     build: (m) => ({
       kind: "install",
       level: "ok",
-      message: "Installed plugin",
+      message: "Plugin installé",
       detail: `${m[1]} · ${m[2]}`,
     }),
   },
@@ -475,7 +379,7 @@ const ACTIVITY_PATTERNS: {
     build: (m) => ({
       kind: "install",
       level: "error",
-      message: "Install failed",
+      message: "Échec de l'installation",
       detail: `${m[1]} · ${m[2]} — ${m[3]}`,
     }),
   },
@@ -485,7 +389,7 @@ const ACTIVITY_PATTERNS: {
     build: (m) => ({
       kind: "uninstall-mp",
       level: "ok",
-      message: "Removed marketplace",
+      message: "Marketplace supprimée",
       detail: m[1],
     }),
   },
@@ -494,7 +398,7 @@ const ACTIVITY_PATTERNS: {
     build: (m) => ({
       kind: "uninstall-mp",
       level: "error",
-      message: "Marketplace removal failed",
+      message: "Échec de la suppression de la marketplace",
       detail: `${m[1]} — ${m[2]}`,
     }),
   },
@@ -504,7 +408,7 @@ const ACTIVITY_PATTERNS: {
     build: (m) => ({
       kind: "install-mp",
       level: "ok",
-      message: "Installed marketplace",
+      message: "Marketplace installée",
       detail: `${m[1]} · ${m[2]}`,
     }),
   },
@@ -513,7 +417,7 @@ const ACTIVITY_PATTERNS: {
     build: (m) => ({
       kind: "install-mp",
       level: "error",
-      message: "Marketplace install failed",
+      message: "Échec de l'installation de la marketplace",
       detail: `${m[1]} · ${m[2]} — ${m[3]}`,
     }),
   },
@@ -523,7 +427,7 @@ const ACTIVITY_PATTERNS: {
     build: (m) => ({
       kind: "pr",
       level: "ok",
-      message: "Opened PR",
+      message: "PR ouverte",
       detail: `#${m[1]}`,
       url: m[2],
     }),
@@ -533,7 +437,7 @@ const ACTIVITY_PATTERNS: {
     build: (m) => ({
       kind: "pr",
       level: "error",
-      message: "PR submission failed",
+      message: "Échec de l'envoi de la PR",
       detail: `${m[1]} — ${m[2]}`,
     }),
   },
@@ -592,18 +496,18 @@ function RecentActivitySection() {
   );
 
   return (
-    <section className="mt-6">
+    <section className="flex flex-col">
       <div className="mb-3 flex items-center gap-2">
-        <h2 className="text-lg font-semibold">Recent activity</h2>
+        <h2 className="text-lg font-semibold">Activité récente</h2>
         <History className="h-4 w-4 text-muted-foreground" />
       </div>
-      <Card>
+      <Card className="flex-1">
         <CardContent className="py-3">
           {logTail.isLoading && events.length === 0 ? (
-            <p className="px-2 py-2 text-sm text-muted-foreground">Loading…</p>
+            <p className="px-2 py-2 text-sm text-muted-foreground">Chargement…</p>
           ) : events.length === 0 ? (
             <p className="px-2 py-2 text-sm text-muted-foreground">
-              No install, uninstall or PR events logged yet.
+              Aucun événement d'installation, désinstallation ou PR enregistré.
             </p>
           ) : (
             <ul className="space-y-0.5">
@@ -648,7 +552,7 @@ function RecentActivitySection() {
                       variant={isError ? "destructive" : "success"}
                       className="shrink-0 px-1.5 py-0 text-[10px]"
                     >
-                      {isError ? "failed" : "ok"}
+                      {isError ? "échec" : "ok"}
                     </Badge>
                     <span
                       className="min-w-0 flex-1 truncate text-muted-foreground"
@@ -673,6 +577,213 @@ function RecentActivitySection() {
   );
 }
 
+// ============================================================
+// Marketplace PR tracking summary
+// ============================================================
+
+function MarketplaceTrackingSection() {
+  const navigate = useNavigate();
+  const settings = useQuery({
+    queryKey: ["app-settings"],
+    queryFn: api.loadAppSettings,
+    staleTime: 60_000,
+  });
+  const trackedNames = useMemo(
+    () =>
+      (settings.data?.marketplaces ?? [])
+        .filter((m) => m.trackPrs)
+        .map((m) => m.name),
+    [settings.data]
+  );
+  const tracked = useQuery({
+    queryKey: ["tracked-prs"],
+    queryFn: () => api.trackedMarketplacePrs(),
+    staleTime: 5 * 60_000,
+    enabled: trackedNames.length > 0,
+    refetchOnWindowFocus: false,
+  });
+
+  // Open PR count per tracked marketplace (marketplace-scope + plugin-scope).
+  const counts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const name of trackedNames) map.set(name, 0);
+    for (const pr of tracked.data ?? []) {
+      map.set(pr.marketplaceName, (map.get(pr.marketplaceName) ?? 0) + 1);
+    }
+    return map;
+  }, [tracked.data, trackedNames]);
+
+  const total = tracked.data?.length ?? 0;
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-2">
+        <Radar className="h-4 w-4 text-primary" />
+        <h2 className="text-lg font-semibold">Suivi des marketplaces</h2>
+        {trackedNames.length > 0 && total > 0 && (
+          <Badge variant="secondary">{total} PR</Badge>
+        )}
+      </div>
+      <Card
+        role="button"
+        tabIndex={0}
+        onClick={() => navigate("/admin", { state: { tab: "tracking" } })}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            navigate("/admin", { state: { tab: "tracking" } });
+          }
+        }}
+        className="cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <CardContent className="py-4">
+          {trackedNames.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Aucun marketplace suivi. Active le toggle <strong>Suivi PR</strong>{" "}
+              sur un marketplace dans <strong>Administration → Admin local</strong>.
+            </p>
+          ) : tracked.isLoading ? (
+            <p className="text-sm text-muted-foreground">Chargement des PR en cours…</p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+              <div className="flex items-center gap-3">
+                <GitPullRequest className="h-7 w-7 text-sky-500" />
+                <div>
+                  <div className="text-2xl font-semibold">{total}</div>
+                  <div className="text-xs text-muted-foreground">
+                    PR ouverte{total === 1 ? "" : "s"} sur{" "}
+                    {trackedNames.length} marketplace
+                    {trackedNames.length === 1 ? "" : "s"} suivi
+                    {trackedNames.length === 1 ? "" : "s"} (+ plugins)
+                  </div>
+                </div>
+              </div>
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                {Array.from(counts.entries()).map(([name, n]) => (
+                  <Badge
+                    key={name}
+                    variant={n > 0 ? "secondary" : "outline"}
+                    className="max-w-[14rem] truncate"
+                    title={`${name}: ${n} PR`}
+                  >
+                    {name} · {n}
+                  </Badge>
+                ))}
+              </div>
+              <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+// ============================================================
+// AlmaviaCX marketplace highlight
+// ============================================================
+
+const ACX_REPO_URL = "https://git.almaviacx.local/Claude/acx-cl-marketplace";
+const ACX_GITEA_HOST = "git.almaviacx.local";
+
+function AcxMarketplaceCard() {
+  const navigate = useNavigate();
+  const gitea = useQuery({
+    queryKey: ["gitea-status"],
+    queryFn: api.giteaStatusAll,
+    staleTime: 60_000,
+  });
+  const status = (gitea.data ?? []).find((g) => g.host === ACX_GITEA_HOST);
+  const connected = !!status?.ok;
+
+  return (
+    <Card className="flex flex-1 flex-col border-primary/30 bg-primary/[0.03]">
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldCheck className="h-5 w-5 text-primary" />
+            acx-cl-marketplace
+          </CardTitle>
+          {connected ? (
+            <Badge variant="success" className="gap-1">
+              <CheckCircle2 className="h-3 w-3" />
+              Connecté à Gitea{status?.user ? ` @${status.user}` : ""}
+            </Badge>
+          ) : (
+            <Badge variant="warning" className="gap-1">
+              <Server className="h-3 w-3" />
+              Non connecté
+            </Badge>
+          )}
+        </div>
+        <CardDescription>
+          Marketplace dédiée, maintenue et enrichie par AlmaviaCX.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <button
+          type="button"
+          onClick={() => openExternal(ACX_REPO_URL)}
+          className="flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+          title="Ouvrir le repo dans le navigateur"
+        >
+          <Globe className="h-3.5 w-3.5" />
+          {ACX_REPO_URL}
+          <ExternalLink className="h-3 w-3" />
+        </button>
+
+        <div className="rounded-md border bg-card/40 p-3">
+          <div className="mb-1.5 text-xs font-medium text-muted-foreground">
+            Pour récupérer les mises à jour de la marketplace et upgrader les
+            skills :
+          </div>
+          <ul className="space-y-1 text-xs">
+            <li className="flex items-center gap-2">
+              {connected ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+              ) : (
+                <Server className="h-3.5 w-3.5 text-amber-500" />
+              )}
+              VPN <strong>GlobalProtect</strong> actif
+            </li>
+            <li className="flex items-center gap-2">
+              {connected ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+              ) : (
+                <Key className="h-3.5 w-3.5 text-amber-500" />
+              )}
+              <span>
+                Connexion <strong>Gitea</strong> configurée (
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate("/settings", { state: { scrollTo: "gitea" } })
+                  }
+                  className="font-medium text-primary hover:underline"
+                >
+                  Paramètres → Gitea
+                </button>
+                )
+              </span>
+            </li>
+          </ul>
+          {!connected && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3 h-7 text-xs"
+              onClick={() => navigate("/settings", { state: { scrollTo: "gitea" } })}
+            >
+              <Key className="mr-1 h-3 w-3" />
+              Configurer Gitea
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function OverviewPage() {
   const navigate = useNavigate();
   const marketplaces = useApp((s) => s.marketplaces);
@@ -690,28 +801,12 @@ export function OverviewPage() {
     marketplaces.flatMap((m) => m.plugins).reduce((acc, p) => acc + p.skills.length, 0) +
     (localOnly?.plugins.length ?? 0);
 
-  const auth = useQuery({
-    queryKey: ["github-auth"],
-    queryFn: api.githubAuthCheck,
-    staleTime: 60_000,
-  });
-  const rate = useQuery({
-    queryKey: ["github-rate"],
-    queryFn: api.githubRateLimit,
-    staleTime: 60_000,
-  });
-
-  const goToMarketplace = (name: string) => {
-    setSelection({ kind: "marketplace", marketplace: name });
-    navigate("/plugins");
-  };
-
   return (
     <div className="h-full w-full overflow-auto">
       <div className="flex w-full flex-col p-6">
         <header className="mb-4">
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold">Overview</h1>
+            <h1 className="text-2xl font-semibold">Dashboard</h1>
             {version && (
               <Badge variant="outline" className="font-mono text-[11px]">
                 v{version}
@@ -719,120 +814,64 @@ export function OverviewPage() {
             )}
           </div>
           <p className="text-sm text-muted-foreground">
-            Snapshot of your Claude Code plugins, skills and marketplaces.
+            Aperçu de tes plugins, skills et marketplaces Claude Code.
           </p>
         </header>
 
         <HealthBar />
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            icon={Globe}
-            label="Marketplaces"
-            value={marketplaces.length}
-            hint={`${marketplaces.filter((m) => m.installed).length} installed`}
-            onClick={() => {
-              setSelection(null);
-              navigate("/plugins");
-            }}
-          />
-          <StatCard
-            icon={Package}
-            label="Plugins"
-            value={installedPlugins}
-            hint={`${totalPlugins} known`}
-            onClick={() => {
-              setSelection(null);
-              navigate("/plugins");
-            }}
-          />
-          <StatCard
-            icon={Sparkles}
-            label="Skills"
-            value={totalSkills}
-            onClick={() => {
-              setSelection(null);
-              navigate("/skills");
-            }}
-          />
-          <StatCard
-            icon={Activity}
-            label="GitHub"
-            value={
-              auth.data?.[0] ? (
-                <span className="text-base font-normal">@{auth.data[1]}</span>
-              ) : (
-                <span className="text-base font-normal text-muted-foreground">
-                  no token
-                </span>
-              )
-            }
-            hint={
-              rate.data && rate.data[0] >= 0
-                ? `rate-limit: ${rate.data[0]}/${rate.data[1]}`
-                : undefined
-            }
-            onClick={() => navigate("/settings")}
-          />
+        {/* Indicateurs (pleine largeur, en haut) */}
+        <Card>
+          <CardContent className="grid grid-cols-3 divide-x divide-border p-0">
+            <CounterCell
+              icon={Globe}
+              label="Marketplaces"
+              value={marketplaces.length}
+              hint={`${marketplaces.filter((m) => m.installed).length} installés`}
+              onClick={() => {
+                setSelection(null);
+                navigate("/plugins");
+              }}
+            />
+            <CounterCell
+              icon={Package}
+              label="Plugins"
+              value={installedPlugins}
+              hint={`${totalPlugins} connus`}
+              onClick={() => {
+                setSelection(null);
+                navigate("/plugins");
+              }}
+            />
+            <CounterCell
+              icon={Sparkles}
+              label="Skills"
+              value={totalSkills}
+              onClick={() => {
+                setSelection(null);
+                navigate("/skills");
+              }}
+            />
+          </CardContent>
+        </Card>
+
+        {/* Ligne 1 : Marketplace AlmaviaCX (gauche) + Activité récente (droite) — même hauteur */}
+        <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch">
+          <section className="flex flex-col">
+            <div className="mb-3 flex items-center gap-2">
+              <Globe className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-lg font-semibold">Marketplace AlmaviaCX</h2>
+            </div>
+            <AcxMarketplaceCard />
+          </section>
+          <RecentActivitySection />
         </div>
 
-        <NeedsAttentionSection />
-
-        <RecentActivitySection />
-
-        <section className="mt-8">
-          <h2 className="mb-3 text-lg font-semibold">Marketplaces</h2>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {marketplaces.map((m) => (
-              <Card
-                key={m.name}
-                role="button"
-                tabIndex={0}
-                onClick={() => goToMarketplace(m.name)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    goToMarketplace(m.name);
-                  }
-                }}
-                className="cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <CardTitle className="truncate text-base">{m.name}</CardTitle>
-                    {m.installed ? (
-                      <Badge variant="success" className="shrink-0">
-                        installed
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="shrink-0">
-                        not installed
-                      </Badge>
-                    )}
-                  </div>
-                  <CardDescription className="truncate">
-                    {m.sourceRepo || m.sourcePath || m.sourceKind}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="text-sm text-muted-foreground">
-                  {m.plugins.length} plugin{m.plugins.length === 1 ? "" : "s"}
-                  {m.editable && (
-                    <Badge variant="secondary" className="ml-2">
-                      editable
-                    </Badge>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-            {marketplaces.length === 0 && (
-              <Card>
-                <CardContent className="p-6 text-sm text-muted-foreground">
-                  No marketplaces configured yet. Add one from the Settings page.
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        </section>
+        {/* Ligne 2 : À traiter (gauche) + Suivi des marketplaces (droite) */}
+        <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start">
+          <NeedsAttentionSection />
+          <MarketplaceTrackingSection />
+        </div>
       </div>
     </div>
   );

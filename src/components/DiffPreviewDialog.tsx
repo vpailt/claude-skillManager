@@ -84,15 +84,15 @@ function FileDiff({
         <div className="max-h-[400px] overflow-auto">
           {entry.newContent === null && entry.oldContent === null ? (
             <div className="px-3 py-2 text-xs text-muted-foreground">
-              (summary entry — no inline diff)
+              (entrée récapitulative — pas de diff en ligne)
             </div>
           ) : (
             <ReactDiffViewer
               oldValue={entry.oldContent ?? ""}
               newValue={entry.newContent ?? ""}
               splitView={splitView}
-              leftTitle={splitView ? "Remote (current)" : undefined}
-              rightTitle={splitView ? "Local (proposed)" : undefined}
+              leftTitle={splitView ? "Distant (actuel)" : undefined}
+              rightTitle={splitView ? "Local (proposé)" : undefined}
               hideLineNumbers={false}
               useDarkTheme={resolvedTheme === "dark"}
               styles={{
@@ -185,7 +185,7 @@ export function DiffPreviewDialog({
               <code className="text-xs">{draft.targetRepo}</code>
               <span className="text-muted-foreground">→</span>
               <code className="text-xs">{draft.branchName}</code>
-              <span className="text-muted-foreground">on</span>
+              <span className="text-muted-foreground">sur</span>
               <code className="text-xs">{draft.baseBranch}</code>
             </div>
           </DialogDescription>
@@ -198,15 +198,15 @@ export function DiffPreviewDialog({
                 <CardContent className="flex items-center gap-3 p-3 text-sm">
                   <Tag className="h-4 w-4 text-amber-500" />
                   <div className="flex-1">
-                    Tag <code className="font-mono">{draft.needsTag.tag}</code> is
-                    missing on <code className="font-mono">{draft.needsTag.repo}</code>.
+                    Le tag <code className="font-mono">{draft.needsTag.tag}</code> est
+                    absent sur <code className="font-mono">{draft.needsTag.repo}</code>.
                     {tagIsAutoCreated && (
                       <span className="ml-2 text-muted-foreground">
-                        Will be created automatically from this PR's branch.
+                        Il sera créé automatiquement depuis la branche de cette PR.
                       </span>
                     )}
                     {tagCreated && (
-                      <span className="ml-2 text-emerald-600">Created.</span>
+                      <span className="ml-2 text-emerald-600">Créé.</span>
                     )}
                     {tagError && (
                       <div className="text-destructive">{tagError}</div>
@@ -226,7 +226,7 @@ export function DiffPreviewDialog({
                       {createTagMutation.isPending && (
                         <Loader2 className="mr-1 h-3 w-3 animate-spin" />
                       )}
-                      Create tag
+                      Créer le tag
                     </Button>
                   )}
                 </CardContent>
@@ -238,7 +238,7 @@ export function DiffPreviewDialog({
                 <CardContent className="space-y-1 p-3 text-sm">
                   <div className="flex items-center gap-2 font-medium text-amber-600">
                     <AlertCircle className="h-4 w-4" />
-                    Validation problems
+                    Problèmes de validation
                   </div>
                   <ul className="ml-6 list-disc text-xs">
                     {draft.problems.map((p, i) => (
@@ -254,7 +254,7 @@ export function DiffPreviewDialog({
                 <CardContent className="space-y-2 p-3 text-sm">
                   <div className="flex items-center gap-2 font-medium text-destructive">
                     <AlertCircle className="h-4 w-4" />
-                    Conflicting open PRs touch the same files
+                    Des PR ouvertes en conflit touchent les mêmes fichiers
                   </div>
                   <ul className="space-y-1">
                     {draft.conflicts.map((c) => (
@@ -282,8 +282,8 @@ export function DiffPreviewDialog({
             {!hasErrors && !hasConflicts && (!draft.needsTag || tagIsAutoCreated) && (
               <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-400">
                 <CheckCircle2 className="h-4 w-4" />
-                Ready to submit. {draft.changes.length} file change(s),{" "}
-                {draft.deletions.length} deletion(s).
+                Prêt à soumettre. {draft.changes.length} fichier(s) modifié(s),{" "}
+                {draft.deletions.length} suppression(s).
               </div>
             )}
 
@@ -292,10 +292,10 @@ export function DiffPreviewDialog({
                 <CardContent className="space-y-1 p-3 text-sm">
                   <div className="flex items-center gap-2 font-medium text-primary">
                     <GitBranch className="h-4 w-4" />
-                    Companion PR will also be opened
+                    Une PR compagnon sera aussi ouverte
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    {draft.companion.prTitle} on{" "}
+                    {draft.companion.prTitle} sur{" "}
                     <code>{draft.companion.targetRepo}</code>
                   </div>
                 </CardContent>
@@ -305,7 +305,7 @@ export function DiffPreviewDialog({
             <div>
               <div className="mb-2 flex items-center gap-2">
                 <span className="text-sm font-medium">
-                  {draft.entries.length} file change(s)
+                  {draft.entries.length} fichier(s) modifié(s)
                 </span>
                 <div className="ml-auto inline-flex overflow-hidden rounded-md border text-[11px]">
                   <button
@@ -316,7 +316,7 @@ export function DiffPreviewDialog({
                         ? "bg-primary text-primary-foreground"
                         : "bg-background hover:bg-accent"
                     }`}
-                    title="Side-by-side: remote (left) vs local (right)"
+                    title="Côte à côte : distant (gauche) vs local (droite)"
                   >
                     <Columns2 className="h-3 w-3" />
                     Côte à côte
@@ -329,7 +329,7 @@ export function DiffPreviewDialog({
                         ? "bg-primary text-primary-foreground"
                         : "bg-background hover:bg-accent"
                     }`}
-                    title="Unified inline diff"
+                    title="Diff unifié en ligne"
                   >
                     <Rows2 className="h-3 w-3" />
                     Unifié
@@ -349,7 +349,7 @@ export function DiffPreviewDialog({
 
             {draft.prBody && (
               <div>
-                <div className="mb-1 text-sm font-medium">PR body</div>
+                <div className="mb-1 text-sm font-medium">Corps de la PR</div>
                 <pre className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">
                   {draft.prBody}
                 </pre>
@@ -360,7 +360,7 @@ export function DiffPreviewDialog({
 
         <DialogFooter>
           <DialogClose asChild>
-            <Button variant="outline">Cancel</Button>
+            <Button variant="outline">Annuler</Button>
           </DialogClose>
           <Button
             onClick={() => submitMutation.mutate()}
@@ -369,7 +369,7 @@ export function DiffPreviewDialog({
             {submitMutation.isPending && (
               <Loader2 className="mr-1 h-3 w-3 animate-spin" />
             )}
-            Open PR{draft.companion ? "s" : ""}
+            {draft.companion ? "Ouvrir les PR" : "Ouvrir la PR"}
           </Button>
         </DialogFooter>
         {submitMutation.error && (

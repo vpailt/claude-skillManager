@@ -41,17 +41,17 @@ function CopyCard({
           </Badge>
         ) : (
           <Badge variant="outline" className="text-[10px] text-muted-foreground">
-            no version
+            aucune version
           </Badge>
         )}
       </div>
       <div className="space-y-0.5 text-muted-foreground">
         <div>
-          <span className="text-foreground/70">Modified:</span>{" "}
+          <span className="text-foreground/70">Modifié :</span>{" "}
           {copy.lastModified ? shortDate(copy.lastModified) : "—"}
         </div>
         <div className="break-all">
-          <span className="text-foreground/70">Folder:</span> {copy.folder}
+          <span className="text-foreground/70">Dossier :</span> {copy.folder}
         </div>
         {copy.description && (
           <div className="line-clamp-3 italic">{copy.description}</div>
@@ -85,12 +85,12 @@ export function DuplicateSkillsPanel({
         <div className="flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 text-amber-500" />
           <h3 className="text-sm font-semibold">
-            Duplicate skills ({dup.data.length})
+            Skills en doublon ({dup.data.length})
           </h3>
         </div>
         <p className="text-xs text-muted-foreground">
-          Present both in <code>~/.claude/skills/</code> and in an installed
-          plugin. Click to compare.
+          Présent à la fois dans <code>~/.claude/skills/</code> et dans un
+          plugin installé. Clique pour comparer.
         </p>
         <div className="space-y-1">
           {dup.data.map((d) => {
@@ -121,17 +121,17 @@ export function DuplicateSkillsPanel({
               >
                 <span className="truncate font-medium">{d.name}</span>
                 <span className="text-muted-foreground">
-                  · {d.pluginCopies.length} plugin copy
-                  {d.pluginCopies.length === 1 ? "" : "ies"}
+                  · {d.pluginCopies.length} copie
+                  {d.pluginCopies.length === 1 ? "" : "s"} dans un plugin
                 </span>
                 {localIsNewer && (
                   <Badge variant="secondary" className="ml-auto text-[10px]">
-                    local newer
+                    local plus récent
                   </Badge>
                 )}
                 {localIsOlder && (
                   <Badge variant="outline" className="ml-auto text-[10px]">
-                    local older
+                    local plus ancien
                   </Badge>
                 )}
               </button>
@@ -180,25 +180,26 @@ export function DuplicateSkillDetail({
           <AlertTriangle className="h-4 w-4 text-amber-500" />
           <h2 className="text-base font-semibold">{dup.name}</h2>
           <Badge variant="warning" className="text-[10px]">
-            duplicate
+            doublon
           </Badge>
           {localIsNewer && (
             <Badge variant="secondary" className="text-[10px]">
-              local is newer
+              local plus récent
             </Badge>
           )}
           {localIsOlder && (
             <Badge variant="outline" className="text-[10px]">
-              local is older
+              local plus ancien
             </Badge>
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          This skill is installed locally and is also bundled in{" "}
-          {dup.pluginCopies.length} plugin copy
-          {dup.pluginCopies.length === 1 ? "" : "ies"}. Archiving moves the
-          local copy to <code>~/.claude/skills_archive/</code> — Claude Code
-          will stop loading the duplicate, but you can restore it later.
+          Ce skill est installé localement et est aussi inclus dans{" "}
+          {dup.pluginCopies.length} copie
+          {dup.pluginCopies.length === 1 ? "" : "s"} de plugin. L'archivage
+          déplace la copie locale vers <code>~/.claude/skills_archive/</code> —
+          Claude Code arrêtera de charger le doublon, mais tu pourras le
+          restaurer plus tard.
         </p>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
           <CopyCard copy={dup.local} origin="local" />
@@ -228,7 +229,7 @@ export function DuplicateSkillDetail({
             ) : (
               <Archive className="mr-1 h-3 w-3" />
             )}
-            Archive local copy
+            Archiver la copie locale
           </Button>
         </div>
       </CardContent>
@@ -268,7 +269,7 @@ export function ArchivedSkillDetail({
           <Archive className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-base font-semibold">{skill.name}</h2>
           <Badge variant="outline" className="text-[10px]">
-            archived
+            archivé
           </Badge>
           {skill.version && (
             <Badge variant="outline" className="text-[10px]">
@@ -281,15 +282,15 @@ export function ArchivedSkillDetail({
         )}
         <div className="space-y-1 text-xs text-muted-foreground">
           <div>
-            <span className="text-foreground/70">Archived:</span>{" "}
+            <span className="text-foreground/70">Archivé :</span>{" "}
             {skill.archivedAt ? shortDate(skill.archivedAt) : "—"}
           </div>
           <div>
-            <span className="text-foreground/70">Original name:</span>{" "}
+            <span className="text-foreground/70">Nom d'origine :</span>{" "}
             {skill.originalName}
           </div>
           <div className="break-all">
-            <span className="text-foreground/70">Folder:</span> {skill.folder}
+            <span className="text-foreground/70">Dossier :</span> {skill.folder}
           </div>
         </div>
         {restore.error && (
@@ -312,18 +313,18 @@ export function ArchivedSkillDetail({
             ) : (
               <ArchiveRestore className="mr-1 h-3 w-3" />
             )}
-            Restore to ~/.claude/skills/
+            Restaurer vers ~/.claude/skills/
           </Button>
         </div>
         {skill.skillMdPath && (
           <div className="max-h-96 overflow-auto rounded-md border bg-card p-3">
             {content.isLoading ? (
-              <div className="text-xs text-muted-foreground">Loading…</div>
+              <div className="text-xs text-muted-foreground">Chargement…</div>
             ) : content.data ? (
               <SkillMarkdown content={content.data} />
             ) : (
               <div className="text-xs text-muted-foreground">
-                (failed to read)
+                (échec de lecture)
               </div>
             )}
           </div>

@@ -29,11 +29,11 @@ import type { InstallState, Marketplace, Plugin, Skill } from "@/lib/types";
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 const STATE_LABEL: Record<InstallState, string> = {
-  not_installed: "not installed",
-  installed: "installed",
-  outdated: "update available",
-  local_only: "local only",
-  unknown: "unknown",
+  not_installed: "non installé",
+  installed: "installé",
+  outdated: "mise à jour disponible",
+  local_only: "local uniquement",
+  unknown: "inconnu",
 };
 
 function stateVariant(s: InstallState) {
@@ -137,7 +137,7 @@ function SkillRow({
       <BookOpen className="h-3.5 w-3.5 shrink-0 text-violet-400/80" />
       {!skill.folder && skill.remotePresent && (
         <Badge variant="outline" className="shrink-0 text-[10px]">
-          remote
+          distant
         </Badge>
       )}
       <span className="min-w-0 flex-1 truncate">{skill.name}</span>
@@ -180,7 +180,7 @@ function MarketplaceBlock({ marketplace }: { marketplace: Marketplace }) {
         <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />
         {marketplace.installed && (
           <Badge variant="success" className="shrink-0">
-            installed
+            installé
           </Badge>
         )}
         <span className="min-w-0 flex-1 truncate">{marketplace.name}</span>
@@ -192,7 +192,7 @@ function MarketplaceBlock({ marketplace }: { marketplace: Marketplace }) {
           ))}
           {marketplace.plugins.length === 0 && (
             <div className="px-3 py-2 text-xs text-muted-foreground">
-              No plugins listed.
+              Aucun plugin listé.
             </div>
           )}
         </div>
@@ -234,12 +234,12 @@ function DetailPanel({ selection }: { selection: Selection }) {
     mutationFn: api.installPlugin,
     onSuccess: (_, plugin) => {
       qc.invalidateQueries({ queryKey: ["refresh"] });
-      notify({ kind: "success", title: "Plugin installed", body: plugin.name });
+      notify({ kind: "success", title: "Plugin installé", body: plugin.name });
     },
     onError: (e, plugin) =>
       notify({
         kind: "error",
-        title: `Install failed: ${plugin.name}`,
+        title: `Échec de l'installation : ${plugin.name}`,
         body: errMsg(e),
       }),
   });
@@ -247,12 +247,12 @@ function DetailPanel({ selection }: { selection: Selection }) {
     mutationFn: api.uninstallPlugin,
     onSuccess: (_, plugin) => {
       qc.invalidateQueries({ queryKey: ["refresh"] });
-      notify({ kind: "success", title: "Plugin uninstalled", body: plugin.name });
+      notify({ kind: "success", title: "Plugin désinstallé", body: plugin.name });
     },
     onError: (e, plugin) =>
       notify({
         kind: "error",
-        title: `Uninstall failed: ${plugin.name}`,
+        title: `Échec de la désinstallation : ${plugin.name}`,
         body: errMsg(e),
       }),
   });
@@ -270,7 +270,7 @@ function DetailPanel({ selection }: { selection: Selection }) {
     onError: (e, vars) =>
       notify({
         kind: "error",
-        title: `Toggle failed: ${vars.plugin}`,
+        title: `Échec du basculement : ${vars.plugin}`,
         body: errMsg(e),
       }),
   });
@@ -289,7 +289,7 @@ function DetailPanel({ selection }: { selection: Selection }) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 py-20 text-center text-sm text-muted-foreground">
         <Package className="h-8 w-8 opacity-40" />
-        <span>Select a marketplace, plugin or skill to see details.</span>
+        <span>Sélectionne un marketplace, plugin ou skill pour voir les détails.</span>
       </div>
     );
   }
@@ -303,16 +303,16 @@ function DetailPanel({ selection }: { selection: Selection }) {
           <Breadcrumb selection={selection} />
           <div className="flex items-center justify-between">
             <CardTitle>{m.name}</CardTitle>
-            {m.installed && <Badge variant="success">installed</Badge>}
+            {m.installed && <Badge variant="success">installé</Badge>}
           </div>
           <CardDescription>{m.sourceRepo || m.sourcePath || m.sourceKind}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
           <div>
-            <span className="text-muted-foreground">Plugins:</span> {m.plugins.length}
+            <span className="text-muted-foreground">Plugins :</span> {m.plugins.length}
           </div>
           <div>
-            <span className="text-muted-foreground">Last updated:</span>{" "}
+            <span className="text-muted-foreground">Dernière mise à jour :</span>{" "}
             {m.lastUpdated || "—"}
           </div>
           {m.installLocation && (
@@ -335,7 +335,7 @@ function DetailPanel({ selection }: { selection: Selection }) {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle>{p.name}</CardTitle>
-              <CardDescription>{p.description || "No description"}</CardDescription>
+              <CardDescription>{p.description || "Aucune description"}</CardDescription>
             </div>
             <Badge variant={stateVariant(p.installState)}>
               {STATE_LABEL[p.installState]}
@@ -351,7 +351,7 @@ function DetailPanel({ selection }: { selection: Selection }) {
                 disabled={installMutation.isPending}
               >
                 <Download className="mr-1 h-3 w-3" />
-                {p.installState === "outdated" ? "Update" : "Install"}
+                {p.installState === "outdated" ? "Mettre à jour" : "Installer"}
               </Button>
             )}
             {(p.installState === "installed" ||
@@ -364,14 +364,14 @@ function DetailPanel({ selection }: { selection: Selection }) {
                 disabled={uninstallMutation.isPending}
               >
                 <Trash2 className="mr-1 h-3 w-3" />
-                Uninstall
+                Désinstaller
               </Button>
             )}
             {p.skills.length > 0 && (
               <Button
                 size="sm"
                 variant="outline"
-                title={`Open Skills tab filtered on ${p.name}`}
+                title={`Ouvrir l'onglet Skills filtré sur ${p.name}`}
                 onClick={() =>
                   navigate(
                     `/skills?marketplace=${encodeURIComponent(
@@ -381,12 +381,12 @@ function DetailPanel({ selection }: { selection: Selection }) {
                 }
               >
                 <Sparkles className="mr-1 h-3 w-3" />
-                View skills ({p.skills.length})
+                Voir les skills ({p.skills.length})
               </Button>
             )}
             {p.installState !== "not_installed" && (
               <div className="ml-auto flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Enabled</span>
+                <span className="text-xs text-muted-foreground">Activé</span>
                 <Switch
                   checked={!!p.enabled}
                   onCheckedChange={(v) =>
@@ -407,11 +407,11 @@ function DetailPanel({ selection }: { selection: Selection }) {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <div className="text-xs text-muted-foreground">Installed version</div>
+              <div className="text-xs text-muted-foreground">Version installée</div>
               <div>{p.installedVersion || "—"}</div>
             </div>
             <div>
-              <div className="text-xs text-muted-foreground">Latest version</div>
+              <div className="text-xs text-muted-foreground">Dernière version</div>
               <div>{p.latestVersion || "—"}</div>
             </div>
             <div>
@@ -443,7 +443,7 @@ function DetailPanel({ selection }: { selection: Selection }) {
         <CardHeader>
           <Breadcrumb selection={selection} />
           <CardTitle>{s.name}</CardTitle>
-          <CardDescription>{s.description || "No description"}</CardDescription>
+          <CardDescription>{s.description || "Aucune description"}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
           {s.folder && (
@@ -454,12 +454,12 @@ function DetailPanel({ selection }: { selection: Selection }) {
           {s.skillMdPath && (
             <div className="rounded-md border bg-card p-4">
               {skillContent.isLoading ? (
-                <div className="text-xs text-muted-foreground">Loading…</div>
+                <div className="text-xs text-muted-foreground">Chargement…</div>
               ) : skillContent.data ? (
                 <SkillMarkdown content={skillContent.data} />
               ) : (
                 <div className="text-xs text-muted-foreground">
-                  (failed to read)
+                  (échec de la lecture)
                 </div>
               )}
             </div>
@@ -485,7 +485,7 @@ export function PluginsPage() {
   const left = (
     <>
       <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">Marketplaces & plugins</h2>
+        <h2 className="text-sm font-semibold">Marketplaces et plugins</h2>
       </div>
       <ScrollArea className="flex-1">
         <div className="py-2">
@@ -495,7 +495,7 @@ export function PluginsPage() {
           {list.length === 0 && (
             <div className="flex flex-col items-center gap-2 px-4 py-10 text-center text-xs text-muted-foreground">
               <Globe className="h-6 w-6 opacity-40" />
-              <span>No marketplace yet. Add one from the Admin tab.</span>
+              <span>Aucun marketplace pour l'instant. Ajoutes-en un depuis l'onglet Admin.</span>
             </div>
           )}
         </div>

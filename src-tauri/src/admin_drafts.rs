@@ -534,6 +534,29 @@ fn plugin_source_repo_of(registry: &Value, plugin_name: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The plugin entry's raw `source.url` from the marketplace registry, if any.
+/// Used to pick the right forge client: a Gitea marketplace can list a
+/// GitHub-hosted plugin (and vice-versa), so the plugin's own host — not the
+/// marketplace's — decides which client reads its repo.
+fn plugin_source_url_of(registry: &Value, plugin_name: &str) -> String {
+    registry
+        .get("plugins")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter().find_map(|p| {
+                let o = p.as_object()?;
+                if o.get("name").and_then(|v| v.as_str())? != plugin_name {
+                    return None;
+                }
+                o.get("source")
+                    .and_then(|s| s.get("url"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+        })
+        .unwrap_or_default()
+}
+
 pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result<AdminDraft> {
     let local_folder = Path::new(&args.local_folder);
     if !local_folder.is_dir() {
@@ -1113,30 +1136,94 @@ pub struct RemoteSkillInfo {
     pub local_match: Option<LocalSkill>,
 }
 
-/// Lists `skills/*/` directories in the plugin's source repo and pairs each
-/// with the matching local skill folder if any (used by the React skills tab
-/// to surface "upgrade this skill" affordances).
+/// A plugin's source `(owner/repo, url)` read from the marketplace registry
+/// that's **already installed locally** (under
+/// `~/.claude/plugins/marketplaces/<name>/.claude-plugin/marketplace.json`).
+/// Lets us resolve the plugin's own repo without hitting the marketplace's
+/// remote — which matters when that repo is private/internal and no token is
+/// set, yet the plugin's own repo is public.
+fn local_plugin_source(marketplace: &str, plugin_name: &str) -> Option<(String, String)> {
+    let known = local_scanner::load_known_marketplaces();
+    let install_location = known
+        .get(marketplace)
+        .and_then(|info| info.get("installLocation"))
+        .and_then(|v| v.as_str())?;
+    let plugins =
+        local_scanner::scan_directory_marketplace(Path::new(install_location), marketplace);
+    let src = plugins
+        .into_iter()
+        .find(|p| p.name == plugin_name)?
+        .source?;
+    if src.repo.is_empty() && src.url.is_empty() {
+        return None;
+    }
+    Some((src.repo, src.url))
+}
+
+/// Resolve a plugin's source `(owner/repo, url)` from its marketplace registry.
+/// `gh` targets the marketplace's own repo (where the registry lives). Callers
+/// then use the returned url to pick the forge client for the *plugin* repo,
+/// which may live on a different host than its marketplace.
 ///
+/// Prefers the live remote registry, but falls back to the locally-installed
+/// copy when the remote can't be read (e.g. an "internal" Gitea marketplace
+/// repo with no token configured) — the plugin's own repo is often public even
+/// when its marketplace index isn't.
+pub fn resolve_plugin_source(
+    gh: &GitHubClient,
+    marketplace: &str,
+    plugin_name: &str,
+) -> Result<(String, String)> {
+    if let Ok((mp_repo, mp_branch)) = repo_for(marketplace) {
+        match fetch_marketplace_registry(gh, &mp_repo, &mp_branch) {
+            Ok((registry, _, _)) => {
+                return Ok((
+                    plugin_source_repo_of(&registry, plugin_name),
+                    plugin_source_url_of(&registry, plugin_name),
+                ));
+            }
+            Err(e) => {
+                if let Some(local) = local_plugin_source(marketplace, plugin_name) {
+                    tracing::warn!(
+                        "resolve_plugin_source: remote registry for {} unreadable ({}); \
+                         using locally-installed marketplace.json",
+                        marketplace,
+                        e
+                    );
+                    return Ok(local);
+                }
+                return Err(e);
+            }
+        }
+    }
+    local_plugin_source(marketplace, plugin_name).ok_or_else(|| {
+        Error::Invalid(format!(
+            "Marketplace '{marketplace}' has no readable registry (remote or local)."
+        ))
+    })
+}
+
+/// Lists `skills/*/` directories in a plugin's source repo and pairs each with
+/// the matching local skill folder if any (used by the React skills tab to
+/// surface "upgrade this skill" affordances).
+///
+/// `gh` must already target the plugin's own forge (see [`resolve_plugin_source`]).
 /// Reads from the plugin repo's default branch (not the marketplace registry's
 /// `source.ref`) so that admins see the live state right after a merge —
 /// otherwise a deletion stays "visible" until both the plugin tag and the
 /// marketplace bump propagate.
-pub fn list_remote_skills(
+pub fn list_skills_in_repo(
     gh: &GitHubClient,
-    marketplace: &str,
-    plugin_name: &str,
+    plugin_repo: &str,
 ) -> Result<Vec<RemoteSkillInfo>> {
-    let (mp_repo, mp_branch) = repo_for(marketplace)?;
-    let (registry, _, _) = fetch_marketplace_registry(gh, &mp_repo, &mp_branch)?;
-    let plugin_repo = plugin_source_repo_of(&registry, plugin_name);
     if plugin_repo.is_empty() {
         return Ok(Vec::new());
     }
     let plugin_ref = gh
-        .get_default_branch(&plugin_repo)
+        .get_default_branch(plugin_repo)
         .unwrap_or_else(|_| "main".to_string());
 
-    let entries = match gh.list_dir(&plugin_repo, "skills", &plugin_ref) {
+    let entries = match gh.list_dir(plugin_repo, "skills", &plugin_ref) {
         Ok(v) => v,
         Err(_) => return Ok(Vec::new()),
     };
@@ -1149,7 +1236,7 @@ pub fn list_remote_skills(
         }
         let name = e.path.rsplit('/').next().unwrap_or("").to_string();
         let mut version = String::new();
-        if let Ok((text, _)) = gh.get_file(&plugin_repo, &format!("{}/SKILL.md", e.path), &plugin_ref)
+        if let Ok((text, _)) = gh.get_file(plugin_repo, &format!("{}/SKILL.md", e.path), &plugin_ref)
         {
             let (fm, _) = parse_frontmatter(&text);
             version = skill_version_from_fm(&fm);

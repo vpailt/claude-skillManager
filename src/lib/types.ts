@@ -68,6 +68,8 @@ export interface MarketplaceConfig {
   owned: boolean;
   sourcePath: string;
   autoUpdate: boolean;
+  /** Track open PRs on this marketplace's repo + its plugins' repos. */
+  trackPrs?: boolean;
   /** Forge hosting this marketplace. Absent → "github". */
   provider?: Provider;
   /** Gitea instance root (e.g. https://git.almaviacx.local). Empty for GitHub. */
@@ -81,6 +83,18 @@ export interface GiteaInstance {
   insecureTls: boolean;
   /** Computed: whether a token is stored for this host. */
   hasToken: boolean;
+}
+
+export interface GiteaStatus {
+  /** Instance root, e.g. https://git.almaviacx.local */
+  baseUrl: string;
+  /** Bare host, e.g. git.almaviacx.local */
+  host: string;
+  hasToken: boolean;
+  insecureTls: boolean;
+  ok: boolean;
+  /** Login when authenticated, else a short status/error message. */
+  user: string;
 }
 
 export type UiDensity = "compact" | "comfortable";
@@ -160,6 +174,25 @@ export interface PendingPR {
   pluginSourceRepo: string;
   skillName: string;
   createdAt: string;
+}
+
+/** One open PR surfaced by the marketplace tracker ("Suivi Marketplace").
+ *  These are all open PRs on a tracked marketplace's repo and its plugins'
+ *  repos, regardless of author — distinct from {@link PRRecord}. */
+export interface TrackedPr {
+  marketplaceName: string;
+  /** "marketplace" | "plugin" */
+  scope: "marketplace" | "plugin" | string;
+  /** Plugin name for plugin-scoped PRs; empty for marketplace-scoped. */
+  pluginName: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  createdAt: string;
+  provider?: Provider;
+  baseUrl?: string;
 }
 
 // ----- Admin wizards -----

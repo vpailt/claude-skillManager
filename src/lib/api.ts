@@ -6,6 +6,7 @@ import type {
   ArchivedSkill,
   BumpSuggestion,
   DuplicateSkill,
+  GiteaStatus,
   LocalSkill,
   LogLevel,
   LoggingConfig,
@@ -19,6 +20,7 @@ import type {
   RemoteSkillInfo,
   Settings,
   SettingsPaths,
+  TrackedPr,
   UiPrefs,
   UninstallInfo,
   UploadResult,
@@ -121,6 +123,7 @@ export const api = {
   // --- gitea ---
   giteaAuthCheck: (baseUrl: string) =>
     invoke<[boolean, string]>("gitea_auth_check", { baseUrl }),
+  giteaStatusAll: () => invoke<GiteaStatus[]>("gitea_status_all"),
   settingsUpsertGiteaInstance: (baseUrl: string, insecureTls: boolean) =>
     invoke<Settings>("settings_upsert_gitea_instance", { baseUrl, insecureTls }),
   settingsRemoveGiteaInstance: (baseUrl: string) =>
@@ -175,6 +178,10 @@ export const api = {
     invoke<void>("pending_prs_upsert", { item }),
   pendingPrsRemove: (marketplace: string, plugin: string, action: string) =>
     invoke<void>("pending_prs_remove", { marketplace, plugin, action }),
+
+  // --- marketplace PR tracking ("Suivi Marketplace") ---
+  trackedMarketplacePrs: (only?: string) =>
+    invoke<TrackedPr[]>("track_marketplace_prs", { only: only ?? null }),
 
   // --- admin drafts (wizards) ---
   adminPrepareAddPlugin: (marketplace: string, sourceUrl: string) =>
