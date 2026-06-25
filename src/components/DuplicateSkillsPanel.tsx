@@ -36,11 +36,11 @@ function CopyCard({
         )}
         <span className="font-medium text-foreground">{copy.source}</span>
         {copy.version ? (
-          <Badge variant="outline" className="text-[10px]">
+          <Badge variant="outline" className="text-xs">
             v{copy.version}
           </Badge>
         ) : (
-          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+          <Badge variant="outline" className="text-xs text-muted-foreground">
             aucune version
           </Badge>
         )}
@@ -90,7 +90,7 @@ export function DuplicateSkillsPanel({
         </div>
         <p className="text-xs text-muted-foreground">
           Présent à la fois dans <code>~/.claude/skills/</code> et dans un
-          plugin installé. Clique pour comparer.
+          plugin installé. Cliquez pour comparer.
         </p>
         <div className="space-y-1">
           {dup.data.map((d) => {
@@ -125,12 +125,12 @@ export function DuplicateSkillsPanel({
                   {d.pluginCopies.length === 1 ? "" : "s"} dans un plugin
                 </span>
                 {localIsNewer && (
-                  <Badge variant="secondary" className="ml-auto text-[10px]">
+                  <Badge variant="secondary" className="ml-auto text-xs">
                     local plus récent
                   </Badge>
                 )}
                 {localIsOlder && (
-                  <Badge variant="outline" className="ml-auto text-[10px]">
+                  <Badge variant="outline" className="ml-auto text-xs">
                     local plus ancien
                   </Badge>
                 )}
@@ -179,16 +179,16 @@ export function DuplicateSkillDetail({
         <div className="flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 text-amber-500" />
           <h2 className="text-base font-semibold">{dup.name}</h2>
-          <Badge variant="warning" className="text-[10px]">
+          <Badge variant="warning" className="text-xs">
             doublon
           </Badge>
           {localIsNewer && (
-            <Badge variant="secondary" className="text-[10px]">
+            <Badge variant="secondary" className="text-xs">
               local plus récent
             </Badge>
           )}
           {localIsOlder && (
-            <Badge variant="outline" className="text-[10px]">
+            <Badge variant="outline" className="text-xs">
               local plus ancien
             </Badge>
           )}
@@ -198,7 +198,7 @@ export function DuplicateSkillDetail({
           {dup.pluginCopies.length} copie
           {dup.pluginCopies.length === 1 ? "" : "s"} de plugin. L'archivage
           déplace la copie locale vers <code>~/.claude/skills_archive/</code> —
-          Claude Code arrêtera de charger le doublon, mais tu pourras le
+          Claude Code arrêtera de charger le doublon, mais vous pourrez le
           restaurer plus tard.
         </p>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -268,11 +268,11 @@ export function ArchivedSkillDetail({
         <div className="flex items-center gap-2">
           <Archive className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-base font-semibold">{skill.name}</h2>
-          <Badge variant="outline" className="text-[10px]">
+          <Badge variant="outline" className="text-xs">
             archivé
           </Badge>
           {skill.version && (
-            <Badge variant="outline" className="text-[10px]">
+            <Badge variant="outline" className="text-xs">
               v{skill.version}
             </Badge>
           )}

@@ -9,15 +9,26 @@ import {
   Download,
   Eye,
   Loader2,
+  MoreHorizontal,
+  PackageMinus,
   Plus,
   RefreshCw,
   Search,
+  SlidersHorizontal,
   Trash2,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogClose,
@@ -31,7 +42,9 @@ import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import { useApp } from "@/stores/app";
 import { useNotifications } from "@/stores/notifications";
-import type { InstallState, Marketplace, Plugin, Provider } from "@/lib/types";
+import { useInstallMarketplace } from "@/hooks/useInstallMarketplace";
+import { AddMarketplaceDialog } from "@/components/AddMarketplaceDialog";
+import type { InstallState, Marketplace, Plugin } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -69,206 +82,6 @@ function stateVariant(s: InstallState) {
   if (s === "outdated") return "warning" as const;
   if (s === "local_only") return "secondary" as const;
   return "outline" as const;
-}
-
-// ============================================================
-// Add-marketplace-from-URL dialog
-// ============================================================
-
-function AddMarketplaceDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const qc = useQueryClient();
-  const settingsQuery = useQuery({
-    queryKey: ["app-settings"],
-    queryFn: api.loadAppSettings,
-  });
-  const giteaInstances = settingsQuery.data?.giteaInstances ?? [];
-
-  const [provider, setProvider] = useState<Provider>("github");
-  const [giteaBaseUrl, setGiteaBaseUrl] = useState("");
-  const [url, setUrl] = useState("");
-  const [name, setName] = useState("");
-  const [parsedRepo, setParsedRepo] = useState<string | null>(null);
-  const [error, setError] = useState("");
-
-  const reset = () => {
-    setProvider("github");
-    setGiteaBaseUrl("");
-    setUrl("");
-    setName("");
-    setParsedRepo(null);
-    setError("");
-  };
-
-  const onUrlBlur = async () => {
-    setError("");
-    if (!url.trim()) {
-      setParsedRepo(null);
-      return;
-    }
-    const repo = await api.parseMarketplaceUrl(url.trim());
-    if (!repo) {
-      setError(`Impossible d'extraire owner/repo depuis : ${url}`);
-      setParsedRepo(null);
-      return;
-    }
-    setParsedRepo(repo);
-    if (!name.trim()) setName(repo.split("/").pop() || "");
-  };
-
-  const upsert = useMutation({
-    mutationFn: async () => {
-      if (!parsedRepo) throw new Error("L'URL est invalide");
-      if (!name.trim()) throw new Error("Le nom du marketplace est requis");
-      if (provider === "gitea" && !giteaBaseUrl) {
-        throw new Error("Choisis une instance Gitea (ajoutes-en une dans Paramètres d'abord)");
-      }
-      return api.settingsUpsertMarketplace({
-        name: name.trim(),
-        githubRepo: parsedRepo,
-        defaultBranch: "main",
-        owned: false,
-        sourcePath: "",
-        autoUpdate: false,
-        provider,
-        baseUrl: provider === "gitea" ? giteaBaseUrl : "",
-      });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["app-settings"] });
-      qc.invalidateQueries({ queryKey: ["refresh"] });
-      reset();
-      onOpenChange(false);
-    },
-    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
-  });
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(v) => {
-        if (!v) reset();
-        onOpenChange(v);
-      }}
-    >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Ajouter un marketplace depuis une URL Git</DialogTitle>
-          <DialogDescription>
-            Récupère le registre du marketplace (<code>.claude-plugin/marketplace.json</code>) et
-            l'enregistre dans les paramètres de l'app. Utilise « Installer » ensuite pour le télécharger localement.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">
-              Fournisseur
-            </label>
-            <div className="flex gap-1">
-              {(["github", "gitea"] as const).map((p) => (
-                <Button
-                  key={p}
-                  size="sm"
-                  variant={provider === p ? "default" : "outline"}
-                  className="h-7 px-3 text-xs capitalize"
-                  onClick={() => setProvider(p)}
-                >
-                  {p}
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          {provider === "gitea" && (
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">
-                Instance Gitea
-              </label>
-              {giteaInstances.length === 0 ? (
-                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-amber-600 dark:text-amber-400">
-                  Aucune instance Gitea enregistrée pour le moment. Ajoutes-en une (URL + token) dans{" "}
-                  <strong>Paramètres → Instances Gitea</strong> d'abord.
-                </div>
-              ) : (
-                <select
-                  className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-                  value={giteaBaseUrl}
-                  onChange={(e) => setGiteaBaseUrl(e.target.value)}
-                >
-                  <option value="">— choisir —</option>
-                  {giteaInstances.map((i) => (
-                    <option key={i.baseUrl} value={i.baseUrl}>
-                      {i.baseUrl}
-                      {i.hasToken ? "" : " (sans token)"}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          )}
-
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">
-              URL Git
-            </label>
-            <Input
-              placeholder={
-                provider === "gitea"
-                  ? "https://git.example.com/owner/repo"
-                  : "https://github.com/owner/repo"
-              }
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onBlur={onUrlBlur}
-              autoFocus
-            />
-            {parsedRepo && (
-              <div className="mt-1 text-xs text-muted-foreground">
-                Extrait : <code>{parsedRepo}</code>
-              </div>
-            )}
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">
-              Nom du marketplace
-            </label>
-            <Input
-              placeholder="(par défaut : nom du repo)"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </div>
-          {error && (
-            <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
-              {error}
-            </div>
-          )}
-        </div>
-        <DialogFooter>
-          <DialogClose asChild>
-            <Button variant="outline">Annuler</Button>
-          </DialogClose>
-          <Button
-            onClick={() => upsert.mutate()}
-            disabled={
-              !parsedRepo ||
-              !name.trim() ||
-              (provider === "gitea" && !giteaBaseUrl) ||
-              upsert.isPending
-            }
-          >
-            {upsert.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-            Ajouter
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 // ============================================================
@@ -458,6 +271,7 @@ function MarketplaceRow({
   cfgAutoUpdate,
   cfgTrackPrs,
   selected,
+  showAdvanced,
   onSelect,
   onUninstallRequest,
   onDeleteRequest,
@@ -468,6 +282,7 @@ function MarketplaceRow({
   cfgAutoUpdate: boolean;
   cfgTrackPrs: boolean;
   selected: boolean;
+  showAdvanced: boolean;
   onSelect: () => void;
   onUninstallRequest: () => void;
   onDeleteRequest: () => void;
@@ -476,43 +291,7 @@ function MarketplaceRow({
 }) {
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
-  const install = useMutation({
-    mutationFn: async () => {
-      const cfg = await api.loadAppSettings().then((s) =>
-        s.marketplaces.find((m) => m.name === mp.name)
-      );
-      const repo = cfg?.githubRepo || mp.sourceRepo;
-      const branch = cfg?.defaultBranch || "main";
-      const auto = cfg?.autoUpdate ?? null;
-      if (!repo) throw new Error("Aucun repo configuré pour ce marketplace");
-      return api.installMarketplace(
-        mp.name,
-        repo,
-        branch,
-        auto,
-        cfg?.provider ?? "github",
-        cfg?.baseUrl ?? ""
-      );
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["refresh"] });
-      notify({
-        kind: "success",
-        title: "Marketplace installé",
-        body: mp.name,
-      });
-    },
-    // Without explicit onError, React Query swallows install failures and the
-    // button looks like a no-op. The most common cause for public-marketplace
-    // installs is "missing token + private repo" or rate-limit on unauth
-    // requests — surface the backend error verbatim so the user sees it.
-    onError: (e) =>
-      notify({
-        kind: "error",
-        title: `Échec de l'installation : ${mp.name}`,
-        body: errMsg(e),
-      }),
-  });
+  const install = useInstallMarketplace();
   const toggleAuto = useMutation({
     mutationFn: async (next: boolean) => {
       const settings = await api.loadAppSettings();
@@ -597,67 +376,60 @@ function MarketplaceRow({
           <span className="ml-1 text-xs text-destructive">· échec</span>
         )}
       </td>
-      <td className="px-3 py-2 text-xs text-muted-foreground">
-        {mp.sourceRepo || mp.sourcePath || "—"}
-      </td>
-      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2" title="Mettre à jour auto à chaque rafraîchissement si le SHA distant a changé">
-          <Switch
-            checked={cfgAutoUpdate}
-            onCheckedChange={(v) => toggleAuto.mutate(v)}
-            disabled={!mp.sourceRepo || toggleAuto.isPending}
-          />
-          <span className="text-[11px] text-muted-foreground">
-            {cfgAutoUpdate ? "activé" : "désactivé"}
-          </span>
-        </div>
-      </td>
-      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-        <div
-          className="flex items-center gap-2"
-          title="Suivre les PR ouvertes de ce marketplace et de ses plugins (onglet Suivi Marketplace + Dashboard)"
-        >
-          <Switch
-            checked={cfgTrackPrs}
-            onCheckedChange={(v) => toggleTrack.mutate(v)}
-            disabled={!mp.sourceRepo || toggleTrack.isPending}
-          />
-          <span className="text-[11px] text-muted-foreground">
-            {cfgTrackPrs ? "activé" : "désactivé"}
-          </span>
-        </div>
-      </td>
+      {showAdvanced && (
+        <>
+          <td className="px-3 py-2 text-xs text-muted-foreground">
+            {mp.sourceRepo || mp.sourcePath || "—"}
+          </td>
+          <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2" title="Mettre à jour auto à chaque rafraîchissement si le SHA distant a changé">
+              <Switch
+                checked={cfgAutoUpdate}
+                onCheckedChange={(v) => toggleAuto.mutate(v)}
+                disabled={!mp.sourceRepo || toggleAuto.isPending}
+              />
+              <span className="text-xs text-muted-foreground">
+                {cfgAutoUpdate ? "activé" : "désactivé"}
+              </span>
+            </div>
+          </td>
+          <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+            <div
+              className="flex items-center gap-2"
+              title="Suivre les PR ouvertes de ce marketplace et de ses plugins (onglet Suivi Marketplace + Dashboard)"
+            >
+              <Switch
+                checked={cfgTrackPrs}
+                onCheckedChange={(v) => toggleTrack.mutate(v)}
+                disabled={!mp.sourceRepo || toggleTrack.isPending}
+              />
+              <span className="text-xs text-muted-foreground">
+                {cfgTrackPrs ? "activé" : "désactivé"}
+              </span>
+            </div>
+          </td>
+        </>
+      )}
       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-1">
           {mp.installed ? (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 px-2 text-xs"
-                onClick={onUninstallRequest}
-              >
-                <Trash2 className="mr-1 h-3 w-3" />
-                Désinstaller
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 px-2 text-xs"
-                onClick={onCheckOne}
-                title="Re-télécharger ce marketplace si son SHA distant a changé"
-                disabled={status === "checking"}
-              >
-                <RefreshCw className="mr-1 h-3 w-3" />
-                Vérifier
-              </Button>
-            </>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-xs"
+              onClick={onCheckOne}
+              title="Re-télécharger ce marketplace si sa version distante a changé"
+              disabled={status === "checking"}
+            >
+              <RefreshCw className="mr-1 h-3 w-3" />
+              Vérifier
+            </Button>
           ) : (
             <Button
               size="sm"
               variant="outline"
               className="h-7 px-2 text-xs"
-              onClick={() => install.mutate()}
+              onClick={() => install.mutate(mp)}
               disabled={!mp.sourceRepo || install.isPending}
             >
               {install.isPending ? (
@@ -669,23 +441,42 @@ function MarketplaceRow({
             </Button>
           )}
           {out > 0 && (
-            <Badge variant="warning" className="ml-1 text-[10px]">
+            <Badge variant="warning" className="ml-1 text-xs">
               ⚠ {out}
             </Badge>
           )}
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 w-7 p-0 text-destructive"
-            onClick={onDeleteRequest}
-            title={
-              mp.installed
-                ? "Supprimer ce marketplace (désinstaller les fichiers locaux et l'oublier des paramètres)"
-                : "Supprimer ce marketplace des paramètres de l'app"
-            }
-          >
-            <Trash2 className="h-3 w-3" />
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 w-7 p-0"
+                title="Plus d'actions"
+                aria-label={`Plus d'actions pour ${mp.name}`}
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>{mp.name}</DropdownMenuLabel>
+              {mp.installed && (
+                <DropdownMenuItem
+                  onSelect={onUninstallRequest}
+                  title="Supprime les fichiers locaux mais garde ce marketplace dans la liste — vous pourrez le réinstaller plus tard."
+                >
+                  <PackageMinus className="h-4 w-4" />
+                  Désinstaller (garder dans la liste)
+                </DropdownMenuItem>
+              )}
+              {mp.installed && <DropdownMenuSeparator />}
+              <DropdownMenuItem destructive onSelect={onDeleteRequest}>
+                <Trash2 className="h-4 w-4" />
+                {mp.installed
+                  ? "Supprimer définitivement (fichiers + liste)"
+                  : "Retirer de la liste"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </td>
     </tr>
@@ -732,7 +523,7 @@ function PluginsTable({
   if (!marketplace) {
     return (
       <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-        Choisis un marketplace ci-dessus pour voir ses plugins.
+        Choisissez un marketplace ci-dessus pour voir ses plugins.
       </div>
     );
   }
@@ -789,7 +580,7 @@ function PluginsTable({
               <td className="px-3 py-2 text-xs">{p.installedVersion || "—"}</td>
               <td className="px-3 py-2 text-xs">{p.latestVersion || "—"}</td>
               <td className="px-3 py-2">
-                <Badge variant={stateVariant(p.installState)} className="text-[10px]">
+                <Badge variant={stateVariant(p.installState)} className="text-xs">
                   {STATE_LABEL[p.installState]}
                 </Badge>
               </td>
@@ -845,6 +636,7 @@ export function AdminLocalPanel() {
   const [pluginFilter, setPluginFilter] = useState("");
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [uninstallTarget, setUninstallTarget] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
     name: string;
@@ -931,7 +723,7 @@ export function AdminLocalPanel() {
 
   const setEnabledBatch = useMutation({
     mutationFn: async (value: boolean) => {
-      if (!selected) throw new Error("Choisis un marketplace");
+      if (!selected) throw new Error("Choisissez un marketplace");
       const failures: string[] = [];
       for (const name of checked) {
         try {
@@ -962,7 +754,7 @@ export function AdminLocalPanel() {
 
   const updateOutdated = useMutation({
     mutationFn: async () => {
-      if (!selected) throw new Error("Choisis un marketplace");
+      if (!selected) throw new Error("Choisissez un marketplace");
       const targets = selected.plugins.filter(
         (p) => p.installState === "outdated" && p.source && (p.source.repo || p.source.path)
       );
@@ -1020,6 +812,15 @@ export function AdminLocalPanel() {
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
+                variant={showAdvanced ? "default" : "ghost"}
+                onClick={() => setShowAdvanced((v) => !v)}
+                title="Afficher/masquer les colonnes avancées (repo source, mise à jour auto, suivi PR)"
+              >
+                <SlidersHorizontal className="mr-1 h-3 w-3" />
+                Options avancées
+              </Button>
+              <Button
+                size="sm"
                 variant="outline"
                 onClick={() => setAddOpen(true)}
               >
@@ -1058,9 +859,13 @@ export function AdminLocalPanel() {
                   <th className="px-3 py-2 text-left">Nom</th>
                   <th className="px-3 py-2 text-left">Installation</th>
                   <th className="px-3 py-2 text-left">Fraîcheur</th>
-                  <th className="px-3 py-2 text-left">Repo source</th>
-                  <th className="px-3 py-2 text-left">Mise à jour auto</th>
-                  <th className="px-3 py-2 text-left">Suivi PR</th>
+                  {showAdvanced && (
+                    <>
+                      <th className="px-3 py-2 text-left">Repo source</th>
+                      <th className="px-3 py-2 text-left">Mise à jour auto</th>
+                      <th className="px-3 py-2 text-left">Suivi PR</th>
+                    </>
+                  )}
                   <th className="px-3 py-2 text-left">Actions</th>
                 </tr>
               </thead>
@@ -1080,6 +885,7 @@ export function AdminLocalPanel() {
                       )?.trackPrs ?? false
                     }
                     selected={selected?.name === mp.name}
+                    showAdvanced={showAdvanced}
                     onSelect={() => onSelect(mp.name)}
                     onUninstallRequest={() => setUninstallTarget(mp.name)}
                     onDeleteRequest={() =>
@@ -1096,10 +902,10 @@ export function AdminLocalPanel() {
                 {filteredMps.length === 0 && (
                   <tr>
                     <td
-                      colSpan={7}
+                      colSpan={showAdvanced ? 7 : 4}
                       className="px-3 py-6 text-center text-xs text-muted-foreground"
                     >
-                      Aucun marketplace. Clique sur <em>Ajouter depuis URL</em>.
+                      Aucun marketplace. Cliquez sur <em>Ajouter depuis URL</em>.
                     </td>
                   </tr>
                 )}

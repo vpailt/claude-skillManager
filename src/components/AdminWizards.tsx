@@ -121,7 +121,7 @@ export function AddPluginDialog({
           <DialogHeader>
             <DialogTitle>Ajouter un plugin à « {marketplace} »</DialogTitle>
             <DialogDescription>
-              Colle l'URL Git du repo source du plugin (il doit contenir
+              Collez l'URL Git du repo source du plugin (il doit contenir
               <code> manifest.json</code> à la racine). SkillManager y récupère le
               nom / la version / la description.
             </DialogDescription>
@@ -413,7 +413,10 @@ export function UploadSkillDialog({
   const [pluginBumpLevel, setPluginBumpLevel] = useState<
     "patch" | "minor" | "major"
   >("patch");
-  const [alsoBump, setAlsoBump] = useState(true);
+  // "main always published" model: the registry tracks the plugin's main branch
+  // and doesn't move per release, so this companion PR is off by default. It only
+  // refreshes the registry's informational `version` field (never source.ref).
+  const [alsoBump, setAlsoBump] = useState(false);
   const [draft, setDraft] = useState<AdminDraft | null>(null);
 
   const localSkills = useQuery({
@@ -430,6 +433,7 @@ export function UploadSkillDialog({
       setTargetName(initialTargetName ?? "");
       setNewVersion("");
       setPluginBumpLevel("patch");
+      setAlsoBump(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -480,7 +484,7 @@ export function UploadSkillDialog({
           <DialogHeader>
             <DialogTitle>Téléverser un skill vers « {plugin.name} »</DialogTitle>
             <DialogDescription>
-              Choisis un dossier sous <code>~/.claude/skills/</code>, ou n'importe
+              Choisissez un dossier sous <code>~/.claude/skills/</code>, ou n'importe
               quel dossier local. Le frontmatter du SKILL.md est validé avant
               l'ouverture de la PR.
             </DialogDescription>
@@ -518,7 +522,7 @@ export function UploadSkillDialog({
                       >
                         {s.name}
                         {s.version && (
-                          <Badge variant="outline" className="ml-1 text-[9px]">
+                          <Badge variant="outline" className="ml-1 text-xs">
                             v{s.version}
                           </Badge>
                         )}
@@ -570,9 +574,9 @@ export function UploadSkillDialog({
                   </Button>
                 ))}
               </div>
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 La version du plugin est toujours incrémentée lors du
-                téléversement d'un skill — choisis comment. Indépendant de la
+                téléversement d'un skill — choisissez comment. Indépendant de la
                 version du skill ci-dessus.
               </p>
             </div>
@@ -580,9 +584,10 @@ export function UploadSkillDialog({
             <label className="flex cursor-pointer items-center gap-2">
               <Switch checked={alsoBump} onCheckedChange={setAlsoBump} />
               <span>
-                Ouvrir aussi une PR compagnon incrémentant{" "}
-                <code className="text-xs">{plugin.name}</code> dans le registre
-                de la marketplace
+                Mettre aussi à jour le champ <code className="text-xs">version</code>{" "}
+                de <code className="text-xs">{plugin.name}</code> dans le registre
+                (optionnel — le registre suit déjà <code className="text-xs">main</code>,
+                la détection de mise à jour n'en dépend pas)
               </span>
             </label>
 

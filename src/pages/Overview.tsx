@@ -11,7 +11,9 @@ import {
   History,
   Key,
   Package,
+  Pencil,
   Radar,
+  Rocket,
   Server,
   ShieldCheck,
   Sparkles,
@@ -28,6 +30,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/stores/app";
 import { useNotifications } from "@/stores/notifications";
+import { useSettingsDialog } from "@/stores/settingsDialog";
 import { api } from "@/lib/api";
 import { cn, openExternal } from "@/lib/utils";
 import type { Plugin } from "@/lib/types";
@@ -71,13 +74,13 @@ function CounterCell({
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col items-start gap-1 px-5 py-4 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      className="flex flex-col items-start gap-0.5 px-5 py-3 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
       <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
         <Icon className="h-4 w-4" />
         {label}
       </span>
-      <span className="text-2xl font-semibold text-foreground">{value}</span>
+      <span className="text-xl font-semibold text-foreground">{value}</span>
       {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
     </button>
   );
@@ -125,7 +128,7 @@ function HealthPill({
 }
 
 function HealthBar() {
-  const navigate = useNavigate();
+  const openSettingsTo = useSettingsDialog((s) => s.openTo);
 
   const auth = useQuery({
     queryKey: ["github-auth"],
@@ -165,7 +168,7 @@ function HealthBar() {
               }`
             : "Aucun token GitHub configuré (Paramètres)"
         }
-        onClick={() => navigate("/settings")}
+        onClick={() => openSettingsTo("connexions")}
       />
       <span className="text-muted-foreground/30">·</span>
       <HealthPill
@@ -180,7 +183,7 @@ function HealthBar() {
             ? `Gitea: connecté en tant que @${g?.user}`
             : "Gitea : non connecté — VPN GlobalProtect + token requis (Paramètres)"
         }
-        onClick={() => navigate("/settings")}
+        onClick={() => openSettingsTo("connexions", "gitea")}
       />
     </div>
   );
@@ -265,21 +268,22 @@ function NeedsAttentionSection() {
     : undefined;
 
   return (
-    <section>
+    <section className="flex flex-col">
       <div className="mb-3 flex items-center gap-2">
+        <Pencil className="h-4 w-4 text-muted-foreground" />
         <h2 className="text-lg font-semibold">À traiter</h2>
         {totalItems > 0 && <Badge variant="warning">{totalItems}</Badge>}
       </div>
 
       {totalItems === 0 ? (
-        <Card>
+        <Card className="flex-1">
           <CardContent className="flex items-center gap-3 py-6 text-sm text-muted-foreground">
             <CheckCircle2 className="h-5 w-5 text-emerald-500" />
             Tout est à jour — aucun plugin obsolète.
           </CardContent>
         </Card>
       ) : (
-        <Card className="flex flex-col">
+        <Card className="flex flex-1 flex-col">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between gap-2">
               <CardTitle className="flex items-center gap-2 text-base">
@@ -301,7 +305,7 @@ function NeedsAttentionSection() {
                     marketplace: p.marketplaceName,
                     plugin: p.name,
                   });
-                  navigate("/plugins");
+                  navigate("/skills");
                 }}
                 onUpdate={() => installMutation.mutate(p)}
               />
@@ -311,7 +315,7 @@ function NeedsAttentionSection() {
                 type="button"
                 onClick={() => {
                   setSelection(null);
-                  navigate("/plugins");
+                  navigate("/skills");
                 }}
                 className="mt-2 flex w-full items-center justify-center gap-1 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
               >
@@ -498,8 +502,8 @@ function RecentActivitySection() {
   return (
     <section className="flex flex-col">
       <div className="mb-3 flex items-center gap-2">
-        <h2 className="text-lg font-semibold">Activité récente</h2>
         <History className="h-4 w-4 text-muted-foreground" />
+        <h2 className="text-lg font-semibold">Activité récente</h2>
       </div>
       <Card className="flex-1">
         <CardContent className="py-3">
@@ -550,7 +554,7 @@ function RecentActivitySection() {
                     </span>
                     <Badge
                       variant={isError ? "destructive" : "success"}
-                      className="shrink-0 px-1.5 py-0 text-[10px]"
+                      className="shrink-0 px-1.5 py-0 text-xs"
                     >
                       {isError ? "échec" : "ok"}
                     </Badge>
@@ -616,9 +620,9 @@ function MarketplaceTrackingSection() {
   const total = tracked.data?.length ?? 0;
 
   return (
-    <section>
+    <section className="flex flex-col">
       <div className="mb-3 flex items-center gap-2">
-        <Radar className="h-4 w-4 text-primary" />
+        <Radar className="h-4 w-4 text-muted-foreground" />
         <h2 className="text-lg font-semibold">Suivi des marketplaces</h2>
         {trackedNames.length > 0 && total > 0 && (
           <Badge variant="secondary">{total} PR</Badge>
@@ -634,13 +638,13 @@ function MarketplaceTrackingSection() {
             navigate("/admin", { state: { tab: "tracking" } });
           }
         }}
-        className="cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex flex-1 flex-col cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <CardContent className="py-4">
+        <CardContent className="flex flex-1 flex-col justify-center py-4">
           {trackedNames.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Aucun marketplace suivi. Active le toggle <strong>Suivi PR</strong>{" "}
-              sur un marketplace dans <strong>Administration → Admin local</strong>.
+              Aucun marketplace suivi. Activez le toggle <strong>Suivi PR</strong>{" "}
+              sur un marketplace dans <strong>Administration → Gérer mon poste</strong>.
             </p>
           ) : tracked.isLoading ? (
             <p className="text-sm text-muted-foreground">Chargement des PR en cours…</p>
@@ -687,7 +691,7 @@ const ACX_REPO_URL = "https://git.almaviacx.local/Claude/acx-cl-marketplace";
 const ACX_GITEA_HOST = "git.almaviacx.local";
 
 function AcxMarketplaceCard() {
-  const navigate = useNavigate();
+  const openSettingsTo = useSettingsDialog((s) => s.openTo);
   const gitea = useQuery({
     queryKey: ["gitea-status"],
     queryFn: api.giteaStatusAll,
@@ -756,9 +760,7 @@ function AcxMarketplaceCard() {
                 Connexion <strong>Gitea</strong> configurée (
                 <button
                   type="button"
-                  onClick={() =>
-                    navigate("/settings", { state: { scrollTo: "gitea" } })
-                  }
+                  onClick={() => openSettingsTo("connexions", "gitea")}
                   className="font-medium text-primary hover:underline"
                 >
                   Paramètres → Gitea
@@ -772,13 +774,147 @@ function AcxMarketplaceCard() {
               size="sm"
               variant="outline"
               className="mt-3 h-7 text-xs"
-              onClick={() => navigate("/settings", { state: { scrollTo: "gitea" } })}
+              onClick={() => openSettingsTo("connexions", "gitea")}
             >
               <Key className="mr-1 h-3 w-3" />
               Configurer Gitea
             </Button>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============================================================
+// First-run guided onboarding ("Démarrer ici")
+// ============================================================
+
+function StepRow({
+  index,
+  done,
+  title,
+  desc,
+  actionLabel,
+  onAction,
+}: {
+  index: number;
+  done: boolean;
+  title: string;
+  desc: string;
+  actionLabel: string;
+  onAction: () => void;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <div
+        className={cn(
+          "grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-semibold",
+          done
+            ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+            : "bg-primary/10 text-primary"
+        )}
+      >
+        {done ? <CheckCircle2 className="h-4 w-4" /> : index}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div
+          className={cn(
+            "text-sm font-medium",
+            done && "text-muted-foreground line-through"
+          )}
+        >
+          {title}
+        </div>
+        <div className="text-xs text-muted-foreground">{desc}</div>
+      </div>
+      {!done && (
+        <Button size="sm" variant="outline" className="shrink-0" onClick={onAction}>
+          {actionLabel}
+          <ArrowRight className="ml-1 h-3 w-3" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function GettingStartedCard() {
+  const navigate = useNavigate();
+  const openSettingsTo = useSettingsDialog((s) => s.openTo);
+  const marketplaces = useApp((s) => s.marketplaces);
+
+  const auth = useQuery({
+    queryKey: ["github-auth"],
+    queryFn: api.githubAuthCheck,
+    staleTime: 60_000,
+  });
+  const gitea = useQuery({
+    queryKey: ["gitea-status"],
+    queryFn: api.giteaStatusAll,
+    staleTime: 60_000,
+  });
+
+  const connected =
+    !!auth.data?.[0] || (gitea.data ?? []).some((g) => g.ok);
+  const hasInstalledMarketplace = marketplaces.some((m) => m.installed);
+  const hasInstalledPlugin = marketplaces.some((m) =>
+    m.plugins.some(
+      (p) => p.installState === "installed" || p.installState === "outdated"
+    )
+  );
+  const anyEnabled = marketplaces.some((m) =>
+    m.plugins.some((p) => p.enabled)
+  );
+
+  // The first run is over once you're connected AND at least one plugin is
+  // actually installed — a marketplace alone only clones the index (no skills
+  // downloaded yet), so we keep guiding until a plugin lands.
+  if (connected && hasInstalledPlugin) return null;
+
+  return (
+    <Card className="mb-4 border-primary/30 bg-primary/[0.03]">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Rocket className="h-5 w-5 text-primary" />
+          Démarrer ici
+        </CardTitle>
+        <CardDescription>
+          Trois étapes pour commencer à utiliser vos compétences Claude Code.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <StepRow
+          index={1}
+          done={connected}
+          title="Se connecter à un gestionnaire de version"
+          desc="GitHub (token) ou Gitea (instance interne + VPN) pour récupérer les catalogues."
+          actionLabel="Configurer"
+          onAction={() => openSettingsTo("connexions")}
+        />
+        <StepRow
+          index={2}
+          done={hasInstalledMarketplace}
+          title="Installer un catalogue (marketplace)"
+          desc="Ajoutez puis installez un marketplace : son catalogue de plugins devient visible. Cela clone seulement l'index — aucun plugin n'est encore téléchargé."
+          actionLabel="Gérer mon poste"
+          onAction={() => navigate("/admin", { state: { tab: "local" } })}
+        />
+        <StepRow
+          index={3}
+          done={hasInstalledPlugin}
+          title="Installer un plugin"
+          desc="Depuis le catalogue, installez un plugin : son contenu (skills) est alors téléchargé dans ~/.claude/plugins/cache."
+          actionLabel="Ouvrir Skills"
+          onAction={() => navigate("/skills")}
+        />
+        <StepRow
+          index={4}
+          done={anyEnabled}
+          title="Activer des compétences"
+          desc="Dépliez un plugin installé et activez-le : Claude Code ne charge que les packs activés."
+          actionLabel="Ouvrir Skills"
+          onAction={() => navigate("/skills")}
+        />
       </CardContent>
     </Card>
   );
@@ -808,17 +944,19 @@ export function OverviewPage() {
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold">Dashboard</h1>
             {version && (
-              <Badge variant="outline" className="font-mono text-[11px]">
+              <Badge variant="outline" className="font-mono text-xs">
                 v{version}
               </Badge>
             )}
           </div>
           <p className="text-sm text-muted-foreground">
-            Aperçu de tes plugins, skills et marketplaces Claude Code.
+            Aperçu de vos plugins, skills et marketplaces Claude Code.
           </p>
         </header>
 
         <HealthBar />
+
+        <GettingStartedCard />
 
         {/* Indicateurs (pleine largeur, en haut) */}
         <Card>
@@ -826,27 +964,28 @@ export function OverviewPage() {
             <CounterCell
               icon={Globe}
               label="Marketplaces"
-              value={marketplaces.length}
-              hint={`${marketplaces.filter((m) => m.installed).length} installés`}
+              value={marketplaces.filter((m) => m.installed).length}
+              hint={`installées · ${marketplaces.length} connues`}
               onClick={() => {
                 setSelection(null);
-                navigate("/plugins");
+                navigate("/skills");
               }}
             />
             <CounterCell
               icon={Package}
               label="Plugins"
               value={installedPlugins}
-              hint={`${totalPlugins} connus`}
+              hint={`installés · ${totalPlugins} connus`}
               onClick={() => {
                 setSelection(null);
-                navigate("/plugins");
+                navigate("/skills");
               }}
             />
             <CounterCell
               icon={Sparkles}
               label="Skills"
               value={totalSkills}
+              hint="au total"
               onClick={() => {
                 setSelection(null);
                 navigate("/skills");
@@ -855,7 +994,13 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        {/* Ligne 1 : Marketplace AlmaviaCX (gauche) + Activité récente (droite) — même hauteur */}
+        {/* À traiter (gauche) + Suivi des marketplaces (droite) — juste sous les indicateurs */}
+        <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch">
+          <NeedsAttentionSection />
+          <MarketplaceTrackingSection />
+        </div>
+
+        {/* Marketplace AlmaviaCX (gauche) + Activité récente (droite) — même hauteur */}
         <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch">
           <section className="flex flex-col">
             <div className="mb-3 flex items-center gap-2">
@@ -865,12 +1010,6 @@ export function OverviewPage() {
             <AcxMarketplaceCard />
           </section>
           <RecentActivitySection />
-        </div>
-
-        {/* Ligne 2 : À traiter (gauche) + Suivi des marketplaces (droite) */}
-        <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start">
-          <NeedsAttentionSection />
-          <MarketplaceTrackingSection />
         </div>
       </div>
     </div>

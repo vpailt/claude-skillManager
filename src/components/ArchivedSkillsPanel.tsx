@@ -61,7 +61,7 @@ export function ArchivedSkillsPanel({
                 >
                   <span className="truncate font-medium">{s.name}</span>
                   {s.version && (
-                    <Badge variant="outline" className="text-[10px]">
+                    <Badge variant="outline" className="text-xs">
                       v{s.version}
                     </Badge>
                   )}

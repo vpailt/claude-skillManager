@@ -75,8 +75,8 @@ function FileDiff({
           <ChevronRight className="h-3 w-3" />
         )}
         <ActionIcon action={entry.action} />
-        <code className="font-mono text-[11px]">{entry.path}</code>
-        <Badge variant="outline" className="ml-auto text-[10px]">
+        <code className="font-mono text-xs">{entry.path}</code>
+        <Badge variant="outline" className="ml-auto text-xs">
           {entry.action}
         </Badge>
       </button>
@@ -307,7 +307,7 @@ export function DiffPreviewDialog({
                 <span className="text-sm font-medium">
                   {draft.entries.length} fichier(s) modifié(s)
                 </span>
-                <div className="ml-auto inline-flex overflow-hidden rounded-md border text-[11px]">
+                <div className="ml-auto inline-flex overflow-hidden rounded-md border text-xs">
                   <button
                     type="button"
                     onClick={() => setSplitView(true)}

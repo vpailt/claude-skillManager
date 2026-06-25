@@ -6,6 +6,14 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("pr-polling");
 
+// The marketplace PR tracking (`["tracked-prs"]`) is far more expensive than a
+// per-PR status check — it lists open PRs across every tracked marketplace repo
+// AND each of its plugins' repos. Refresh it at most once per minute, even when
+// the PR-status poll ticks faster. Invalidation only triggers a network refetch
+// when the tracking view (Dashboard / Admin) is actually mounted, so it's free
+// while you're on another tab.
+const TRACKED_PRS_MIN_MS = 60_000;
+
 /**
  * Discreet polling of open PR statuses. Driven by `ui.prPollingEnabled` and
  * `ui.prPollingIntervalSeconds` from app settings.
@@ -13,6 +21,10 @@ const log = createLogger("pr-polling");
  * For each PR whose stored status is "open", calls
  * `pr_history_refresh_status` and fires a notification if the status changed
  * (open → merged | closed).
+ *
+ * Also refreshes the marketplace PR tracking (`["tracked-prs"]`) at most once
+ * per minute (independent of the poll interval) so the "Suivi des marketplaces"
+ * count stays live while the dashboard/admin view is open.
  */
 export function usePrPolling() {
   const qc = useQueryClient();
@@ -37,6 +49,7 @@ export function usePrPolling() {
   });
 
   const lastTickRef = useRef<number>(0);
+  const lastTrackedRef = useRef<number>(0);
   const enabled = settings.data?.ui?.prPollingEnabled ?? false;
   const intervalSec = Math.max(
     15,
@@ -53,6 +66,16 @@ export function usePrPolling() {
 
     const tick = async () => {
       if (cancelled) return;
+
+      // Refresh the marketplace PR tracking at most once per minute, before the
+      // "no open PRs" early-return so it stays fresh even with no own PRs to
+      // poll. Invalidate-only: refetches only when the tracking view is mounted.
+      if (Date.now() - lastTrackedRef.current >= TRACKED_PRS_MIN_MS) {
+        lastTrackedRef.current = Date.now();
+        log.debug("refreshing marketplace PR tracking");
+        qc.invalidateQueries({ queryKey: ["tracked-prs"] });
+      }
+
       const items = history.data ?? [];
       const open = items.filter((it) => it.status === "open");
       if (open.length === 0) return;

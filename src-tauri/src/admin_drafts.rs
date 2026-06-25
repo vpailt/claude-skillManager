@@ -9,7 +9,7 @@
 //! React only deals with serializable data.
 
 use crate::admin::{
-    add_plugin_to_registry, bump_plugin_source_ref, bump_version, build_manifest_bump,
+    add_plugin_to_registry, bump_version, build_manifest_bump,
     collect_skill_folder_changes, fetch_marketplace_registry, make_branch_name,
     remove_plugin_from_registry, serialize_registry, submit_changes, unified_diff,
     update_plugin_in_registry, validate_marketplace_registry, validate_skill_frontmatter,
@@ -27,6 +27,13 @@ fn skill_version_from_fm(fm: &Fields) -> String {
         .or_else(|| fm.get("metadata.version"))
         .cloned()
         .unwrap_or_default()
+}
+
+/// Normalization key for matching a skill across the remote repo (folder
+/// basename) and the local install (frontmatter `name:`): trim + lowercase.
+/// Bridges case/whitespace differences and folder-vs-`name:` divergence.
+fn norm_key(s: &str) -> String {
+    s.trim().to_lowercase()
 }
 
 /// The two locations Claude Code looks at for the plugin's own metadata. Older
@@ -112,6 +119,10 @@ pub struct PendingMeta {
     pub plugin_source_repo: String,
     #[serde(default)]
     pub skill_name: String,
+    /// Skill's own SKILL.md version (add-skill / update-skill). Distinct from
+    /// `new_version`, which is the plugin's bumped manifest version.
+    #[serde(default)]
+    pub skill_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,12 +311,19 @@ pub fn prepare_add_plugin(
         None
     };
 
+    // "main always published" model: the registry entry tracks the plugin repo's
+    // default branch, not the freshly-tagged version. The tag is still created
+    // (release marker / `needs_tag` above) but the registry never re-pins to it,
+    // so the app can detect future releases by reading the manifest on this ref.
+    let plugin_branch = gh
+        .get_default_branch(&plugin_repo)
+        .unwrap_or_else(|_| "main".into());
     let (registry, registry_path, _) = fetch_marketplace_registry(gh, &repo, &branch)?;
     let source = serde_json::json!({
         "source": "url",
         "url": source_url,
         "repo": plugin_repo,
-        "ref": version,
+        "ref": plugin_branch,
     });
     let new_reg = add_plugin_to_registry(&registry, &name, &version, &description, source)?;
     let problems = validate_marketplace_registry(&new_reg);
@@ -341,6 +359,7 @@ pub fn prepare_add_plugin(
             new_version: version,
             plugin_source_repo: plugin_repo,
             skill_name: String::new(),
+            skill_version: String::new(),
         }),
     })
 }
@@ -390,12 +409,12 @@ pub fn prepare_bump_plugin(
         None
     };
 
-    // Bump both `version` and `source.ref` so the marketplace points at the
-    // freshly-tagged release rather than the previous tag. Skipping the second
-    // step (the original bug) leaves Claude clients installing the old zipball
-    // even though the registry claims the new version.
-    let bumped = update_plugin_in_registry(&registry, plugin_name, Some(new_version), None, None)?;
-    let new_reg = bump_plugin_source_ref(&bumped, plugin_name, new_version).unwrap_or(bumped);
+    // "main always published" model: only the informational `version` moves;
+    // `source.ref` is deliberately left pointing at the tracked branch (main).
+    // Re-pinning it to the tag would freeze the app's manifest-based detection
+    // so it could never see a later release. The branch already holds the new,
+    // tagged contents, so clients still install the latest zipball.
+    let new_reg = update_plugin_in_registry(&registry, plugin_name, Some(new_version), None, None)?;
     let problems = validate_marketplace_registry(&new_reg);
     let old_text = serde_json::to_string_pretty(&registry).unwrap_or_default() + "\n";
     let new_text = serde_json::to_string_pretty(&new_reg).unwrap_or_default() + "\n";
@@ -429,6 +448,7 @@ pub fn prepare_bump_plugin(
             new_version: new_version.to_string(),
             plugin_source_repo,
             skill_name: String::new(),
+            skill_version: String::new(),
         }),
     })
 }
@@ -734,14 +754,15 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         bump_level
     );
 
-    // Companion PR bumps the marketplace registry (version + source.ref) to
-    // the new plugin version. The registry is useless if it keeps pointing at
-    // the previous tag.
+    // Optional companion PR refreshing only the registry's informational
+    // `version` field. `source.ref` stays on the tracked branch (main), so this
+    // is purely cosmetic — the app's manifest-based detection doesn't need it.
+    // Off by default in the UI under the "main always published" model.
     let companion = if args.also_bump_marketplace && target_repo != mp_repo {
         match prepare_bump_plugin(gh, &args.marketplace, &args.plugin_name, &new_plugin_version) {
             Ok(mut d) => {
                 d.pr_body = format!(
-                    "Companion PR.\n\nUpdates `{}` to v`{}` in the registry (version + source.ref).",
+                    "Companion PR.\n\nUpdates the informational `version` of `{}` to v`{}` in the registry (source.ref stays on main).",
                     args.plugin_name, new_plugin_version
                 );
                 // The companion's needs_tag triggers a tag-creation step that
@@ -800,6 +821,7 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
             new_version: new_plugin_version,
             plugin_source_repo: plugin_repo,
             skill_name: target_name.clone(),
+            skill_version: effective_skill_version.clone(),
         }),
     })
 }
@@ -894,25 +916,11 @@ pub fn prepare_delete_skill(
     let conflicts = detect_conflicts(gh, &target_repo, &conflict_paths, &base_branch);
     let branch_name = make_branch_name("skillmanager/delete-skill", &[skill_name, &new_version]);
 
-    // Companion PR keeps the marketplace registry in sync (version + source.ref).
-    let companion = if !new_version.is_empty() && target_repo != mp_repo {
-        match prepare_bump_plugin(gh, marketplace, plugin_name, &new_version) {
-            Ok(mut d) => {
-                d.pr_body = format!(
-                    "Companion PR.\n\nUpdates `{}` to v`{}` in the registry after removing skill `{}`.",
-                    plugin_name, new_version, skill_name
-                );
-                d.needs_tag = None;
-                Some(Box::new(d))
-            }
-            Err(e) => {
-                problems.push(format!("Companion bump preparation failed: {e}"));
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // "main always published" model: a skill deletion is a plugin content change,
+    // not a registry add/remove, so we no longer open a companion registry PR.
+    // The manifest bump + tag on the plugin repo (main) is enough; the app reads
+    // the live manifest version at refresh. Avoids per-edit registry noise.
+    let companion: Option<Box<AdminDraft>> = None;
 
     let needs_tag = if !new_version.is_empty()
         && target_repo != mp_repo
@@ -951,6 +959,7 @@ pub fn prepare_delete_skill(
             new_version,
             plugin_source_repo: plugin_repo,
             skill_name: skill_name.to_string(),
+            skill_version: String::new(),
         }),
     })
 }
@@ -982,6 +991,7 @@ pub fn submit_draft(gh: &GitHubClient, draft: &AdminDraft) -> Result<UploadResul
             new_version: meta.new_version.clone(),
             plugin_source_repo: meta.plugin_source_repo.clone(),
             skill_name: meta.skill_name.clone(),
+            skill_version: meta.skill_version.clone(),
             ..Default::default()
         });
     }
@@ -1227,21 +1237,60 @@ pub fn list_skills_in_repo(
         Ok(v) => v,
         Err(_) => return Ok(Vec::new()),
     };
-    let local_index: std::collections::HashMap<String, LocalSkill> =
-        list_user_skills().into_iter().map(|s| (s.name.clone(), s)).collect();
+    // Index local skills by BOTH their declared frontmatter `name:` and their
+    // folder basename, normalized (trim + lowercase), so a remote skill pairs
+    // with its local copy even when those two differ in case/whitespace or
+    // outright (e.g. a namespaced `name:`). Insert the `name:` key last so it
+    // wins on collision.
+    let mut local_index: std::collections::HashMap<String, LocalSkill> =
+        std::collections::HashMap::new();
+    for s in list_user_skills() {
+        let basename = std::path::Path::new(&s.folder)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !basename.trim().is_empty() {
+            local_index
+                .entry(norm_key(&basename))
+                .or_insert_with(|| s.clone());
+        }
+        local_index.insert(norm_key(&s.name), s);
+    }
+
     let mut out = Vec::new();
     for e in entries {
         if e.r#type != "dir" {
             continue;
         }
+        // Folder basename stays the skill's identity for display + upload/delete
+        // operations (the repo path), regardless of how matching resolves.
         let name = e.path.rsplit('/').next().unwrap_or("").to_string();
         let mut version = String::new();
-        if let Ok((text, _)) = gh.get_file(plugin_repo, &format!("{}/SKILL.md", e.path), &plugin_ref)
-        {
-            let (fm, _) = parse_frontmatter(&text);
-            version = skill_version_from_fm(&fm);
+        let mut fm_name = String::new();
+        // Accept either SKILL.md or skill.md — mirrors the local scanner, which
+        // already falls back. Without this a lowercase skill.md showed an empty
+        // remote version next to a populated local one (a phantom mismatch).
+        for fname in ["SKILL.md", "skill.md"] {
+            if let Ok((text, _)) =
+                gh.get_file(plugin_repo, &format!("{}/{}", e.path, fname), &plugin_ref)
+            {
+                let (fm, _) = parse_frontmatter(&text);
+                version = skill_version_from_fm(&fm);
+                fm_name = fm.get("name").cloned().unwrap_or_default();
+                break;
+            }
         }
-        let local_match = local_index.get(&name).cloned();
+        // Match by folder basename first, then by the skill's declared name.
+        let local_match = local_index
+            .get(&norm_key(&name))
+            .or_else(|| {
+                if fm_name.trim().is_empty() {
+                    None
+                } else {
+                    local_index.get(&norm_key(&fm_name))
+                }
+            })
+            .cloned();
         out.push(RemoteSkillInfo {
             name,
             version,

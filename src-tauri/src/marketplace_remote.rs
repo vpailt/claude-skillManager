@@ -86,6 +86,47 @@ pub fn merge_local_remote(
     merged
 }
 
+/// Read a plugin's authoritative current version from its **own** repo manifest
+/// (`manifest.json`, falling back to `.claude-plugin/plugin.json`) on
+/// `source.ref`. This is the "main always published" model: the marketplace
+/// registry no longer pins a per-release version — the plugin repo's manifest on
+/// its tracked branch is the source of truth. Returns `None` if the repo is
+/// unset or no readable manifest carries a non-empty `version`.
+///
+/// Reads on `source.ref` (not the default branch) so detection stays consistent
+/// with what `installer::install_plugin` actually pulls — reporting "outdated"
+/// against a ref we wouldn't install from would loop forever.
+pub fn fetch_plugin_manifest_version(
+    gh: &GitHubClient,
+    source: &PluginSource,
+) -> Option<String> {
+    if source.repo.is_empty() {
+        return None;
+    }
+    for path in ["manifest.json", ".claude-plugin/plugin.json"] {
+        let Ok((text, _)) = gh.get_file(&source.repo, path, &source.r#ref) else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        if let Some(v) = json.get("version").and_then(|v| v.as_str()) {
+            let v = v.trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Re-derive `install_state` after `latest_version` was replaced out-of-band
+/// (e.g. by a live manifest read at refresh, after `merge_local_remote` already
+/// ran its semver compare against the registry seed).
+pub fn recompute_state(p: &mut Plugin) {
+    p.install_state = compute_state(p);
+}
+
 fn compute_state(p: &Plugin) -> InstallState {
     let installed = p.installed_version.as_deref().unwrap_or("");
     if installed.is_empty() {

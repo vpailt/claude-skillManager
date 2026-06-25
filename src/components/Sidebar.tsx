@@ -1,7 +1,6 @@
 import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
-  Package,
   Sparkles,
   ShieldCheck,
   Settings,
@@ -23,6 +22,7 @@ import { api } from "@/lib/api";
 import { HelpDialog } from "@/components/HelpDialog";
 import { useAppVersion } from "@/hooks/useAppVersion";
 import { useHelpDialog } from "@/stores/helpDialog";
+import { useSettingsDialog } from "@/stores/settingsDialog";
 
 interface NavItem {
   to: string;
@@ -41,17 +41,10 @@ const NAV: NavItem[] = [
     icon: LayoutDashboard,
   },
   {
-    to: "/plugins",
-    label: "Plugins",
-    subtitle: "Installer & activer",
-    tooltip: "Plugins — installer, mettre à jour, activer/désactiver, désinstaller",
-    icon: Package,
-  },
-  {
     to: "/skills",
     label: "Skills",
-    subtitle: "Parcourir & lire",
-    tooltip: "Skills — parcourir le contenu SKILL.md, gérer les doublons & archivés",
+    subtitle: "Installer et parcourir",
+    tooltip: "Skills — vue unifiée Marketplace → Plugin → Skills : installer/activer les plugins, parcourir le contenu SKILL.md, gérer doublons & archivés, filtrer par état d'installation",
     icon: Sparkles,
   },
   {
@@ -78,6 +71,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const patch = useUi((s) => s.patch);
   const helpOpen = useHelpDialog((s) => s.open);
   const setHelpOpen = useHelpDialog((s) => s.setOpen);
+  const openSettings = useSettingsDialog((s) => s.openTo);
   const version = useAppVersion();
   const cycleTheme = () => {
     const idx = THEME_CYCLE.indexOf(theme);
@@ -133,7 +127,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
       >
         <button
           type="button"
-          title="Ouvrir la palette de commandes (Ctrl+K) — accède à tout"
+          title="Ouvrir la palette de commandes (Ctrl+K) — accédez à tout"
           onClick={onOpenPalette}
           className={cn(
             "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
@@ -144,7 +138,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           {!collapsed && (
             <>
               <span>Rechercher</span>
-              <kbd className="ml-auto rounded border px-1 text-[10px]">⌃K</kbd>
+              <kbd className="ml-auto rounded border px-1 text-xs">⌃K</kbd>
             </>
           )}
         </button>
@@ -172,7 +166,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
 
       {/* Navigation */}
       {!collapsed && (
-        <div className="px-4 pt-3 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+        <div className="px-4 pt-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
           Naviguer
         </div>
       )}
@@ -197,7 +191,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
             {!collapsed && (
               <div className="min-w-0 flex-1 leading-tight">
                 <div className="truncate font-medium">{label}</div>
-                <div className="truncate text-[11px] text-muted-foreground/80">
+                <div className="truncate text-xs text-muted-foreground/80">
                   {subtitle}
                 </div>
               </div>
@@ -211,7 +205,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
         (auth.data || rate.data || (gitea.data?.length ?? 0) > 0) && (
           <>
             <Separator />
-            <div className="space-y-1 px-3 py-2 text-[11px] text-muted-foreground">
+            <div className="space-y-1 px-3 py-2 text-xs text-muted-foreground">
               {auth.data && (
                 <div
                   className="truncate"
@@ -220,11 +214,17 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
                   GitHub : {auth.data[0] ? `@${auth.data[1]}` : "pas de token"}
                 </div>
               )}
-              {rate.data && rate.data[0] >= 0 && (
-                <div title="Requêtes API GitHub restantes / quota total pour cette heure">
-                  GitHub : {rate.data[0]}/{rate.data[1]}
-                </div>
-              )}
+              {rate.data &&
+                rate.data[0] >= 0 &&
+                rate.data[1] > 0 &&
+                rate.data[0] < Math.max(50, rate.data[1] * 0.1) && (
+                  <div
+                    className="text-amber-500"
+                    title="Quota d'appels à l'API GitHub bientôt épuisé — il se réinitialise au début de l'heure suivante"
+                  >
+                    GitHub : quota bas ({rate.data[0]}/{rate.data[1]})
+                  </div>
+                )}
               {(gitea.data ?? []).map((g) => (
                 <div
                   key={g.baseUrl}
@@ -254,18 +254,15 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           collapsed ? "flex-col" : "justify-between px-3"
         )}
       >
-        <NavLink to="/settings" title="Paramètres — token, polling, logs, thème">
-          {({ isActive }) => (
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn(isActive && "bg-accent")}
-              aria-label="Paramètres"
-            >
-              <Settings className="h-4 w-4" />
-            </Button>
-          )}
-        </NavLink>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => openSettings("general")}
+          title="Paramètres — token, polling, logs, thème"
+          aria-label="Paramètres"
+        >
+          <Settings className="h-4 w-4" />
+        </Button>
         <Button
           variant="ghost"
           size="icon"
@@ -305,7 +302,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
         </Button>
       </div>
       {!collapsed && (
-        <div className="px-3 pb-2 text-center text-[10px] text-muted-foreground/60">
+        <div className="px-3 pb-2 text-center text-xs text-muted-foreground/60">
           <div>Conçu par @vpailt</div>
           {version && <div>v{version}</div>}
         </div>

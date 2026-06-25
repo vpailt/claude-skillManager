@@ -12,6 +12,10 @@ export const DEFAULT_UI: UiPrefs = {
   startMinimized: false,
   closeToTray: true,
   nativeNotificationsEnabled: true,
+  notifySuccess: true,
+  notifyInfo: true,
+  notifyWarning: true,
+  notifyError: true,
 };
 
 interface UiState {

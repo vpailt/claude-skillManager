@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Package, Sparkles, Globe, ArrowRight } from "lucide-react";
+import {
+  Search,
+  Package,
+  Sparkles,
+  Globe,
+  ArrowRight,
+  Settings as SettingsIcon,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -8,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useApp } from "@/stores/app";
+import { useSettingsDialog } from "@/stores/settingsDialog";
 import { cn } from "@/lib/utils";
 
 interface CommandPaletteProps {
@@ -17,6 +25,7 @@ interface CommandPaletteProps {
 
 type Item =
   | { kind: "page"; label: string; path: string }
+  | { kind: "settings"; label: string }
   | {
       kind: "marketplace";
       label: string;
@@ -36,16 +45,18 @@ type Item =
       skill: string;
     };
 
+// Settings is a dialog, not a route, so it's modeled as its own item kind
+// rather than overloading a (now non-existent) "/settings" route path.
 const PAGES: Item[] = [
-  { kind: "page", label: "Aperçu", path: "/" },
-  { kind: "page", label: "Plugins", path: "/plugins" },
+  { kind: "page", label: "Dashboard", path: "/" },
   { kind: "page", label: "Skills", path: "/skills" },
-  { kind: "page", label: "Admin", path: "/admin" },
-  { kind: "page", label: "Paramètres", path: "/settings" },
+  { kind: "page", label: "Administration", path: "/admin" },
+  { kind: "settings", label: "Paramètres" },
 ];
 
 function IconFor({ item }: { item: Item }) {
   if (item.kind === "page") return <ArrowRight className="h-3.5 w-3.5" />;
+  if (item.kind === "settings") return <SettingsIcon className="h-3.5 w-3.5" />;
   if (item.kind === "marketplace") return <Globe className="h-3.5 w-3.5" />;
   if (item.kind === "plugin") return <Package className="h-3.5 w-3.5" />;
   return <Sparkles className="h-3.5 w-3.5" />;
@@ -55,6 +66,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const marketplaces = useApp((s) => s.marketplaces);
   const localOnly = useApp((s) => s.localOnly);
   const setSelection = useApp((s) => s.setSelection);
+  const openSettings = useSettingsDialog((s) => s.openTo);
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
@@ -112,18 +124,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   }, [cursor, filtered.length]);
 
   const run = (it: Item) => {
-    if (it.kind === "page") {
+    if (it.kind === "settings") {
+      // Settings is a dialog, not a route — pop it on its default section.
+      openSettings("general");
+    } else if (it.kind === "page") {
       navigate(it.path);
     } else if (it.kind === "marketplace") {
       setSelection({ kind: "marketplace", marketplace: it.marketplace });
-      navigate("/plugins");
+      navigate("/skills");
     } else if (it.kind === "plugin") {
       setSelection({
         kind: "plugin",
         marketplace: it.marketplace,
         plugin: it.plugin,
       });
-      navigate("/plugins");
+      navigate("/skills");
     } else if (it.kind === "skill") {
       setSelection({
         kind: "skill",
@@ -131,7 +146,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         plugin: it.plugin,
         skill: it.skill,
       });
-      navigate("/plugins");
+      navigate("/skills");
     }
     onOpenChange(false);
   };
@@ -144,7 +159,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           <Search className="h-4 w-4 text-muted-foreground" />
           <Input
             ref={inputRef}
-            placeholder="Accède à une page, un marketplace, un plugin ou un skill…"
+            placeholder="Accédez à une page, un marketplace, un plugin ou un skill…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
@@ -183,7 +198,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             >
               <IconFor item={it} />
               <span className="truncate">{it.label}</span>
-              <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+              <span className="ml-auto text-xs uppercase tracking-wide text-muted-foreground">
                 {it.kind}
               </span>
             </button>

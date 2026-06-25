@@ -24,6 +24,7 @@ pub mod plugin_state;
 pub mod pr_history;
 pub mod properties;
 pub mod registry;
+pub mod taskbar;
 pub mod token_store;
 pub mod tray;
 
@@ -118,6 +119,7 @@ pub fn run() {
             settings_upsert_gitea_instance,
             settings_remove_gitea_instance,
             settings_set_gitea_token,
+            gitea_get_token,
             admin_submit_changes,
             admin_collect_skill_folder,
             admin_fetch_registry,
@@ -165,6 +167,7 @@ pub fn run() {
             app_uninstall,
             tray::show_main_window,
             tray::hide_main_window,
+            taskbar::set_taskbar_badge,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

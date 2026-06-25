@@ -15,6 +15,13 @@ export function useRefresh() {
     queryKey: ["refresh"],
     queryFn: api.refreshAll,
     staleTime: 60_000,
+    // Periodic full refresh so derived state (notably the "plugins obsolètes"
+    // count behind the taskbar badge) updates on its own. Kept slow — refresh_all
+    // hits the GitHub API and is quota-limited, so we don't run it on the fast PR
+    // poll tick. Paused while the window is hidden (default
+    // refetchIntervalInBackground: false) since the badge isn't visible then and
+    // a focus refetch covers re-show.
+    refetchInterval: 30 * 60_000,
   });
 
   useEffect(() => {

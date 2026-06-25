@@ -109,7 +109,13 @@ export interface UiPrefs {
   sidebarCollapsed: boolean;
   startMinimized: boolean;
   closeToTray: boolean;
+  /** Master switch for Windows native toasts; AND-ed with the per-kind flags. */
   nativeNotificationsEnabled: boolean;
+  /** Per-kind gating of native toasts. Each defaults to true. */
+  notifySuccess: boolean;
+  notifyInfo: boolean;
+  notifyWarning: boolean;
+  notifyError: boolean;
 }
 
 export interface LoggingConfig {
@@ -173,6 +179,9 @@ export interface PendingPR {
   newVersion: string;
   pluginSourceRepo: string;
   skillName: string;
+  /** Skill's own SKILL.md version for skill PRs; distinct from newVersion
+   *  (the plugin's bumped manifest version). */
+  skillVersion: string;
   createdAt: string;
 }
 
@@ -225,6 +234,7 @@ export interface PendingMeta {
   newVersion: string;
   pluginSourceRepo: string;
   skillName: string;
+  skillVersion: string;
 }
 
 export interface FileChange {

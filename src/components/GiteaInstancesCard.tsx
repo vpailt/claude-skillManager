@@ -71,10 +71,27 @@ export function GiteaInstancesCard() {
   const auto = statusQuery.data?.find((s) => hostOf(s.baseUrl) === ACX_GITEA_HOST);
 
   const [tokenDraft, setTokenDraft] = useState("");
+  // Whether the user has edited the field — once they have, we stop letting the
+  // stored-token fetch overwrite their input.
+  const tokenTouchedRef = useRef(false);
   const [authResult, setAuthResult] = useState<{ ok: boolean; msg: string } | null>(
     null,
   );
   const [helpOpen, setHelpOpen] = useState(false);
+
+  // Pre-fill the input with the stored token (like the GitHub token field),
+  // so the user can see / edit the current value rather than a blank box.
+  const tokenQuery = useQuery({
+    queryKey: ["gitea-token", ACX_GITEA_HOST],
+    queryFn: () => api.giteaGetToken(ACX_GITEA_URL),
+    enabled: !!inst?.hasToken,
+    staleTime: 60_000,
+  });
+  useEffect(() => {
+    if (tokenQuery.data && !tokenTouchedRef.current) {
+      setTokenDraft(tokenQuery.data);
+    }
+  }, [tokenQuery.data]);
 
   const onSettings = (s: SettingsType) => {
     qc.setQueryData<SettingsType>(["app-settings"], s);
@@ -100,10 +117,16 @@ export function GiteaInstancesCard() {
   const setToken = useMutation({
     mutationFn: (token: string) =>
       api.settingsSetGiteaToken(ACX_GITEA_URL, token),
-    onSuccess: (s) => {
+    onSuccess: (s, token) => {
       onSettings(s);
-      setTokenDraft("");
-      push({ kind: "success", title: "Token Gitea enregistré" });
+      // Re-read the stored value so the input reflects what's now saved
+      // (instead of blanking it), mirroring the GitHub token field.
+      tokenTouchedRef.current = false;
+      qc.invalidateQueries({ queryKey: ["gitea-token", ACX_GITEA_HOST] });
+      push({
+        kind: "success",
+        title: token.trim() ? "Token Gitea enregistré" : "Token Gitea supprimé",
+      });
     },
     onError: (e) =>
       push({ kind: "error", title: "Échec de l'enregistrement du token", body: errMsg(e) }),
@@ -132,10 +155,11 @@ export function GiteaInstancesCard() {
           <div>
             <CardTitle>Gitea — AlmaviaCX</CardTitle>
             <CardDescription>
-              Forge interne <code>{ACX_GITEA_URL}</code>, accessible via le VPN
-              GlobalProtect. Le token est stocké dans le coffre d'identifiants
-              Windows (clé par hôte), jamais sur disque. Les marketplaces Gitea
-              peuvent ensuite être ajoutées depuis l'onglet Administration.
+              Gestionnaire de version interne <code>{ACX_GITEA_URL}</code>,
+              accessible via le VPN GlobalProtect. Le token est stocké dans le
+              coffre d'identifiants Windows (clé par hôte), jamais sur disque.
+              Les marketplaces Gitea peuvent ensuite être ajoutées depuis
+              l'onglet Administration.
             </CardDescription>
           </div>
           <Button
@@ -170,14 +194,17 @@ export function GiteaInstancesCard() {
           <div className="flex items-center gap-2">
             <Input
               type="password"
-              placeholder="Token Gitea (définir / remplacer)"
+              placeholder="Token Gitea (vider puis enregistrer pour supprimer)"
               value={tokenDraft}
-              onChange={(e) => setTokenDraft(e.target.value)}
+              onChange={(e) => {
+                tokenTouchedRef.current = true;
+                setTokenDraft(e.target.value);
+              }}
             />
             <Button
               size="sm"
               onClick={() => setToken.mutate(tokenDraft)}
-              disabled={!tokenDraft.trim() || setToken.isPending}
+              disabled={setToken.isPending}
             >
               <Save className="mr-1 h-3 w-3" />
               Enregistrer

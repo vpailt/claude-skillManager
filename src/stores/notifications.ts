@@ -27,14 +27,27 @@ interface PushOptions {
   force?: boolean;
 }
 
+/** Per-kind enablement of native toasts, synced from settings. All default on. */
+export type NativeKinds = Record<NotificationKind, boolean>;
+
+const ALL_KINDS_ON: NativeKinds = {
+  info: true,
+  success: true,
+  warning: true,
+  error: true,
+};
+
 interface State {
   items: Notification[];
   /** Set by App.tsx: when the main window is hidden, prefer native toasts. */
   windowHidden: boolean;
   /** Master switch synced from settings. Defaults to true. */
   nativeEnabled: boolean;
+  /** Per-kind native gating synced from settings. AND-ed with `nativeEnabled`. */
+  nativeKinds: NativeKinds;
   setWindowHidden: (hidden: boolean) => void;
   setNativeEnabled: (enabled: boolean) => void;
+  setNativeKinds: (kinds: NativeKinds) => void;
   push: (
     n: Omit<Notification, "id" | "createdAt">,
     opts?: PushOptions
@@ -77,8 +90,10 @@ export const useNotifications = create<State>((set, get) => ({
   items: [],
   windowHidden: false,
   nativeEnabled: true,
+  nativeKinds: { ...ALL_KINDS_ON },
   setWindowHidden: (hidden) => set({ windowHidden: hidden }),
   setNativeEnabled: (enabled) => set({ nativeEnabled: enabled }),
+  setNativeKinds: (kinds) => set({ nativeKinds: kinds }),
   push: (n, opts) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     set((s) => ({
@@ -93,7 +108,11 @@ export const useNotifications = create<State>((set, get) => ({
 
     const state = get();
     const askedNative = opts?.native ?? state.windowHidden;
-    const wantNative = opts?.force || (askedNative && state.nativeEnabled);
+    const kindAllowed = state.nativeKinds[n.kind] ?? true;
+    // `force` (the explicit Test button) bypasses both the master switch and the
+    // per-kind gating so it can always verify the Windows permission.
+    const wantNative =
+      opts?.force || (askedNative && state.nativeEnabled && kindAllowed);
     if (wantNative) {
       void fireNative(n.title, n.body);
     }

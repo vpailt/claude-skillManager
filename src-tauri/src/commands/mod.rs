@@ -238,6 +238,25 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
             if plugin.installed_version.is_none() {
                 continue;
             }
+            // Authoritative latest version = the plugin repo's own manifest on
+            // its tracked `ref` (the "main always published" model). The registry
+            // no longer bumps a per-release version, so override the seed that
+            // `merge_local_remote` carried over and re-derive the install state.
+            // Best-effort: a failed read (offline / VPN-gated Gitea) leaves the
+            // registry-seeded latest_version untouched.
+            if let Some(ver) = marketplace_remote::fetch_plugin_manifest_version(&gh, &src) {
+                if plugin.latest_version.as_deref() != Some(ver.as_str()) {
+                    tracing::debug!(
+                        "manifest version for {}@{}: {} (was {:?})",
+                        plugin.name,
+                        mp.name,
+                        ver,
+                        plugin.latest_version
+                    );
+                }
+                plugin.latest_version = Some(ver);
+                marketplace_remote::recompute_state(plugin);
+            }
             match marketplace_remote::fetch_plugin_skills(&gh, &src, &plugin.name, &mp.name) {
                 Ok(remote_skills) => {
                     let local = std::mem::take(&mut plugin.skills);
@@ -762,6 +781,16 @@ pub async fn settings_set_gitea_token(base_url: String, token: String) -> Result
     tracing::info!("gitea token updated for {} (len={})", host, token.len());
     token_store::save_host(&host, &token)?;
     Ok(config::load_settings())
+}
+
+/// Read back the stored Gitea token for an instance so the Settings input can be
+/// pre-filled, mirroring how the GitHub token is surfaced via `Settings`. Returns
+/// an empty string when no token is stored. Like the GitHub token, this exposes
+/// the credential to the frontend on request — consistent with the existing model.
+#[tauri::command]
+pub async fn gitea_get_token(base_url: String) -> Result<String> {
+    let host = host_of(&base_url);
+    Ok(token_store::load_host(&host)?.unwrap_or_default())
 }
 
 // ---------- Admin commands ----------

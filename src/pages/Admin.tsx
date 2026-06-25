@@ -32,6 +32,28 @@ import { AdminLocalPanel } from "@/components/AdminLocalPanel";
 import { useApp } from "@/stores/app";
 import type { PendingPR, Plugin, RemoteSkillInfo, TrackedPr } from "@/lib/types";
 
+// Compare two dotted version strings numerically (semver-ish), falling back to
+// a lexical compare on non-numeric segments. Returns -1 | 0 | 1 (a vs b). Used
+// to decide whether the local copy of a skill actually differs from the repo,
+// so equal versions don't render as a misleading two-badge "mismatch".
+function cmpVersions(a: string, b: string): number {
+  const pa = a.split(/[.+-]/);
+  const pb = b.split(/[.+-]/);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const sa = pa[i] ?? "0";
+    const sb = pb[i] ?? "0";
+    const na = Number.parseInt(sa, 10);
+    const nb = Number.parseInt(sb, 10);
+    if (Number.isNaN(na) || Number.isNaN(nb)) {
+      if (sa !== sb) return sa < sb ? -1 : 1;
+    } else if (na !== nb) {
+      return na < nb ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
 // ============================================================
 // Marketplace + plugins admin section
 // ============================================================
@@ -75,8 +97,8 @@ function MarketplaceAdminSection({
           </p>
           {allMarketplaces.length === 0 && (
             <p>
-              Aucun marketplace enregistré pour le moment. Ajoutes-en un depuis l'onglet{" "}
-              <strong>Admin local</strong> via <em>Ajouter depuis URL</em>.
+              Aucun marketplace enregistré pour le moment. Ajoutez-en un depuis l'onglet{" "}
+              <strong>Gérer mon poste</strong> via <em>Ajouter depuis URL</em>.
             </p>
           )}
           {unconfigured.length > 0 && (
@@ -90,13 +112,13 @@ function MarketplaceAdminSection({
           )}
           {githubBacked.length > 0 && (
             <p>
-              Ton token GitHub n'a pas d'accès en écriture sur :{" "}
+              Votre token GitHub n'a pas d'accès en écriture sur :{" "}
               <span className="font-mono text-foreground">
                 {githubBacked.map((m) => `${m.name} (${m.sourceRepo})`).join(", ")}
               </span>
-              . Utilise un token avec le scope <code>repo</code> (PAT classique) ou{" "}
+              . Utilisez un token avec le scope <code>repo</code> (PAT classique) ou{" "}
               <code>Contents: write</code> + <code>Pull requests: write</code>{" "}
-              (fine-grained), puis rafraîchis.
+              (fine-grained), puis rafraîchissez.
             </p>
           )}
         </CardContent>
@@ -141,7 +163,7 @@ function MarketplaceAdminSection({
             {filteredPlugins.length === 0 && (
               <Card>
                 <CardContent className="p-6 text-sm text-muted-foreground">
-                  Aucun plugin listé dans ce marketplace pour le moment. Clique sur{" "}
+                  Aucun plugin listé dans ce marketplace pour le moment. Cliquez sur{" "}
                   <em>Ajouter un plugin</em> pour en enregistrer un.
                 </CardContent>
               </Card>
@@ -222,8 +244,11 @@ function PluginAdminCard({
     for (const [name, p] of pendingBySkill) {
       if (!remoteByName.has(name)) {
         out.push({
+          // For an in-review add-skill row, show the skill's own SKILL.md
+          // version, not the plugin's bumped manifest version. Older pending
+          // records predate skillVersion, so fall back to newVersion.
           name,
-          version: p.newVersion,
+          version: p.skillVersion || p.newVersion,
           pending: p,
         });
       }
@@ -351,19 +376,66 @@ function PluginAdminCard({
                       {s.name}
                     </span>
                     {s.version && (
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge
+                        variant="outline"
+                        className="text-xs"
+                        title="Version déclarée dans le SKILL.md du repo du plugin (branche par défaut)"
+                      >
                         v{s.version}
                       </Badge>
                     )}
-                    {s.localFolder && (
-                      <Badge variant="success" className="text-[10px]">
-                        local : v{s.localVersion || "?"}
-                      </Badge>
-                    )}
+                    {s.localFolder &&
+                      (() => {
+                        const remoteV = (s.version ?? "").trim();
+                        const localV = (s.localVersion ?? "").trim();
+                        if (!localV) {
+                          return (
+                            <Badge
+                              variant="outline"
+                              className="text-xs"
+                              title="Présent dans ~/.claude/skills sans champ version dans le SKILL.md"
+                            >
+                              local : v?
+                            </Badge>
+                          );
+                        }
+                        if (!remoteV) {
+                          return (
+                            <Badge
+                              variant="outline"
+                              className="text-xs"
+                              title={`Copie locale (~/.claude/skills) — v${localV}`}
+                            >
+                              local : v{localV}
+                            </Badge>
+                          );
+                        }
+                        const cmp = cmpVersions(localV, remoteV);
+                        if (cmp === 0) {
+                          return (
+                            <Badge
+                              variant="success"
+                              className="text-xs"
+                              title={`Copie locale (~/.claude/skills) à jour — v${localV}`}
+                            >
+                              local à jour
+                            </Badge>
+                          );
+                        }
+                        return (
+                          <Badge
+                            variant="warning"
+                            className="text-xs"
+                            title={`Copie locale (~/.claude/skills) v${localV} — diffère du repo (v${remoteV})`}
+                          >
+                            local : v{localV} {cmp > 0 ? "⬆" : "⬇"}
+                          </Badge>
+                        );
+                      })()}
                     {inReview && s.pending && (
                       <button
                         type="button"
-                        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium hover:underline ${
+                        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium hover:underline ${
                           isDeleting
                             ? "bg-destructive/10 text-destructive"
                             : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
@@ -441,7 +513,7 @@ function TrackedPrRow({ pr }: { pr: TrackedPr }) {
       className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:hover:bg-transparent"
       title={`${pr.repo} #${pr.number} — ${pr.title}`}
     >
-      <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+      <Badge variant="outline" className="shrink-0 font-mono text-xs">
         #{pr.number}
       </Badge>
       <span className="min-w-0 flex-1 truncate">{pr.title || "(sans titre)"}</span>
@@ -518,7 +590,7 @@ function TrackingSection() {
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
             PR ouvertes sur les marketplaces dont le <strong>Suivi PR</strong> est
-            actif (onglet Admin local) et sur les repos de leurs plugins.
+            actif (onglet Gérer mon poste) et sur les repos de leurs plugins.
           </p>
         </div>
         <Button
@@ -539,8 +611,8 @@ function TrackingSection() {
           <CardContent className="flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
             <Radar className="h-8 w-8 opacity-40" />
             <span>
-              Aucun marketplace suivi. Active le toggle <strong>Suivi PR</strong>{" "}
-              sur un marketplace dans l'onglet <strong>Admin local</strong>.
+              Aucun marketplace suivi. Activez le toggle <strong>Suivi PR</strong>{" "}
+              sur un marketplace dans l'onglet <strong>Gérer mon poste</strong>.
             </span>
           </CardContent>
         </Card>
@@ -585,7 +657,7 @@ function TrackingSection() {
                     <>
                       {g.marketplace.length > 0 && (
                         <div className="space-y-0.5">
-                          <div className="flex items-center gap-1 px-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          <div className="flex items-center gap-1 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                             <GitPullRequest className="h-3 w-3" />
                             Marketplace
                           </div>
@@ -596,7 +668,7 @@ function TrackingSection() {
                       )}
                       {Array.from(g.plugins.entries()).map(([plugin, prs]) => (
                         <div key={plugin} className="space-y-0.5">
-                          <div className="flex items-center gap-1 px-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          <div className="flex items-center gap-1 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                             <Package className="h-3 w-3" />
                             {plugin}
                           </div>
@@ -634,12 +706,12 @@ export function AdminPage() {
       <header className="shrink-0 border-b p-4">
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-5 w-5 text-primary" />
-          <h1 className="text-xl font-semibold">Admin</h1>
+          <h1 className="text-xl font-semibold">Administration</h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          <strong>Local</strong> — installer / désinstaller / activer des plugins sur
-          ta machine. <strong>Distant</strong> — pousser des changements de registre
-          vers GitHub via des Pull Requests.
+          <strong>Gérer mon poste</strong> — installer / désinstaller / activer des
+          plugins sur votre machine. <strong>Proposer une amélioration</strong> —
+          pousser des changements de registre vers GitHub via des Pull Requests.
         </p>
         <div className="mt-3 flex gap-2">
           <Button
@@ -648,7 +720,7 @@ export function AdminPage() {
             onClick={() => setTab("local")}
           >
             <HardDrive className="mr-1 h-3 w-3" />
-            Admin local
+            Gérer mon poste
           </Button>
           <Button
             size="sm"
@@ -656,7 +728,7 @@ export function AdminPage() {
             onClick={() => setTab("remote")}
           >
             <Globe className="mr-1 h-3 w-3" />
-            Admin distant
+            Proposer une amélioration
           </Button>
           <Button
             size="sm"

@@ -208,9 +208,21 @@ pub struct UiPrefs {
     #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
     /// Whether the app may raise Windows notification-area toasts (e.g. on PR
-    /// status changes). When off, only the in-app toast is shown.
+    /// status changes). When off, only the in-app toast is shown. Master switch
+    /// AND-ed with the per-kind flags below.
     #[serde(default = "default_true")]
     pub native_notifications_enabled: bool,
+    /// Per-kind gating of native toasts (success / info / warning / error).
+    /// Each defaults to on and is AND-ed with `native_notifications_enabled`,
+    /// so the user can silence e.g. success toasts while keeping error toasts.
+    #[serde(default = "default_true")]
+    pub notify_success: bool,
+    #[serde(default = "default_true")]
+    pub notify_info: bool,
+    #[serde(default = "default_true")]
+    pub notify_warning: bool,
+    #[serde(default = "default_true")]
+    pub notify_error: bool,
 }
 
 fn default_close_to_tray() -> bool {
@@ -232,6 +244,10 @@ impl Default for UiPrefs {
             start_minimized: false,
             close_to_tray: true,
             native_notifications_enabled: true,
+            notify_success: true,
+            notify_info: true,
+            notify_warning: true,
+            notify_error: true,
         }
     }
 }
@@ -302,6 +318,10 @@ const PROP_UI_SIDEBAR: &str = "ui.sidebar.collapsed";
 const PROP_UI_START_MINIMIZED: &str = "ui.tray.start.minimized";
 const PROP_UI_CLOSE_TO_TRAY: &str = "ui.tray.close.to.tray";
 const PROP_UI_NATIVE_NOTIFICATIONS: &str = "ui.notifications.native.enabled";
+const PROP_UI_NOTIFY_SUCCESS: &str = "ui.notifications.native.success";
+const PROP_UI_NOTIFY_INFO: &str = "ui.notifications.native.info";
+const PROP_UI_NOTIFY_WARNING: &str = "ui.notifications.native.warning";
+const PROP_UI_NOTIFY_ERROR: &str = "ui.notifications.native.error";
 
 const PROPS_SECTIONS: &[(&str, &[&str])] = &[
     ("PR status polling", &["polling."]),
@@ -328,6 +348,10 @@ fn settings_from_properties_and_marketplaces(
             close_to_tray: props.get_bool(PROP_UI_CLOSE_TO_TRAY, true),
             native_notifications_enabled: props
                 .get_bool(PROP_UI_NATIVE_NOTIFICATIONS, true),
+            notify_success: props.get_bool(PROP_UI_NOTIFY_SUCCESS, true),
+            notify_info: props.get_bool(PROP_UI_NOTIFY_INFO, true),
+            notify_warning: props.get_bool(PROP_UI_NOTIFY_WARNING, true),
+            notify_error: props.get_bool(PROP_UI_NOTIFY_ERROR, true),
         },
     }
 }
@@ -342,6 +366,10 @@ fn settings_to_properties(s: &Settings) -> Properties {
     p.set_bool(PROP_UI_START_MINIMIZED, s.ui.start_minimized);
     p.set_bool(PROP_UI_CLOSE_TO_TRAY, s.ui.close_to_tray);
     p.set_bool(PROP_UI_NATIVE_NOTIFICATIONS, s.ui.native_notifications_enabled);
+    p.set_bool(PROP_UI_NOTIFY_SUCCESS, s.ui.notify_success);
+    p.set_bool(PROP_UI_NOTIFY_INFO, s.ui.notify_info);
+    p.set_bool(PROP_UI_NOTIFY_WARNING, s.ui.notify_warning);
+    p.set_bool(PROP_UI_NOTIFY_ERROR, s.ui.notify_error);
     p
 }
 

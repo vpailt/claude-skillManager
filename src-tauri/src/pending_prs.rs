@@ -28,6 +28,11 @@ pub struct PendingPR {
     /// the Skills UI tag the row currently under review.
     #[serde(default)]
     pub skill_name: String,
+    /// Skill's own SKILL.md version for skill-scoped PRs; distinct from
+    /// `new_version` (the plugin's bumped manifest version). Lets the Skills UI
+    /// show the right version for an in-review add-skill row.
+    #[serde(default)]
+    pub skill_version: String,
     #[serde(default)]
     pub created_at: String,
 }

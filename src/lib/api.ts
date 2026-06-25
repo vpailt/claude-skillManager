@@ -130,6 +130,8 @@ export const api = {
     invoke<Settings>("settings_remove_gitea_instance", { baseUrl }),
   settingsSetGiteaToken: (baseUrl: string, token: string) =>
     invoke<Settings>("settings_set_gitea_token", { baseUrl, token }),
+  giteaGetToken: (baseUrl: string) =>
+    invoke<string>("gitea_get_token", { baseUrl }),
 
   // --- admin ---
   adminSubmitChanges: (args: {
@@ -182,6 +184,10 @@ export const api = {
   // --- marketplace PR tracking ("Suivi Marketplace") ---
   trackedMarketplacePrs: (only?: string) =>
     invoke<TrackedPr[]>("track_marketplace_prs", { only: only ?? null }),
+
+  // --- taskbar overlay badge ("actions à traiter") ---
+  setTaskbarBadge: (count: number) =>
+    invoke<void>("set_taskbar_badge", { count }),
 
   // --- admin drafts (wizards) ---
   adminPrepareAddPlugin: (marketplace: string, sourceUrl: string) =>

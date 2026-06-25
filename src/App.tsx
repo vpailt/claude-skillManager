@@ -6,6 +6,7 @@ import { NotificationStack } from "@/components/NotificationStack";
 import { useRefresh } from "@/hooks/useRefresh";
 import { usePrPolling } from "@/hooks/usePrPolling";
 import { useTrayEvents } from "@/hooks/useTrayEvents";
+import { useTaskbarBadge } from "@/hooks/useTaskbarBadge";
 import { useUi } from "@/stores/ui";
 import { useNotifications } from "@/stores/notifications";
 import { useQuery } from "@tanstack/react-query";
@@ -13,10 +14,9 @@ import { api } from "@/lib/api";
 import { createLogger, setFrontendLogLevel } from "@/lib/logger";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { OverviewPage } from "@/pages/Overview";
-import { PluginsPage } from "@/pages/Plugins";
 import { SkillsPage } from "@/pages/Skills";
 import { AdminPage } from "@/pages/Admin";
-import { SettingsPage } from "@/pages/Settings";
+import { SettingsDialog } from "@/components/SettingsDialog";
 
 const appLog = createLogger("app");
 
@@ -27,6 +27,8 @@ export default function App() {
   usePrPolling();
   // Tray menu → frontend bridge (refresh, open settings).
   useTrayEvents();
+  // Taskbar overlay badge: number of "actions à traiter".
+  useTaskbarBadge();
 
   // Track window visibility so notifications can prefer native toasts when
   // the window is hidden in the tray.
@@ -58,16 +60,24 @@ export default function App() {
   // Sync persisted UI prefs into the local zustand store.
   const setUi = useUi((s) => s.setUi);
   const setNativeEnabled = useNotifications((s) => s.setNativeEnabled);
+  const setNativeKinds = useNotifications((s) => s.setNativeKinds);
   const settings = useQuery({
     queryKey: ["app-settings"],
     queryFn: api.loadAppSettings,
   });
   useEffect(() => {
     if (settings.data?.ui) {
-      setUi(settings.data.ui);
-      setNativeEnabled(settings.data.ui.nativeNotificationsEnabled);
+      const u = settings.data.ui;
+      setUi(u);
+      setNativeEnabled(u.nativeNotificationsEnabled);
+      setNativeKinds({
+        success: u.notifySuccess,
+        info: u.notifyInfo,
+        warning: u.notifyWarning,
+        error: u.notifyError,
+      });
     }
-  }, [settings.data?.ui, setUi, setNativeEnabled]);
+  }, [settings.data?.ui, setUi, setNativeEnabled, setNativeKinds]);
 
   // Pull current log level so the FE logger filters in sync with the backend.
   const logCfg = useQuery({
@@ -113,14 +123,16 @@ export default function App() {
       <main className="flex min-w-0 flex-1 overflow-hidden">
         <Routes>
           <Route path="/" element={<OverviewPage />} />
-          <Route path="/plugins" element={<PluginsPage />} />
           <Route path="/skills" element={<SkillsPage />} />
+          {/* Anciens menus Plugins / Skills V2 fusionnés dans /skills */}
+          <Route path="/plugins" element={<Navigate to="/skills" replace />} />
+          <Route path="/skills-v2" element={<Navigate to="/skills" replace />} />
           <Route path="/admin" element={<AdminPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <SettingsDialog />
       <NotificationStack />
     </div>
   );
