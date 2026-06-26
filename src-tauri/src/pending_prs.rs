@@ -1,5 +1,6 @@
 //! Short-lived "pending PR" state — port of src/pending_prs.py.
 
+use crate::admin_drafts::TagSpec;
 use crate::config;
 use crate::error::{Error, Result};
 use crate::installer::{atomic_write_json, now_iso};
@@ -33,6 +34,12 @@ pub struct PendingPR {
     /// show the right version for an in-review add-skill row.
     #[serde(default)]
     pub skill_version: String,
+    /// Tags/releases that must wait for this PR to merge before they can be
+    /// created (their version only exists on the PR branch until then). When the
+    /// PR reconciler sees the merge, it cuts these from the merge commit. Empty
+    /// for PRs that have nothing to tag.
+    #[serde(default)]
+    pub deferred_tags: Vec<TagSpec>,
     #[serde(default)]
     pub created_at: String,
 }
@@ -108,6 +115,15 @@ pub fn remove(marketplace_name: &str, plugin_name: &str, action: &str) -> Result
         save_all(&kept)?;
     }
     Ok(())
+}
+
+/// Every pending record tied to a given (target_repo, pr_number). Used by the
+/// PR reconciler to recover a just-merged PR's deferred tags before dropping it.
+pub fn find_by_pr(target_repo: &str, pr_number: i64) -> Vec<PendingPR> {
+    load_all()
+        .into_iter()
+        .filter(|p| p.target_repo == target_repo && p.pr_number == pr_number)
+        .collect()
 }
 
 /// Removes any pending PR record matching the given (target_repo, pr_number).

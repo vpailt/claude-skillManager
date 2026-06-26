@@ -182,6 +182,9 @@ export interface PendingPR {
   /** Skill's own SKILL.md version for skill PRs; distinct from newVersion
    *  (the plugin's bumped manifest version). */
   skillVersion: string;
+  /** Tags/releases waiting for this PR to merge before they can be created
+   *  (their version only exists on the PR branch until then). */
+  deferredTags?: TagSpec[];
   createdAt: string;
 }
 

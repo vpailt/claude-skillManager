@@ -910,6 +910,48 @@ fn pr_status_of(pr: &Value) -> &'static str {
     }
 }
 
+/// The commit a merge produced on the base branch. GitHub exposes
+/// `merge_commit_sha`; Gitea exposes `merged_commit_id`. Empty when neither is
+/// present (the caller then falls back to the repo's default-branch HEAD).
+fn merge_commit_sha_of(pr: &Value) -> String {
+    pr.get("merge_commit_sha")
+        .and_then(|v| v.as_str())
+        .or_else(|| pr.get("merged_commit_id").and_then(|v| v.as_str()))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Settle a tracked PR that left the "open" state. On a merge, create any
+/// tags/releases the PR deferred at submit time (cut from the merge commit, so
+/// they point at content that actually landed). On a plain close, nothing is
+/// tagged — by design. Either way the pending record is dropped so the Admin tab
+/// stops showing the PR as "in review".
+fn finalize_pr_outcome(client: &GitHubClient, repo: &str, number: i64, pr: &Value, status: &str) {
+    if status == "merged" {
+        let merge_sha = merge_commit_sha_of(pr);
+        for rec in pending_prs::find_by_pr(repo, number) {
+            if rec.deferred_tags.is_empty() {
+                continue;
+            }
+            tracing::info!(
+                "PR {}#{} merged → creating {} deferred tag(s)",
+                repo,
+                number,
+                rec.deferred_tags.len()
+            );
+            admin_drafts::create_deferred_tags_on_merge(
+                client,
+                &rec.deferred_tags,
+                &rec.plugin_name,
+                &merge_sha,
+                number,
+                &rec.pr_url,
+            );
+        }
+    }
+    let _ = pending_prs::remove_by_pr(repo, number);
+}
+
 /// Re-check every PR still marked "open" in `pr_history` against its forge and,
 /// when it has merged/closed, update the history record and drop any matching
 /// `pending_prs` entry — so the Admin "in review" badges clear automatically.
@@ -949,7 +991,7 @@ fn reconcile_open_prs(s: &Settings) {
         let status = pr_status_of(&pr);
         if status != "open" {
             let _ = pr_history::update_status(&rec.repo, rec.number, status);
-            let _ = pending_prs::remove_by_pr(&rec.repo, rec.number);
+            finalize_pr_outcome(&client, &rec.repo, rec.number, &pr, status);
             tracing::info!("reconcile_open_prs: PR {}#{} → {}", rec.repo, rec.number, status);
         }
     }
@@ -970,10 +1012,10 @@ pub async fn pr_history_refresh_status(repo: String, number: i64) -> Result<Stri
     let pr = gh.get_pull_request(&repo, number)?;
     let status = pr_status_of(&pr);
     pr_history::update_status(&repo, number, status)?;
-    // Once a PR leaves the "open" state, drop any matching pending record so
-    // the Admin tab stops showing the skill as "in review".
+    // Once a PR leaves the "open" state, create any tags it deferred (on merge)
+    // and drop the pending record so the Admin tab stops showing it "in review".
     if status != "open" {
-        let _ = pending_prs::remove_by_pr(&repo, number);
+        finalize_pr_outcome(&gh, &repo, number, &pr, status);
     }
     Ok(status.to_string())
 }

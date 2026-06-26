@@ -1020,6 +1020,28 @@ pub fn submit_draft(gh: &GitHubClient, draft: &AdminDraft) -> Result<UploadResul
         &draft.branch_prefix,
         &draft.deletions,
     )?;
+    // Partition the requested tags. A `from_pr_branch` tag names a version that
+    // exists ONLY on the just-pushed (unmerged) PR branch — creating it now would
+    // publish a tag/release decoupled from the PR, dangling if the PR is later
+    // squash-merged or rejected. Those are deferred: stashed on the pending
+    // record and cut from the merge commit by the PR reconciler once the PR
+    // lands. Tags independent of this PR (e.g. another repo's existing default
+    // HEAD) are created immediately. All creation is best-effort — a forge-side
+    // failure is logged but never blocks the PR.
+    let plugin = draft
+        .pending_meta
+        .as_ref()
+        .map(|m| m.plugin_name.as_str())
+        .unwrap_or("");
+    let mut deferred: Vec<TagSpec> = Vec::new();
+    for tag in &draft.tags {
+        if tag.from_pr_branch && tag.repo == draft.target_repo && draft.pending_meta.is_some() {
+            deferred.push(tag.clone());
+        } else {
+            create_one_tag(gh, tag, plugin, &draft.target_repo, &result);
+        }
+    }
+
     if let Some(meta) = &draft.pending_meta {
         let _ = pending_prs::upsert(PendingPR {
             marketplace_name: meta.marketplace_name.clone(),
@@ -1033,19 +1055,9 @@ pub fn submit_draft(gh: &GitHubClient, draft: &AdminDraft) -> Result<UploadResul
             plugin_source_repo: meta.plugin_source_repo.clone(),
             skill_name: meta.skill_name.clone(),
             skill_version: meta.skill_version.clone(),
+            deferred_tags: deferred,
             ..Default::default()
         });
-    }
-    // Create every requested tag/release. All are best-effort: a forge-side
-    // failure (permissions, race) is logged but never blocks the PR — the user
-    // still gets a one-click "Open PR" instead of a separate tagging step.
-    let plugin = draft
-        .pending_meta
-        .as_ref()
-        .map(|m| m.plugin_name.as_str())
-        .unwrap_or("");
-    for tag in &draft.tags {
-        create_one_tag(gh, tag, plugin, &draft.target_repo, &result);
     }
     Ok(result)
 }
@@ -1083,7 +1095,63 @@ fn create_one_tag(
             return;
         }
     };
-    if let Err(e) = gh.create_tag(&tag.repo, &tag.tag, &sha) {
+    create_tag_and_release(gh, tag, plugin, &sha, result.pr_number, &result.pr_url);
+}
+
+/// Create the tags a merged PR deferred (see [`submit_draft`]). Each is cut from
+/// the PR's merge commit `merge_sha` (the squashed/merged commit now on the base
+/// branch) so the tag/release points at content that actually landed — never a
+/// dangling feature-branch commit. When the forge didn't report a merge commit
+/// the repo's default-branch HEAD is used as a fallback. Best-effort: per-tag
+/// failures are logged, never fatal.
+pub fn create_deferred_tags_on_merge(
+    gh: &GitHubClient,
+    tags: &[TagSpec],
+    plugin: &str,
+    merge_sha: &str,
+    pr_number: i64,
+    pr_url: &str,
+) {
+    for tag in tags {
+        if gh.ref_exists(&tag.repo, &tag.tag) {
+            tracing::debug!("tag {} already exists on {}, skipping", tag.tag, tag.repo);
+            continue;
+        }
+        let sha = if merge_sha.is_empty() {
+            match gh
+                .get_default_branch(&tag.repo)
+                .and_then(|b| gh.get_branch_sha(&tag.repo, &b))
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(
+                        "could not resolve SHA for deferred tag {} on {}: {}",
+                        tag.tag,
+                        tag.repo,
+                        e
+                    );
+                    continue;
+                }
+            }
+        } else {
+            merge_sha.to_string()
+        };
+        create_tag_and_release(gh, tag, plugin, &sha, pr_number, pr_url);
+    }
+}
+
+/// Create the tag at `sha` and a best-effort release. Shared by submit-time
+/// (immediate) and merge-time (deferred) tag creation. Callers guard against
+/// pre-existing tags before calling.
+fn create_tag_and_release(
+    gh: &GitHubClient,
+    tag: &TagSpec,
+    plugin: &str,
+    sha: &str,
+    pr_number: i64,
+    pr_url: &str,
+) {
+    if let Err(e) = gh.create_tag(&tag.repo, &tag.tag, sha) {
         tracing::warn!("auto-create tag {} on {} failed: {}", tag.tag, tag.repo, e);
         return;
     }
@@ -1098,14 +1166,14 @@ fn create_one_tag(
     let release_body = if tag.description.trim().is_empty() {
         format!(
             "Auto-created by SkillManager from PR [{}]({}).",
-            result.pr_number, result.pr_url
+            pr_number, pr_url
         )
     } else {
         format!(
             "{}\n\n---\nAuto-created by SkillManager from PR [{}]({}).",
             tag.description.trim(),
-            result.pr_number,
-            result.pr_url
+            pr_number,
+            pr_url
         )
     };
     match gh.create_release(&tag.repo, &tag.tag, &release_name, &release_body) {
