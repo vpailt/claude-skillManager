@@ -24,6 +24,7 @@ pub mod plugin_state;
 pub mod pr_history;
 pub mod properties;
 pub mod registry;
+pub mod skill_watch;
 pub mod taskbar;
 pub mod token_store;
 pub mod tray;
@@ -79,6 +80,10 @@ pub fn run() {
             notification_setup::register_aumid(&identifier, "SkillManager");
 
             tray::setup_tray(app.handle())?;
+
+            // Skill change-detection watcher state (lazily arms its fs watcher
+            // the first time the frontend calls `skill_watch_set`).
+            app.manage(skill_watch::SkillWatch::new());
 
             // Honor `start_minimized`: hide the main window on startup.
             let prefs = config::load_settings().ui;
@@ -161,6 +166,9 @@ pub fn run() {
             archive_user_skill,
             list_archived_skills,
             restore_archived_skill,
+            skill_watch_set,
+            skill_mark_synced,
+            skill_dirty_list,
             app_check_update,
             app_install_update,
             app_detect_uninstaller,

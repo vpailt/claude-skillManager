@@ -7,6 +7,7 @@ import { useRefresh } from "@/hooks/useRefresh";
 import { usePrPolling } from "@/hooks/usePrPolling";
 import { useTrayEvents } from "@/hooks/useTrayEvents";
 import { useTaskbarBadge } from "@/hooks/useTaskbarBadge";
+import { useSkillWatch } from "@/hooks/useSkillWatch";
 import { useUi } from "@/stores/ui";
 import { useNotifications } from "@/stores/notifications";
 import { useQuery } from "@tanstack/react-query";
@@ -29,6 +30,8 @@ export default function App() {
   useTrayEvents();
   // Taskbar overlay badge: number of "actions à traiter".
   useTaskbarBadge();
+  // Watch editable skill folders for local edits → "Pousser la modification".
+  useSkillWatch();
 
   // Track window visibility so notifications can prefer native toasts when
   // the window is hidden in the tray.

@@ -24,10 +24,11 @@ use crate::pending_prs::{self, PendingPR};
 use crate::plugin_state;
 use crate::pr_history::{self, PRRecord};
 use crate::token_store;
+use crate::skill_watch::{DirtyState, SkillWatch};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, State};
 
 fn gh() -> Result<GitHubClient> {
     let token = config::load_settings().github_token;
@@ -1264,6 +1265,11 @@ pub async fn admin_prepare_add_plugin(
 ) -> Result<AdminDraft> {
     let bump_level = bump_level.unwrap_or_default();
     let version_description = version_description.unwrap_or_default();
+    if version_description.trim().is_empty() {
+        return Err(crate::error::Error::Invalid(
+            "La description de version est obligatoire.".into(),
+        ));
+    }
     logged_admin("admin_prepare_add_plugin", format!("{source_url} -> {marketplace}"), || {
         let gh = client_for_marketplace(&marketplace)?;
         admin_drafts::prepare_add_plugin(
@@ -1284,6 +1290,11 @@ pub async fn admin_prepare_bump_plugin(
     version_description: Option<String>,
 ) -> Result<AdminDraft> {
     let version_description = version_description.unwrap_or_default();
+    if version_description.trim().is_empty() {
+        return Err(crate::error::Error::Invalid(
+            "La description de version est obligatoire.".into(),
+        ));
+    }
     logged_admin("admin_prepare_bump_plugin", format!("{plugin_name}@{marketplace} -> {new_version}"), || {
         let gh = client_for_marketplace(&marketplace)?;
         admin_drafts::prepare_bump_plugin(
@@ -1309,6 +1320,11 @@ pub async fn admin_prepare_remove_plugin(
 
 #[tauri::command]
 pub async fn admin_prepare_upload_skill(args: UploadSkillArgs) -> Result<AdminDraft> {
+    if args.version_description.trim().is_empty() {
+        return Err(crate::error::Error::Invalid(
+            "La description de version est obligatoire.".into(),
+        ));
+    }
     logged_admin("admin_prepare_upload_skill", format!("{}@{}", args.plugin_name, args.marketplace), || {
         let gh = client_for_marketplace(&args.marketplace)?;
         admin_drafts::prepare_upload_skill(&gh, &args)
@@ -1483,4 +1499,37 @@ pub async fn app_uninstall(app: AppHandle) -> Result<()> {
         app.exit(0);
     });
     Ok(())
+}
+
+// ============================================================
+// Skill change detection (filesystem watcher)
+// ============================================================
+
+/// (Re)arm the skill watcher to `folders` and return each folder's dirty state.
+/// Called after every refresh with the folders of installed skills under
+/// editable marketplaces — the ones the "Pousser la modification" affordance
+/// targets. New folders capture a baseline (so first sight is never dirty);
+/// edits made while the app was closed surface here on the next refresh.
+#[tauri::command]
+pub async fn skill_watch_set(
+    app: AppHandle,
+    state: State<'_, SkillWatch>,
+    folders: Vec<String>,
+) -> Result<Vec<DirtyState>> {
+    Ok(state.set_watched(&app, folders))
+}
+
+/// Capture a skill folder's current content as its new baseline and clear its
+/// dirty flag. Called once a PR has been opened for that skill so the badge
+/// stops nudging.
+#[tauri::command]
+pub async fn skill_mark_synced(state: State<'_, SkillWatch>, folder: String) -> Result<()> {
+    state.mark_synced(&folder);
+    Ok(())
+}
+
+/// Re-seed the UI's dirty map from the watcher's in-memory state (no rescan).
+#[tauri::command]
+pub async fn skill_dirty_list(state: State<'_, SkillWatch>) -> Result<Vec<DirtyState>> {
+    Ok(state.dirty_list())
 }

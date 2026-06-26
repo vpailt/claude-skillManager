@@ -300,6 +300,13 @@ export interface RemoteSkillInfo {
   localMatch: LocalSkill | null;
 }
 
+/** One skill folder's "modified locally since last sync" state, from the
+ *  backend filesystem watcher (`skill_watch_set` / the `skill-dirty` event). */
+export interface SkillDirtyState {
+  folder: string;
+  dirty: boolean;
+}
+
 export interface BumpSuggestion {
   patch: string;
   minor: string;

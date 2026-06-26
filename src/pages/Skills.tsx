@@ -7,7 +7,7 @@
 //    fichiers et le détail SKILL.md ;
 //  - panneaux doublons & archivés ;
 //  - filtre des skills par état d'installation (installé / non installé).
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
   ChevronDown,
@@ -27,6 +27,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  UploadCloud,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -54,7 +55,9 @@ import {
 } from "@/components/DuplicateSkillsPanel";
 import { ArchivedSkillsPanel } from "@/components/ArchivedSkillsPanel";
 import { AddMarketplaceDialog } from "@/components/AddMarketplaceDialog";
+import { WizardHost, type WizardKind } from "@/components/AdminWizards";
 import { useInstallMarketplace } from "@/hooks/useInstallMarketplace";
+import { useIsSkillDirty, useSkillDirty } from "@/stores/skillDirty";
 import type {
   ArchivedSkill,
   DuplicateSkill,
@@ -300,6 +303,7 @@ function SkillTreeRow({
 
   const hasFolder = !!entry.folder;
   const localBadge = isLocal(entry, localName);
+  const dirty = useIsSkillDirty(entry.folder);
 
   return (
     <div className="group">
@@ -334,6 +338,13 @@ function SkillTreeRow({
           >
             {entry.name}
           </span>
+          {dirty && (
+            <span
+              className="h-2 w-2 shrink-0 rounded-full bg-amber-500"
+              title="Modifié localement — non poussé"
+              aria-label="Modifié localement"
+            />
+          )}
           {!entry.folder && entry.remotePresent && (
             <Badge variant="outline" className="shrink-0 text-xs">
               non installé
@@ -847,7 +858,9 @@ interface SkillDetailProps {
   showDescription: boolean;
   onToggleDescription: () => void;
   localName: string;
-  onTogglePlugin: (value: boolean) => void;
+  dirty: boolean;
+  canPush: boolean;
+  onPush: () => void;
 }
 
 function SkillDetailView({
@@ -856,9 +869,10 @@ function SkillDetailView({
   showDescription,
   onToggleDescription,
   localName,
-  onTogglePlugin,
+  dirty,
+  canPush,
+  onPush,
 }: SkillDetailProps) {
-  const hasToggle = entry.pluginEnabled !== null;
   const mdPath =
     entry.skillMdPath ||
     (entry.folder ? joinPath(entry.folder as string, "SKILL.md") : null);
@@ -871,19 +885,6 @@ function SkillDetailView({
     <div className="flex h-full min-w-0 flex-col">
       <header className="flex items-center gap-3 border-b px-6 py-4">
         <h1 className="flex-1 truncate text-xl font-semibold">{entry.name}</h1>
-        {hasToggle && (
-          <label
-            className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
-            title="Active ou désactive tout le plugin auquel appartient cette compétence — Claude Code ne charge que les packs activés."
-          >
-            <span>Pack activé</span>
-            <Switch
-              checked={entry.pluginEnabled === true}
-              onCheckedChange={onTogglePlugin}
-              aria-label="Activer ou désactiver le plugin (tout le pack)"
-            />
-          </label>
-        )}
         {entry.folder && (
           <Button
             size="sm"
@@ -908,6 +909,26 @@ function SkillDetailView({
           </Button>
         )}
       </header>
+
+      {dirty && canPush && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-6 py-3">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+          <div className="min-w-0 flex-1 text-sm">
+            <span className="font-medium text-amber-700 dark:text-amber-300">
+              Modifications locales détectées
+            </span>
+            <p className="text-xs text-muted-foreground">
+              Ce dossier a changé depuis sa dernière synchro. Poussez-le pour
+              ouvrir une PR — sinon ces modifs seront écrasées à la prochaine
+              mise à jour du plugin.
+            </p>
+          </div>
+          <Button size="sm" className="shrink-0 gap-1.5" onClick={onPush}>
+            <UploadCloud className="h-4 w-4" />
+            Pousser la modification
+          </Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-x-8 gap-y-3 border-b px-6 py-4 text-xs sm:grid-cols-3">
         <MetaItem label="Ajouté par" value={authorLabel(entry, localName)} />
@@ -999,10 +1020,10 @@ function FileDetailView({
           variant="ghost"
           className="h-8 gap-1.5 px-2 text-xs"
           aria-label="Ouvrir dans VS Code"
-          title="Ouvrir ce fichier dans VS Code"
+          title="Ouvrir le dossier du skill dans VS Code"
           onClick={async () => {
             try {
-              await api.openInVsCode(absPath);
+              await api.openInVsCode(entry.folder as string);
             } catch (e) {
               useNotifications.getState().push({
                 kind: "error",
@@ -1050,17 +1071,17 @@ function DetailPanel({
   localName,
   showDescription,
   onToggleDescription,
-  onTogglePlugin,
   onArchived,
   onRestored,
+  onPushSkill,
 }: {
   selection: Selection;
   localName: string;
   showDescription: boolean;
   onToggleDescription: () => void;
-  onTogglePlugin: (entry: SkillEntry, value: boolean) => void;
   onArchived: () => void;
   onRestored: () => void;
+  onPushSkill: (entry: SkillEntry) => void;
 }) {
   const findPlugin = useApp((s) => s.findPlugin);
   const findMarketplace = useApp((s) => s.findMarketplace);
@@ -1071,6 +1092,17 @@ function DetailPanel({
       : selection?.kind === "file"
       ? selection.entry
       : null;
+
+  // "Pousser la modification" is offered only for installed skills under an
+  // editable marketplace (a repo the current token can push to).
+  const skillDirty = useIsSkillDirty(selectedSkill?.folder);
+  const skillMarketplace = selectedSkill
+    ? findMarketplace(selectedSkill.marketplaceNameSafe)
+    : undefined;
+  const canPushSkill =
+    !!selectedSkill?.folder &&
+    !!skillMarketplace?.editable &&
+    !!skillMarketplace?.sourceRepo;
 
   const selectedFileAbs =
     selection?.kind === "file"
@@ -1139,7 +1171,9 @@ function DetailPanel({
         showDescription={showDescription}
         onToggleDescription={onToggleDescription}
         localName={localName}
-        onTogglePlugin={(v) => onTogglePlugin(selection.entry, v)}
+        dirty={skillDirty}
+        canPush={canPushSkill}
+        onPush={() => onPushSkill(selection.entry)}
       />
     );
   }
@@ -1163,8 +1197,6 @@ function DetailPanel({
 // ---------- Main page ----------
 
 export function SkillsPage() {
-  const qc = useQueryClient();
-  const push = useNotifications((s) => s.push);
   const marketplaces = useApp((s) => s.marketplaces);
   const localOnly = useApp((s) => s.localOnly);
   const globalSelection = useApp((s) => s.selection);
@@ -1176,8 +1208,39 @@ export function SkillsPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [showDescription, setShowDescription] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [wizard, setWizard] = useState<WizardKind | null>(null);
+  // Folder being pushed, so we can mark it synced once the PR is opened.
+  const pushFolderRef = useRef<string | null>(null);
+  const setDirtyOne = useSkillDirty((s) => s.setOne);
 
   const localName = localOnly?.name ?? "(local skills)";
+
+  // Launch the upload-skill wizard pre-filled from the selected skill. The repo
+  // path uses the folder's basename (not the frontmatter `name`) so it matches
+  // `skills/<folder>` on the remote.
+  const pushSkill = (entry: SkillEntry) => {
+    const plugin = findPlugin(entry.marketplaceNameSafe, entry.pluginNameSafe);
+    if (!plugin || !entry.folder) return;
+    const folder = entry.folder as string;
+    const basename =
+      folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || entry.name;
+    pushFolderRef.current = folder;
+    setWizard({
+      kind: "uploadSkill",
+      marketplace: entry.marketplaceNameSafe,
+      plugin,
+      initialLocalFolder: folder,
+      initialTargetName: basename,
+    });
+  };
+
+  const onWizardSubmitted = () => {
+    const folder = pushFolderRef.current;
+    if (!folder) return;
+    // The local folder now matches what we just pushed → clear the nudge.
+    api.skillMarkSynced(folder).catch(() => {});
+    setDirtyOne(folder, false);
+  };
 
   // Deep-links from the dashboard / command palette set the shared `useApp`
   // selection then navigate here; mirror it into the local selection so the
@@ -1276,26 +1339,6 @@ export function SkillsPage() {
     selection?.kind === "duplicate" ? selection.value.local.folder : null;
   const selectedArchivedFolder =
     selection?.kind === "archived" ? selection.value.folder : null;
-
-  const togglePlugin = useMutation({
-    mutationFn: ({
-      plugin,
-      marketplace,
-      value,
-    }: {
-      plugin: string;
-      marketplace: string;
-      value: boolean;
-    }) => api.setPluginEnabled(plugin, marketplace, value),
-    onSuccess: (_, vars) => {
-      push({
-        kind: "success",
-        title: `Plugin ${vars.value ? "activé" : "désactivé"}`,
-        body: `${vars.plugin}@${vars.marketplace}`,
-      });
-      qc.invalidateQueries({ queryKey: ["refresh"] });
-    },
-  });
 
   const left = (
     <>
@@ -1414,16 +1457,9 @@ export function SkillsPage() {
         localName={localName}
         showDescription={showDescription}
         onToggleDescription={() => setShowDescription((v) => !v)}
-        onTogglePlugin={(entry, value) => {
-          if (entry.pluginEnabled === null) return;
-          togglePlugin.mutate({
-            plugin: entry.pluginNameSafe,
-            marketplace: entry.marketplaceNameSafe,
-            value,
-          });
-        }}
         onArchived={() => setSelection(null)}
         onRestored={() => setSelection(null)}
+        onPushSkill={pushSkill}
       />
     </ScrollArea>
   );
@@ -1437,6 +1473,11 @@ export function SkillsPage() {
         defaultLeftSize={32}
       />
       <AddMarketplaceDialog open={addOpen} onOpenChange={setAddOpen} />
+      <WizardHost
+        active={wizard}
+        onClose={() => setWizard(null)}
+        onSubmitted={onWizardSubmitted}
+      />
     </div>
   );
 }

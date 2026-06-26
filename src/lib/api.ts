@@ -20,6 +20,7 @@ import type {
   RemoteSkillInfo,
   Settings,
   SettingsPaths,
+  SkillDirtyState,
   TrackedPr,
   UiPrefs,
   UninstallInfo,
@@ -252,6 +253,13 @@ export const api = {
   // --- app uninstall ---
   appDetectUninstaller: () => invoke<UninstallInfo>("app_detect_uninstaller"),
   appUninstall: () => invoke<void>("app_uninstall"),
+
+  // --- skill change detection (filesystem watcher) ---
+  skillWatchSet: (folders: string[]) =>
+    invoke<SkillDirtyState[]>("skill_watch_set", { folders }),
+  skillMarkSynced: (folder: string) =>
+    invoke<void>("skill_mark_synced", { folder }),
+  skillDirtyList: () => invoke<SkillDirtyState[]>("skill_dirty_list"),
 
   // --- duplicate skills ---
   listDuplicateSkills: () =>

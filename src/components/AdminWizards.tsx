@@ -171,7 +171,7 @@ export function AddPluginDialog({
             </div>
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">
-                Description de version (tag / release / PR) — optionnel
+                Description de version (tag / release / PR) — obligatoire
               </label>
               <Textarea
                 placeholder="Notes de version : apparaîtront sur le tag/release et dans la PR."
@@ -188,7 +188,11 @@ export function AddPluginDialog({
             </DialogClose>
             <Button
               onClick={() => prepare.mutate()}
-              disabled={!sourceUrl.trim() || prepare.isPending}
+              disabled={
+                !sourceUrl.trim() ||
+                !versionDescription.trim() ||
+                prepare.isPending
+              }
             >
               {prepare.isPending && (
                 <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -535,7 +539,7 @@ export function UploadSkillDialog({
 
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">
-                Description de version (tag / release / PR) — optionnel
+                Description de version (tag / release / PR) — obligatoire
               </label>
               <Textarea
                 placeholder="Notes de version : apparaîtront sur le tag/release et dans la PR."
@@ -553,7 +557,11 @@ export function UploadSkillDialog({
             </DialogClose>
             <Button
               onClick={() => prepare.mutate()}
-              disabled={!localFolder.trim() || prepare.isPending}
+              disabled={
+                !localFolder.trim() ||
+                !versionDescription.trim() ||
+                prepare.isPending
+              }
             >
               {prepare.isPending && (
                 <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -698,9 +706,12 @@ export type WizardKind =
 interface WizardHostProps {
   active: WizardKind | null;
   onClose: () => void;
+  /** Fired after a PR is opened, before the toast — lets callers react (e.g.
+   *  the Skills tab marks the pushed skill folder as synced). */
+  onSubmitted?: (r: UploadResult, companion?: UploadResult) => void;
 }
 
-export function WizardHost({ active, onClose }: WizardHostProps) {
+export function WizardHost({ active, onClose, onSubmitted }: WizardHostProps) {
   const qc = useQueryClient();
   const [toast, setToast] = useState<{
     main: UploadResult;
@@ -709,6 +720,7 @@ export function WizardHost({ active, onClose }: WizardHostProps) {
 
   const handleSubmit = (r: UploadResult, companion?: UploadResult) => {
     setToast({ main: r, companion });
+    onSubmitted?.(r, companion);
     qc.invalidateQueries({ queryKey: ["pr-history"] });
     qc.invalidateQueries({ queryKey: ["pending-prs"] });
     qc.invalidateQueries({ queryKey: ["refresh"] });
