@@ -116,21 +116,7 @@ export function DiffPreviewDialog({
   draft,
   onSubmitted,
 }: Props) {
-  const [tagCreated, setTagCreated] = useState(false);
-  const [tagError, setTagError] = useState<string | null>(null);
   const [splitView, setSplitView] = useState(true);
-
-  const createTagMutation = useMutation({
-    mutationFn: ({ repo, tag }: { repo: string; tag: string }) =>
-      api.adminCreateTag(repo, tag, draft?.pendingMeta?.marketplaceName),
-    onSuccess: () => {
-      setTagCreated(true);
-      setTagError(null);
-    },
-    onError: (e: unknown) => {
-      setTagError(e instanceof Error ? e.message : String(e));
-    },
-  });
 
   const submitMutation = useMutation({
     mutationFn: async () => {
@@ -158,14 +144,10 @@ export function DiffPreviewDialog({
 
   const hasErrors = draft.problems.length > 0;
   const hasConflicts = draft.conflicts.length > 0;
-  // When the tag points at the same repo as the PR (upload-skill / delete-skill),
-  // submit_draft creates it from the PR branch SHA after the PR is opened.
-  // Don't require an upfront manual tag in that case — it would target the
-  // wrong commit (default-branch HEAD doesn't yet contain the manifest bump).
-  const tagIsAutoCreated =
-    draft.needsTag !== null && draft.needsTag.repo === draft.targetRepo;
-  const tagBlocked =
-    draft.needsTag !== null && !tagIsAutoCreated && !tagCreated;
+  // All tags/releases are created automatically by submit_draft once the PR is
+  // opened (from the PR branch when on the same repo, else from that repo's
+  // default branch HEAD). Nothing to do upfront.
+  const tags = draft.tags ?? [];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -193,42 +175,30 @@ export function DiffPreviewDialog({
 
         <ScrollArea className="max-h-[60vh] pr-3">
           <div className="space-y-3">
-            {draft.needsTag && (
+            {tags.length > 0 && (
               <Card>
-                <CardContent className="flex items-center gap-3 p-3 text-sm">
-                  <Tag className="h-4 w-4 text-amber-500" />
-                  <div className="flex-1">
-                    Le tag <code className="font-mono">{draft.needsTag.tag}</code> est
-                    absent sur <code className="font-mono">{draft.needsTag.repo}</code>.
-                    {tagIsAutoCreated && (
-                      <span className="ml-2 text-muted-foreground">
-                        Il sera créé automatiquement depuis la branche de cette PR.
-                      </span>
-                    )}
-                    {tagCreated && (
-                      <span className="ml-2 text-emerald-600">Créé.</span>
-                    )}
-                    {tagError && (
-                      <div className="text-destructive">{tagError}</div>
-                    )}
+                <CardContent className="space-y-1 p-3 text-sm">
+                  <div className="flex items-center gap-2 font-medium">
+                    <Tag className="h-4 w-4 text-amber-500" />
+                    {tags.length === 1
+                      ? "Un tag/release sera créé automatiquement"
+                      : `${tags.length} tags/releases seront créés automatiquement`}
                   </div>
-                  {!tagIsAutoCreated && !tagCreated && (
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        createTagMutation.mutate({
-                          repo: draft.needsTag!.repo,
-                          tag: draft.needsTag!.tag,
-                        })
-                      }
-                      disabled={createTagMutation.isPending}
-                    >
-                      {createTagMutation.isPending && (
-                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                      )}
-                      Créer le tag
-                    </Button>
-                  )}
+                  <ul className="ml-6 list-disc text-xs">
+                    {tags.map((t) => (
+                      <li key={`${t.repo}-${t.tag}`}>
+                        <code className="font-mono">{t.tag}</code> sur{" "}
+                        <code className="font-mono">{t.repo}</code>{" "}
+                        <span className="text-muted-foreground">
+                          (
+                          {t.fromPrBranch
+                            ? "depuis la branche de la PR"
+                            : "depuis la branche par défaut"}
+                          )
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 </CardContent>
               </Card>
             )}
@@ -279,7 +249,7 @@ export function DiffPreviewDialog({
               </Card>
             )}
 
-            {!hasErrors && !hasConflicts && (!draft.needsTag || tagIsAutoCreated) && (
+            {!hasErrors && !hasConflicts && (
               <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-400">
                 <CheckCircle2 className="h-4 w-4" />
                 Prêt à soumettre. {draft.changes.length} fichier(s) modifié(s),{" "}
@@ -364,7 +334,7 @@ export function DiffPreviewDialog({
           </DialogClose>
           <Button
             onClick={() => submitMutation.mutate()}
-            disabled={submitMutation.isPending || tagBlocked}
+            disabled={submitMutation.isPending}
           >
             {submitMutation.isPending && (
               <Loader2 className="mr-1 h-3 w-3 animate-spin" />

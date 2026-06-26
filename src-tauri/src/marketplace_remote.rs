@@ -8,12 +8,18 @@ use crate::registry::parse_marketplace_json;
 
 pub const REGISTRY_PATH: &str = ".claude-plugin/marketplace.json";
 
+/// Fetch a marketplace's plugin list from its registry. Returns
+/// `(plugins, remote_ok)` where `remote_ok` is `true` only when the registry
+/// file was actually read and parsed — distinct from "read it and it listed
+/// zero plugins". Callers use the flag to tell "the catalogue dropped this
+/// plugin" (drop it) apart from "we couldn't reach the catalogue" (keep the
+/// stale local view); see [`merge_local_remote`].
 pub fn fetch_marketplace_plugins(
     gh: &GitHubClient,
     repo: &str,
     r#ref: &str,
     marketplace_name: &str,
-) -> Vec<Plugin> {
+) -> (Vec<Plugin>, bool) {
     let r#ref = if r#ref.is_empty() {
         gh.get_default_branch(repo).unwrap_or_else(|_| "main".into())
     } else {
@@ -25,7 +31,7 @@ pub fn fetch_marketplace_plugins(
     let mut last_err = None;
     for path in [REGISTRY_PATH, "marketplace.json"] {
         match gh.get_file(repo, path, &r#ref) {
-            Ok((text, _)) => return parse_marketplace_json(&text, marketplace_name),
+            Ok((text, _)) => return (parse_marketplace_json(&text, marketplace_name), true),
             Err(e) => last_err = Some(e),
         }
     }
@@ -35,12 +41,13 @@ pub fn fetch_marketplace_plugins(
             r = r#ref
         );
     }
-    Vec::new()
+    (Vec::new(), false)
 }
 
 pub fn merge_local_remote(
     mut local_plugins: Vec<Plugin>,
     remote_plugins: Vec<Plugin>,
+    remote_ok: bool,
 ) -> Vec<Plugin> {
     use std::collections::HashSet;
     let mut by_name = std::collections::HashMap::new();
@@ -67,16 +74,28 @@ pub fn merge_local_remote(
         }
     }
     for (_, mut l) in by_name {
-        // Plugins the remote fetch didn't return. An installed one is a genuine
-        // LocalOnly (we've lost remote knowledge of it). But a plugin we still
-        // know from a marketplace registry (`remote_present` — e.g. the local
-        // directory scan of an installed marketplace whose remote re-fetch just
-        // failed, common for self-hosted Gitea behind a VPN or without a token)
-        // is still installable. Keep it NotInstalled so the Install button shows
-        // rather than hiding it behind Unknown.
-        l.install_state = if l.installed_version.is_some() {
-            InstallState::LocalOnly
-        } else if l.remote_present {
+        // Plugins the remote fetch didn't return.
+        if l.installed_version.is_some() {
+            // Still installed on this machine → genuine LocalOnly (it's on disk
+            // even if the catalogue no longer lists it).
+            l.install_state = InstallState::LocalOnly;
+            merged.push(l);
+            continue;
+        }
+        if remote_ok {
+            // The catalogue WAS read and doesn't list this not-installed plugin
+            // → it was removed upstream. Drop it instead of resurrecting a stale
+            // local-directory copy (which the directory scan keeps re-injecting
+            // until the marketplace is re-pulled). Only safe because the remote
+            // read succeeded.
+            continue;
+        }
+        // Remote read failed: keep the stale-but-usable local view. A plugin we
+        // still know from a registry (`remote_present` — e.g. the directory scan
+        // of an installed marketplace whose remote re-fetch just failed, common
+        // for self-hosted Gitea behind a VPN or without a token) stays
+        // installable; otherwise it's Unknown.
+        l.install_state = if l.remote_present {
             InstallState::NotInstalled
         } else {
             InstallState::Unknown
@@ -120,6 +139,38 @@ pub fn fetch_plugin_manifest_version(
     None
 }
 
+/// Authoritative latest version from the plugin repo's **git tags**: the
+/// highest semver-looking tag on `repo`. This is the source of truth now that
+/// marketplace registries no longer pin a per-release `version` — releases are
+/// cut as tags on the plugin repo. Tags are compared numerically on their
+/// dotted release head (a leading `v`/`V` and any `-prerelease`/`+build` suffix
+/// are ignored); non-numeric tags (e.g. `nightly`) are skipped. The chosen tag
+/// is returned with any leading `v`/`V` stripped so it lines up with
+/// `installed_version` formatting (the UI renders `v{latest_version}`).
+///
+/// Returns `None` when the repo is unset, has no tags, or none parse as semver
+/// — callers then fall back to [`fetch_plugin_manifest_version`].
+pub fn fetch_latest_tag_version(gh: &GitHubClient, repo: &str) -> Option<String> {
+    if repo.is_empty() {
+        return None;
+    }
+    let tags = gh.list_tags(repo).ok()?;
+    tags.into_iter()
+        .filter_map(|t| {
+            let key = norm(&t);
+            // `norm` returns the i64::MIN sentinel for non-numeric versions.
+            if key == [i64::MIN] {
+                None
+            } else {
+                Some((key, t))
+            }
+        })
+        // Vec<i64> orders lexicographically, which matches numeric semver
+        // precedence here (e.g. [1,2,0] < [1,10,0]).
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, t)| t.trim().trim_start_matches(['v', 'V']).to_string())
+}
+
 /// Re-derive `install_state` after `latest_version` was replaced out-of-band
 /// (e.g. by a live manifest read at refresh, after `merge_local_remote` already
 /// ran its semver compare against the registry seed).
@@ -128,17 +179,37 @@ pub fn recompute_state(p: &mut Plugin) {
 }
 
 fn compute_state(p: &Plugin) -> InstallState {
-    let installed = p.installed_version.as_deref().unwrap_or("");
+    install_state_for(
+        p.installed_version.as_deref(),
+        p.latest_version.as_deref(),
+        p.remote_present,
+    )
+}
+
+/// Derive a plugin's [`InstallState`] from its installed vs latest version.
+/// Shared by the remote merge ([`compute_state`]) and the local directory merge
+/// (`local_scanner::merge_directory_plugins`) so both agree on what "outdated"
+/// means.
+///
+/// Crucially, an UNKNOWN latest version is **not** "outdated": a plugin can't be
+/// behind a version we don't know. Registries no longer pin a `version`
+/// (Anthropic's official marketplace omits it, and user registries dropped it),
+/// so an empty `latest` is the norm — treating it as outdated would pin every
+/// installed plugin to a permanent, unfixable "Mettre à jour" button.
+/// `remote_present` separates a plugin still listed in a registry (Installed)
+/// from one we've lost all remote knowledge of (LocalOnly).
+pub fn install_state_for(
+    installed: Option<&str>,
+    latest: Option<&str>,
+    remote_present: bool,
+) -> InstallState {
+    let installed = installed.unwrap_or("").trim();
     if installed.is_empty() {
         return InstallState::NotInstalled;
     }
-    let latest = p.latest_version.as_deref().unwrap_or("");
+    let latest = latest.unwrap_or("").trim();
     if latest.is_empty() {
-        // The remote registry doesn't pin a version (Anthropic's official
-        // marketplace omits `version` on most entries). If we successfully
-        // matched against a remote entry, the plugin is fully tracked —
-        // LocalOnly is reserved for installs with no remote knowledge at all.
-        return if p.remote_present {
+        return if remote_present {
             InstallState::Installed
         } else {
             InstallState::LocalOnly

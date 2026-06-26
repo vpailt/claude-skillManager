@@ -232,16 +232,17 @@ fn merge_directory_plugins(mut installed: Vec<Plugin>, available: Vec<Plugin>) -
                 local.description = av.description;
             }
             local.source = av.source;
-            let same = local
-                .installed_version
-                .as_deref()
-                .unwrap_or("")
-                == av.latest_version.as_deref().unwrap_or("");
-            local.install_state = if same {
-                InstallState::Installed
-            } else {
-                InstallState::Outdated
-            };
+            // The plugin is listed in this (local) registry → it's "known".
+            local.remote_present = true;
+            // Share the remote merge's state logic so an unknown `latest`
+            // (registries no longer pin a version) is NOT treated as outdated —
+            // otherwise every installed plugin gets a permanent, unfixable
+            // "Mettre à jour" button.
+            local.install_state = crate::marketplace_remote::install_state_for(
+                local.installed_version.as_deref(),
+                local.latest_version.as_deref(),
+                true,
+            );
         } else {
             installed.push(av);
         }

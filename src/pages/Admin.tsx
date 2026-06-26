@@ -14,6 +14,7 @@ import {
   GitPullRequest,
   Package,
   Loader2,
+  Lock,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -103,7 +104,7 @@ function MarketplaceAdminSection({
           )}
           {unconfigured.length > 0 && (
             <p>
-              Ces marketplaces n'ont aucun repo GitHub configuré :{" "}
+              Ces marketplaces n'ont aucun repo GitHub ou Gitea configuré :{" "}
               <span className="font-mono text-foreground">
                 {unconfigured.map((m) => m.name).join(", ")}
               </span>
@@ -112,13 +113,16 @@ function MarketplaceAdminSection({
           )}
           {githubBacked.length > 0 && (
             <p>
-              Votre token GitHub n'a pas d'accès en écriture sur :{" "}
+              Votre token (GitHub ou Gitea) n'a pas d'accès en écriture sur :{" "}
               <span className="font-mono text-foreground">
                 {githubBacked.map((m) => `${m.name} (${m.sourceRepo})`).join(", ")}
               </span>
-              . Utilisez un token avec le scope <code>repo</code> (PAT classique) ou{" "}
-              <code>Contents: write</code> + <code>Pull requests: write</code>{" "}
-              (fine-grained), puis rafraîchissez.
+              . Sur <strong>GitHub</strong>, utilisez un token avec le scope{" "}
+              <code>repo</code> (PAT classique) ou <code>Contents: write</code> +{" "}
+              <code>Pull requests: write</code> (fine-grained). Sur{" "}
+              <strong>Gitea</strong>, un token avec les permissions{" "}
+              <code>repository</code> (read+write) et <code>pull request</code>.
+              Puis rafraîchissez.
             </p>
           )}
         </CardContent>
@@ -544,6 +548,16 @@ function TrackingSection() {
     refetchOnWindowFocus: false,
   });
 
+  // Review rights per marketplace = push/maintain/admin on its repo (the
+  // `editable` flag computed at refresh from the forge token's permissions).
+  // Drives the per-marketplace "read-only" notice below.
+  const appMarketplaces = useApp((s) => s.marketplaces);
+  const editableByName = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const mp of appMarketplaces) m.set(mp.name, mp.editable);
+    return m;
+  }, [appMarketplaces]);
+
   const trackedNames = useMemo(
     () =>
       (settingsQuery.data?.marketplaces ?? [])
@@ -635,6 +649,7 @@ function TrackingSection() {
             const count =
               g.marketplace.length +
               Array.from(g.plugins.values()).reduce((a, v) => a + v.length, 0);
+            const canReview = editableByName.get(name) ?? false;
             return (
               <Card key={name}>
                 <CardHeader className="pb-2">
@@ -643,12 +658,31 @@ function TrackingSection() {
                       <Globe className="h-4 w-4 text-muted-foreground" />
                       {name}
                     </CardTitle>
-                    <Badge variant={count > 0 ? "secondary" : "outline"}>
-                      {count} PR
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      {!canReview && (
+                        <Badge
+                          variant="outline"
+                          className="gap-1 text-amber-600 dark:text-amber-400"
+                          title="Votre token GitHub/Gitea n'a pas les droits (push) sur ce repo"
+                        >
+                          <Lock className="h-3 w-3" />
+                          lecture seule
+                        </Badge>
+                      )}
+                      <Badge variant={count > 0 ? "secondary" : "outline"}>
+                        {count} PR
+                      </Badge>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm">
+                  {!canReview && (
+                    <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+                      <Lock className="h-3 w-3 shrink-0" />
+                      Vous n'avez pas les droits pour faire la review sur ce
+                      marketplace (lecture seule).
+                    </div>
+                  )}
                   {count === 0 ? (
                     <p className="px-2 text-xs text-muted-foreground">
                       Aucune PR ouverte sur ce marketplace ni ses plugins.
@@ -711,7 +745,8 @@ export function AdminPage() {
         <p className="mt-1 text-sm text-muted-foreground">
           <strong>Gérer mon poste</strong> — installer / désinstaller / activer des
           plugins sur votre machine. <strong>Proposer une amélioration</strong> —
-          pousser des changements de registre vers GitHub via des Pull Requests.
+          pousser des changements de registre vers GitHub ou Gitea via des Pull
+          Requests.
         </p>
         <div className="mt-3 flex gap-2">
           <Button

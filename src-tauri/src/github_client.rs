@@ -439,6 +439,29 @@ impl GitHubClient {
         Ok(resp.json()?)
     }
 
+    /// List a repo's git tag names (newest API page first). GitHub and Gitea
+    /// share `GET /repos/{repo}/tags`, each element carrying a top-level
+    /// `name`. `per_page`/`limit` cover both page-size keys; one page (100) is
+    /// plenty for picking the latest release tag.
+    pub fn list_tags(&self, repo: &str) -> Result<Vec<String>> {
+        let url = format!("/repos/{repo}/tags");
+        let resp = Self::check(
+            self.request(reqwest::Method::GET, &url)
+                .query(&[("per_page", "100"), ("limit", "100")])
+                .send()?,
+            "GET",
+            &url,
+        )?;
+        let v: Value = resp.json()?;
+        Ok(v.as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|t| t.get("name").and_then(|n| n.as_str()).map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     pub fn get_latest_commit(&self, repo: &str, branch: &str) -> Result<Value> {
         let branch = if branch.is_empty() {
             self.get_default_branch(repo)?

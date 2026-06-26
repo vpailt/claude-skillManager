@@ -254,7 +254,6 @@ pub fn serialize_registry(data: &Value) -> Vec<u8> {
 pub fn add_plugin_to_registry(
     registry: &Value,
     name: &str,
-    version: &str,
     description: &str,
     source: Value,
 ) -> Result<Value> {
@@ -273,14 +272,68 @@ pub fn add_plugin_to_registry(
             }
         }
     }
+    // The registry intentionally does NOT carry a per-plugin `version`: versions
+    // live in the plugin repo's git tags (and its manifest). The entry only
+    // points at the plugin's source.
     plugins.push(json!({
         "name": name,
-        "version": version,
         "description": description,
         "source": source,
     }));
     new_reg.insert("plugins".to_string(), Value::Array(plugins));
     Ok(Value::Object(new_reg))
+}
+
+/// Bumps the marketplace's own version inside its registry JSON and returns the
+/// `(new_registry, new_version)` pair. The version is read from, and written
+/// back to, `metadata.version` when a `metadata` object is present, else a
+/// top-level `version`; when neither exists a `metadata.version` is created.
+/// Starting point when nothing is set: bump from "0.0.0" (so a first patch bump
+/// yields "0.0.1"). Used when adding a plugin so each catalogue change is a
+/// taggable marketplace release.
+pub fn bump_marketplace_version(registry: &Value, level: &str) -> (Value, String) {
+    let mut obj = registry.as_object().cloned().unwrap_or_default();
+
+    // Where does the existing version live?
+    let in_metadata = obj
+        .get("metadata")
+        .and_then(|m| m.as_object())
+        .map(|m| m.contains_key("version"))
+        .unwrap_or(false);
+    let at_top = obj.get("version").and_then(|v| v.as_str()).is_some();
+
+    let current = if in_metadata {
+        obj.get("metadata")
+            .and_then(|m| m.get("version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    } else if at_top {
+        obj.get("version").and_then(|v| v.as_str()).unwrap_or("").to_string()
+    } else {
+        String::new()
+    };
+    let base = if current.trim().is_empty() {
+        "0.0.0"
+    } else {
+        current.trim()
+    };
+    let new_version = bump_version(base, level);
+
+    if at_top && !in_metadata {
+        obj.insert("version".to_string(), json!(new_version));
+    } else {
+        // Default to metadata.version (Claude Code's marketplace schema), creating
+        // the metadata object if needed and preserving its other keys.
+        let mut meta = obj
+            .get("metadata")
+            .and_then(|m| m.as_object())
+            .cloned()
+            .unwrap_or_default();
+        meta.insert("version".to_string(), json!(new_version));
+        obj.insert("metadata".to_string(), Value::Object(meta));
+    }
+    (Value::Object(obj), new_version)
 }
 
 pub fn remove_plugin_from_registry(registry: &Value, name: &str) -> Value {
@@ -430,13 +483,8 @@ pub fn validate_marketplace_registry(registry: &Value) -> Vec<String> {
                 } else if !seen.insert(name.clone()) {
                     problems.push(format!("plugins[{i}] duplicate name `{name}`."));
                 }
-                let version = o.get("version").and_then(|v| v.as_str()).unwrap_or("").trim();
-                if version.is_empty() {
-                    problems.push(format!(
-                        "plugins[{i}] (`{}`) is missing `version`.",
-                        if name.is_empty() { "?" } else { &name }
-                    ));
-                }
+                // No `version` requirement: the registry doesn't track per-plugin
+                // versions (those live in the plugin repo's git tags / manifest).
                 let src = o.get("source");
                 match src {
                     None => problems.push(format!(

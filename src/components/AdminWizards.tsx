@@ -5,12 +5,11 @@ import {
   Loader2,
   Trash,
   Upload,
-  ArrowUpCircle,
   Plus,
   ExternalLink,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { openExternal } from "@/lib/utils";
+import { openExternal, bumpSemver } from "@/lib/utils";
 import {
   Dialog,
   DialogClose,
@@ -21,11 +20,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
-import type { AdminDraft, LocalSkill, Plugin, UploadResult } from "@/lib/types";
+import type {
+  AdminDraft,
+  BumpLevel,
+  LocalSkill,
+  Plugin,
+  UploadResult,
+} from "@/lib/types";
 import { useApp } from "@/stores/app";
 import { DiffPreviewDialog } from "./DiffPreviewDialog";
 
@@ -93,11 +98,15 @@ export function AddPluginDialog({
   onSubmitted,
 }: AddPluginDialogProps) {
   const [sourceUrl, setSourceUrl] = useState("");
+  const [bumpLevel, setBumpLevel] = useState<BumpLevel>("patch");
+  const [versionDescription, setVersionDescription] = useState("");
   const [draft, setDraft] = useState<AdminDraft | null>(null);
 
   useEffect(() => {
     if (!open) {
       setSourceUrl("");
+      setBumpLevel("patch");
+      setVersionDescription("");
       setDraft(null);
       prepare.reset();
     }
@@ -105,7 +114,13 @@ export function AddPluginDialog({
   }, [open]);
 
   const prepare = useMutation({
-    mutationFn: () => api.adminPrepareAddPlugin(marketplace, sourceUrl.trim()),
+    mutationFn: () =>
+      api.adminPrepareAddPlugin(
+        marketplace,
+        sourceUrl.trim(),
+        bumpLevel,
+        versionDescription.trim() || undefined
+      ),
     onSuccess: (d) => setDraft(d),
   });
 
@@ -121,17 +136,51 @@ export function AddPluginDialog({
           <DialogHeader>
             <DialogTitle>Ajouter un plugin à « {marketplace} »</DialogTitle>
             <DialogDescription>
-              Collez l'URL Git du repo source du plugin (il doit contenir
+              Collez l'URL Git du repo source du plugin, sur <strong>GitHub</strong>{" "}
+              ou <strong>Gitea</strong> (il doit contenir
               <code> manifest.json</code> à la racine). SkillManager y récupère le
-              nom / la version / la description.
+              nom / la version / la description. La version de la marketplace est
+              incrémentée et un tag est créé.
             </DialogDescription>
           </DialogHeader>
-          <Input
-            placeholder="https://github.com/owner/plugin-repo"
-            value={sourceUrl}
-            onChange={(e) => setSourceUrl(e.target.value)}
-            autoFocus
-          />
+          <div className="space-y-3">
+            <Input
+              placeholder="https://github.com/owner/repo ou https://git.exemple.local/owner/repo"
+              value={sourceUrl}
+              onChange={(e) => setSourceUrl(e.target.value)}
+              autoFocus
+            />
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Niveau de version de la marketplace
+              </label>
+              <div className="flex gap-1">
+                {(["patch", "minor", "major"] as const).map((lvl) => (
+                  <Button
+                    key={lvl}
+                    type="button"
+                    size="sm"
+                    variant={bumpLevel === lvl ? "default" : "outline"}
+                    className="h-7 flex-1 text-xs"
+                    onClick={() => setBumpLevel(lvl)}
+                  >
+                    {lvl}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Description de version (tag / release / PR) — optionnel
+              </label>
+              <Textarea
+                placeholder="Notes de version : apparaîtront sur le tag/release et dans la PR."
+                value={versionDescription}
+                onChange={(e) => setVersionDescription(e.target.value)}
+                rows={3}
+              />
+            </div>
+          </div>
           <ErrorBox error={prepare.error} />
           <DialogFooter>
             <DialogClose asChild>
@@ -140,131 +189,6 @@ export function AddPluginDialog({
             <Button
               onClick={() => prepare.mutate()}
               disabled={!sourceUrl.trim() || prepare.isPending}
-            >
-              {prepare.isPending && (
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-              )}
-              Continuer
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <DiffPreviewDialog
-        open={open && !!draft}
-        onOpenChange={(v) => {
-          if (!v) {
-            setDraft(null);
-            onOpenChange(false);
-          }
-        }}
-        draft={draft}
-        onSubmitted={(r) => {
-          setDraft(null);
-          onSubmitted(r);
-          onOpenChange(false);
-        }}
-      />
-    </>
-  );
-}
-
-// =====================================================================
-// Bump plugin
-// =====================================================================
-
-interface BumpPluginDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  marketplace: string;
-  plugin: Plugin;
-  onSubmitted: (r: UploadResult) => void;
-}
-
-export function BumpPluginDialog({
-  open,
-  onOpenChange,
-  marketplace,
-  plugin,
-  onSubmitted,
-}: BumpPluginDialogProps) {
-  const [version, setVersion] = useState("");
-  const [draft, setDraft] = useState<AdminDraft | null>(null);
-
-  const suggestion = useQuery({
-    enabled: open,
-    queryKey: ["bump-suggest", plugin.latestVersion ?? plugin.installedVersion],
-    queryFn: () =>
-      api.adminSuggestBumps(
-        plugin.latestVersion || plugin.installedVersion || "0.0.0"
-      ),
-  });
-
-  useEffect(() => {
-    if (!open) {
-      setVersion("");
-      setDraft(null);
-      prepare.reset();
-    } else if (suggestion.data && !version) {
-      setVersion(suggestion.data.patch);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, suggestion.data]);
-
-  const prepare = useMutation({
-    mutationFn: () =>
-      api.adminPrepareBumpPlugin(marketplace, plugin.name, version.trim()),
-    onSuccess: (d) => setDraft(d),
-  });
-
-  return (
-    <>
-      <Dialog
-        open={open && !draft}
-        onOpenChange={(v) => {
-          if (!v) onOpenChange(false);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Incrémenter « {plugin.name} »</DialogTitle>
-            <DialogDescription>
-              Dernière version actuelle : {plugin.latestVersion || "—"}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <Input
-              placeholder="Nouvelle version (ex. 1.2.3)"
-              value={version}
-              onChange={(e) => setVersion(e.target.value)}
-              autoFocus
-            />
-            {suggestion.data && (
-              <div className="flex flex-wrap gap-2 text-xs">
-                <span className="text-muted-foreground">Choix rapides :</span>
-                {(["patch", "minor", "major"] as const).map((k) => (
-                  <Button
-                    key={k}
-                    size="sm"
-                    variant="outline"
-                    className="h-6 px-2 text-xs"
-                    onClick={() =>
-                      suggestion.data && setVersion(suggestion.data[k])
-                    }
-                  >
-                    {k} → {suggestion.data[k]}
-                  </Button>
-                ))}
-              </div>
-            )}
-            <ErrorBox error={prepare.error} />
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline">Annuler</Button>
-            </DialogClose>
-            <Button
-              onClick={() => prepare.mutate()}
-              disabled={!version.trim() || prepare.isPending}
             >
               {prepare.isPending && (
                 <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -409,14 +333,13 @@ export function UploadSkillDialog({
 }: UploadSkillDialogProps) {
   const [localFolder, setLocalFolder] = useState(initialLocalFolder ?? "");
   const [targetName, setTargetName] = useState(initialTargetName ?? "");
+  // The current skill version we increment from (when known), so the pre-filled
+  // `newVersion` can be recomputed whenever the bump level changes.
+  const [baseSkillVersion, setBaseSkillVersion] = useState("");
   const [newVersion, setNewVersion] = useState("");
-  const [pluginBumpLevel, setPluginBumpLevel] = useState<
-    "patch" | "minor" | "major"
-  >("patch");
-  // "main always published" model: the registry tracks the plugin's main branch
-  // and doesn't move per release, so this companion PR is off by default. It only
-  // refreshes the registry's informational `version` field (never source.ref).
-  const [alsoBump, setAlsoBump] = useState(false);
+  // Shared bump level: drives the plugin bump AND the pre-filled skill version.
+  const [bumpLevel, setBumpLevel] = useState<BumpLevel>("patch");
+  const [versionDescription, setVersionDescription] = useState("");
   const [draft, setDraft] = useState<AdminDraft | null>(null);
 
   const localSkills = useQuery({
@@ -431,12 +354,26 @@ export function UploadSkillDialog({
       prepare.reset();
       setLocalFolder(initialLocalFolder ?? "");
       setTargetName(initialTargetName ?? "");
+      setBaseSkillVersion("");
       setNewVersion("");
-      setPluginBumpLevel("patch");
-      setAlsoBump(false);
+      setBumpLevel("patch");
+      setVersionDescription("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // When opened from the "Upgrade" affordance (initialLocalFolder set), seed the
+  // base skill version from the matching local skill once its list has loaded,
+  // and pre-fill the incremented version.
+  useEffect(() => {
+    if (!open || baseSkillVersion || !localFolder) return;
+    const match = localSkills.data?.find((s) => s.folder === localFolder);
+    if (match?.version) {
+      setBaseSkillVersion(match.version);
+      setNewVersion(bumpSemver(match.version, bumpLevel));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, localSkills.data, localFolder]);
 
   const prepare = useMutation({
     mutationFn: () =>
@@ -446,11 +383,19 @@ export function UploadSkillDialog({
         localFolder: localFolder.trim(),
         targetName: targetName.trim() || undefined,
         newVersion: newVersion.trim() || undefined,
-        pluginBumpLevel,
-        alsoBumpMarketplace: alsoBump,
+        bumpLevel,
+        versionDescription: versionDescription.trim() || undefined,
       }),
     onSuccess: (d) => setDraft(d),
   });
+
+  // Changing the shared level re-derives the pre-filled skill version (when we
+  // know what to increment from). A manually-edited version is preserved only
+  // until the user touches the level again — that's the intended "pre-fill".
+  const changeBumpLevel = (lvl: BumpLevel) => {
+    setBumpLevel(lvl);
+    if (baseSkillVersion) setNewVersion(bumpSemver(baseSkillVersion, lvl));
+  };
 
   const pickFolder = async () => {
     const sel = (await openDialog({
@@ -463,13 +408,22 @@ export function UploadSkillDialog({
       // Default target name to the picked folder's basename.
       const last = sel.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
       if (!targetName) setTargetName(last);
+      // Seed the version from a matching ~/.claude/skills entry, if any.
+      const match = localSkills.data?.find((s) => s.folder === sel);
+      if (match?.version) {
+        setBaseSkillVersion(match.version);
+        setNewVersion(bumpSemver(match.version, bumpLevel));
+      }
     }
   };
 
   const pickFromList = (s: LocalSkill) => {
     setLocalFolder(s.folder);
     if (!targetName) setTargetName(s.name);
-    if (!newVersion && s.version) setNewVersion(s.version);
+    if (s.version) {
+      setBaseSkillVersion(s.version);
+      setNewVersion(bumpSemver(s.version, bumpLevel));
+    }
   };
 
   return (
@@ -533,32 +487,20 @@ export function UploadSkillDialog({
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="mb-1 block text-xs text-muted-foreground">
-                  Nom du skill dans le repo
-                </label>
-                <Input
-                  placeholder="(par défaut le nom du dossier)"
-                  value={targetName}
-                  onChange={(e) => setTargetName(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-muted-foreground">
-                  Version du skill (optionnel)
-                </label>
-                <Input
-                  placeholder="ex. 1.7.6"
-                  value={newVersion}
-                  onChange={(e) => setNewVersion(e.target.value)}
-                />
-              </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Nom du skill dans le repo
+              </label>
+              <Input
+                placeholder="(par défaut le nom du dossier)"
+                value={targetName}
+                onChange={(e) => setTargetName(e.target.value)}
+              />
             </div>
 
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">
-                Incrément de version du plugin
+                Niveau de version (skill + plugin)
               </label>
               <div className="flex gap-1">
                 {(["patch", "minor", "major"] as const).map((lvl) => (
@@ -566,30 +508,42 @@ export function UploadSkillDialog({
                     key={lvl}
                     type="button"
                     size="sm"
-                    variant={pluginBumpLevel === lvl ? "default" : "outline"}
+                    variant={bumpLevel === lvl ? "default" : "outline"}
                     className="h-7 flex-1 text-xs"
-                    onClick={() => setPluginBumpLevel(lvl)}
+                    onClick={() => changeBumpLevel(lvl)}
                   >
                     {lvl}
                   </Button>
                 ))}
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                La version du plugin est toujours incrémentée lors du
-                téléversement d'un skill — choisissez comment. Indépendant de la
-                version du skill ci-dessus.
+                Le même niveau incrémente automatiquement la version du skill
+                (pré-remplie ci-dessous) et celle du plugin.
               </p>
             </div>
 
-            <label className="flex cursor-pointer items-center gap-2">
-              <Switch checked={alsoBump} onCheckedChange={setAlsoBump} />
-              <span>
-                Mettre aussi à jour le champ <code className="text-xs">version</code>{" "}
-                de <code className="text-xs">{plugin.name}</code> dans le registre
-                (optionnel — le registre suit déjà <code className="text-xs">main</code>,
-                la détection de mise à jour n'en dépend pas)
-              </span>
-            </label>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Version du skill (pré-remplie, modifiable)
+              </label>
+              <Input
+                placeholder="ex. 1.7.6"
+                value={newVersion}
+                onChange={(e) => setNewVersion(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Description de version (tag / release / PR) — optionnel
+              </label>
+              <Textarea
+                placeholder="Notes de version : apparaîtront sur le tag/release et dans la PR."
+                value={versionDescription}
+                onChange={(e) => setVersionDescription(e.target.value)}
+                rows={3}
+              />
+            </div>
 
             <ErrorBox error={prepare.error} />
           </div>
@@ -726,7 +680,6 @@ export function DeleteSkillDialog({
 
 export type WizardKind =
   | { kind: "addPlugin"; marketplace: string }
-  | { kind: "bumpPlugin"; marketplace: string; plugin: Plugin }
   | { kind: "removePlugin"; marketplace: string; plugin: Plugin }
   | {
       kind: "uploadSkill";
@@ -771,15 +724,6 @@ export function WizardHost({ active, onClose }: WizardHostProps) {
           open
           onOpenChange={(v) => !v && onClose()}
           marketplace={active.marketplace}
-          onSubmitted={handleSubmit}
-        />
-      )}
-      {active.kind === "bumpPlugin" && (
-        <BumpPluginDialog
-          open
-          onOpenChange={(v) => !v && onClose()}
-          marketplace={active.marketplace}
-          plugin={active.plugin}
           onSubmitted={handleSubmit}
         />
       )}
@@ -851,14 +795,6 @@ export function PluginActionsRow({
       >
         <Upload className="mr-1 h-3 w-3" />
         Téléverser un skill
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => onLaunch({ kind: "bumpPlugin", marketplace, plugin })}
-      >
-        <ArrowUpCircle className="mr-1 h-3 w-3" />
-        Incrémenter
       </Button>
       <Button
         size="sm"

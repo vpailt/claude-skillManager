@@ -190,17 +190,29 @@ export const api = {
     invoke<void>("set_taskbar_badge", { count }),
 
   // --- admin drafts (wizards) ---
-  adminPrepareAddPlugin: (marketplace: string, sourceUrl: string) =>
-    invoke<AdminDraft>("admin_prepare_add_plugin", { marketplace, sourceUrl }),
+  adminPrepareAddPlugin: (
+    marketplace: string,
+    sourceUrl: string,
+    bumpLevel?: string,
+    versionDescription?: string
+  ) =>
+    invoke<AdminDraft>("admin_prepare_add_plugin", {
+      marketplace,
+      sourceUrl,
+      bumpLevel: bumpLevel ?? null,
+      versionDescription: versionDescription ?? null,
+    }),
   adminPrepareBumpPlugin: (
     marketplace: string,
     pluginName: string,
-    newVersion: string
+    newVersion: string,
+    versionDescription?: string
   ) =>
     invoke<AdminDraft>("admin_prepare_bump_plugin", {
       marketplace,
       pluginName,
       newVersion,
+      versionDescription: versionDescription ?? null,
     }),
   adminPrepareRemovePlugin: (marketplace: string, pluginName: string) =>
     invoke<AdminDraft>("admin_prepare_remove_plugin", {

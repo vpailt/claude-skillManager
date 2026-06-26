@@ -565,6 +565,7 @@ export function SettingsDialog() {
                 </div>
               </CardContent>
             </Card>
+
           </>
         );
 

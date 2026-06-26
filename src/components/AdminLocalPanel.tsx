@@ -44,7 +44,7 @@ import { useApp } from "@/stores/app";
 import { useNotifications } from "@/stores/notifications";
 import { useInstallMarketplace } from "@/hooks/useInstallMarketplace";
 import { AddMarketplaceDialog } from "@/components/AddMarketplaceDialog";
-import type { InstallState, Marketplace, Plugin } from "@/lib/types";
+import type { InstallState, Marketplace, MarketplaceConfig, Plugin } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -296,9 +296,23 @@ function MarketplaceRow({
     mutationFn: async (next: boolean) => {
       const settings = await api.loadAppSettings();
       const cfg = settings.marketplaces.find((m) => m.name === mp.name);
-      if (cfg) {
-        await api.settingsUpsertMarketplace({ ...cfg, autoUpdate: next });
-      }
+      // Persist even when the marketplace isn't yet in app settings (an "orphan"
+      // added via Claude Code's `/plugin marketplace add`). Without an entry in
+      // marketplaces.json the flag never sticks (the toggle springs back to off)
+      // AND refresh_all never auto-updates it, since it only iterates configured
+      // marketplaces. Synthesize a config from the resolved marketplace view;
+      // {...cfg} preserves provider/baseUrl for Gitea marketplaces already saved.
+      const next_cfg: MarketplaceConfig = cfg
+        ? { ...cfg, autoUpdate: next }
+        : {
+            name: mp.name,
+            githubRepo: mp.sourceRepo,
+            defaultBranch: "main",
+            owned: false,
+            sourcePath: mp.sourcePath,
+            autoUpdate: next,
+          };
+      await api.settingsUpsertMarketplace(next_cfg);
       if (mp.installed) {
         await api.setMarketplaceAutoUpdate(mp.name, next);
       }
@@ -318,9 +332,20 @@ function MarketplaceRow({
     mutationFn: async (next: boolean) => {
       const settings = await api.loadAppSettings();
       const cfg = settings.marketplaces.find((m) => m.name === mp.name);
-      if (cfg) {
-        await api.settingsUpsertMarketplace({ ...cfg, trackPrs: next });
-      }
+      // Same orphan-persistence handling as auto-update above: create the entry
+      // when missing so the flag sticks instead of springing back to off.
+      const next_cfg: MarketplaceConfig = cfg
+        ? { ...cfg, trackPrs: next }
+        : {
+            name: mp.name,
+            githubRepo: mp.sourceRepo,
+            defaultBranch: "main",
+            owned: false,
+            sourcePath: mp.sourcePath,
+            autoUpdate: false,
+            trackPrs: next,
+          };
+      await api.settingsUpsertMarketplace(next_cfg);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["app-settings"] });
@@ -382,7 +407,17 @@ function MarketplaceRow({
             {mp.sourceRepo || mp.sourcePath || "—"}
           </td>
           <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-2" title="Mettre à jour auto à chaque rafraîchissement si le SHA distant a changé">
+            <div
+              className={cn(
+                "flex items-center gap-2",
+                !mp.sourceRepo && "opacity-50"
+              )}
+              title={
+                mp.sourceRepo
+                  ? "Mettre à jour auto à chaque rafraîchissement si le SHA distant a changé"
+                  : "Indisponible : ce marketplace n'a pas de repo distant (GitHub/Gitea) configuré"
+              }
+            >
               <Switch
                 checked={cfgAutoUpdate}
                 onCheckedChange={(v) => toggleAuto.mutate(v)}
@@ -395,8 +430,15 @@ function MarketplaceRow({
           </td>
           <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
             <div
-              className="flex items-center gap-2"
-              title="Suivre les PR ouvertes de ce marketplace et de ses plugins (onglet Suivi Marketplace + Dashboard)"
+              className={cn(
+                "flex items-center gap-2",
+                !mp.sourceRepo && "opacity-50"
+              )}
+              title={
+                mp.sourceRepo
+                  ? "Suivre les PR ouvertes de ce marketplace et de ses plugins (onglet Suivi Marketplace + Dashboard)"
+                  : "Indisponible : ce marketplace n'a pas de repo distant (GitHub/Gitea) configuré"
+              }
             >
               <Switch
                 checked={cfgTrackPrs}
@@ -605,7 +647,11 @@ function PluginsTable({
                     onClick={() => updateOne.mutate(p)}
                     disabled={updateOne.isPending}
                   >
-                    <RefreshCw className="mr-1 h-3 w-3" />
+                    {updateOne.isPending && updateOne.variables?.name === p.name ? (
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-1 h-3 w-3" />
+                    )}
                     Mettre à jour
                   </Button>
                 )}

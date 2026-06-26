@@ -209,18 +209,21 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
                 continue;
             }
         };
-        let remote =
+        let (remote, remote_ok) =
             marketplace_remote::fetch_marketplace_plugins(&gh, &mp.source_repo, r#ref, &mp.name);
-        if remote.is_empty() {
+        if !remote_ok {
             tracing::warn!(
-                "no remote plugins fetched for marketplace {} ({}@{})",
+                "could not fetch remote registry for marketplace {} ({}@{}) — keeping local view",
                 mp.name,
                 mp.source_repo,
                 if r#ref.is_empty() { "default" } else { r#ref }
             );
         }
         let local = std::mem::take(&mut mp.plugins);
-        mp.plugins = marketplace_remote::merge_local_remote(local, remote);
+        // `remote_ok` lets the merge drop not-installed plugins the catalogue no
+        // longer lists (a real upstream removal) without nuking the local view
+        // when the fetch merely failed.
+        mp.plugins = marketplace_remote::merge_local_remote(local, remote, remote_ok);
 
         // Editable flag = current token has push rights on the source repo.
         // Drives whether the Admin → Distant tab lists this marketplace.
@@ -235,19 +238,19 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
             if src.repo.is_empty() {
                 continue;
             }
-            if plugin.installed_version.is_none() {
-                continue;
-            }
-            // Authoritative latest version = the plugin repo's own manifest on
-            // its tracked `ref` (the "main always published" model). The registry
-            // no longer bumps a per-release version, so override the seed that
-            // `merge_local_remote` carried over and re-derive the install state.
-            // Best-effort: a failed read (offline / VPN-gated Gitea) leaves the
-            // registry-seeded latest_version untouched.
-            if let Some(ver) = marketplace_remote::fetch_plugin_manifest_version(&gh, &src) {
+            // Authoritative latest version = the highest git tag on the plugin's
+            // own repo, falling back to its manifest `version` when the repo has
+            // no semver tags. The registry no longer pins a per-release version,
+            // so derive it from the repo and re-compute the install state — for
+            // EVERY plugin with a source, not just installed ones (otherwise a
+            // not-installed plugin shows "version inconnue"). Best-effort: a
+            // failed read (offline / VPN-gated Gitea) leaves latest_version as-is.
+            if let Some(ver) = marketplace_remote::fetch_latest_tag_version(&gh, &src.repo)
+                .or_else(|| marketplace_remote::fetch_plugin_manifest_version(&gh, &src))
+            {
                 if plugin.latest_version.as_deref() != Some(ver.as_str()) {
                     tracing::debug!(
-                        "manifest version for {}@{}: {} (was {:?})",
+                        "latest version for {}@{}: {} (was {:?})",
                         plugin.name,
                         mp.name,
                         ver,
@@ -256,6 +259,12 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
                 }
                 plugin.latest_version = Some(ver);
                 marketplace_remote::recompute_state(plugin);
+            }
+            // Remote-only skills are only merged for installed plugins — they
+            // drive the "upgrade this skill" affordances and aren't worth a
+            // per-plugin API call for plugins that aren't even installed.
+            if plugin.installed_version.is_none() {
+                continue;
             }
             match marketplace_remote::fetch_plugin_skills(&gh, &src, &plugin.name, &mp.name) {
                 Ok(remote_skills) => {
@@ -1085,7 +1094,7 @@ pub async fn track_marketplace_prs(only: Option<String>) -> Result<Vec<TrackedPr
         }
 
         // Plugin-level PRs: resolve each plugin's own source repo/forge.
-        let plugins = marketplace_remote::fetch_marketplace_plugins(
+        let (plugins, _) = marketplace_remote::fetch_marketplace_plugins(
             &gh, &cfg.github_repo, &cfg.default_branch, &cfg.name,
         );
         for p in &plugins {
@@ -1250,10 +1259,20 @@ pub async fn logging_log(level: String, target: Option<String>, message: String)
 pub async fn admin_prepare_add_plugin(
     marketplace: String,
     source_url: String,
+    bump_level: Option<String>,
+    version_description: Option<String>,
 ) -> Result<AdminDraft> {
+    let bump_level = bump_level.unwrap_or_default();
+    let version_description = version_description.unwrap_or_default();
     logged_admin("admin_prepare_add_plugin", format!("{source_url} -> {marketplace}"), || {
         let gh = client_for_marketplace(&marketplace)?;
-        admin_drafts::prepare_add_plugin(&gh, &marketplace, &source_url)
+        admin_drafts::prepare_add_plugin(
+            &gh,
+            &marketplace,
+            &source_url,
+            &bump_level,
+            &version_description,
+        )
     })
 }
 
@@ -1262,10 +1281,18 @@ pub async fn admin_prepare_bump_plugin(
     marketplace: String,
     plugin_name: String,
     new_version: String,
+    version_description: Option<String>,
 ) -> Result<AdminDraft> {
+    let version_description = version_description.unwrap_or_default();
     logged_admin("admin_prepare_bump_plugin", format!("{plugin_name}@{marketplace} -> {new_version}"), || {
         let gh = client_for_marketplace(&marketplace)?;
-        admin_drafts::prepare_bump_plugin(&gh, &marketplace, &plugin_name, &new_version)
+        admin_drafts::prepare_bump_plugin(
+            &gh,
+            &marketplace,
+            &plugin_name,
+            &new_version,
+            &version_description,
+        )
     })
 }
 

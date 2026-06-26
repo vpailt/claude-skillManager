@@ -9,7 +9,7 @@
 //! React only deals with serializable data.
 
 use crate::admin::{
-    add_plugin_to_registry, bump_version, build_manifest_bump,
+    add_plugin_to_registry, bump_marketplace_version, bump_version, build_manifest_bump,
     collect_skill_folder_changes, fetch_marketplace_registry, make_branch_name,
     remove_plugin_from_registry, serialize_registry, submit_changes, unified_diff,
     update_plugin_in_registry, validate_marketplace_registry, validate_skill_frontmatter,
@@ -34,6 +34,17 @@ fn skill_version_from_fm(fm: &Fields) -> String {
 /// Bridges case/whitespace differences and folder-vs-`name:` divergence.
 fn norm_key(s: &str) -> String {
     s.trim().to_lowercase()
+}
+
+/// Coerce a free-form bump level to one of "patch" | "minor" | "major",
+/// defaulting to "patch". The shared level chosen in the wizard drives the
+/// skill, plugin and marketplace version bumps alike.
+fn normalize_bump_level(level: &str) -> &'static str {
+    match level.trim().to_lowercase().as_str() {
+        "major" => "major",
+        "minor" => "minor",
+        _ => "patch",
+    }
 }
 
 /// The two locations Claude Code looks at for the plugin's own metadata. Older
@@ -139,11 +150,11 @@ pub struct AdminDraft {
     pub entries: Vec<DiffEntry>,
     pub problems: Vec<String>,
     pub conflicts: Vec<ConflictEntry>,
-    /// Optional flag: backend wants to create a tag on the plugin source repo
-    /// before the PR is opened. Frontend asks the user, then calls
-    /// [`create_tag_if_missing`].
+    /// Tags/releases to create when the PR is opened. A single action can spawn
+    /// several (e.g. adding a plugin tags both the plugin repo and the
+    /// marketplace repo). All are created automatically by [`submit_draft`].
     #[serde(default)]
-    pub needs_tag: Option<NeedsTag>,
+    pub tags: Vec<TagSpec>,
     /// Companion draft (used by upload-skill to also bump the marketplace).
     #[serde(default)]
     pub companion: Option<Box<AdminDraft>>,
@@ -154,9 +165,18 @@ pub struct AdminDraft {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NeedsTag {
+pub struct TagSpec {
     pub repo: String,
     pub tag: String,
+    /// Free-text release notes shown on the tag/release. Empty → a default
+    /// "auto-created by SkillManager" body is used.
+    #[serde(default)]
+    pub description: String,
+    /// When the tag lives on the same repo the PR targets, it is cut from the
+    /// PR branch SHA (which already carries the version bump). Otherwise it is
+    /// cut from that repo's default-branch HEAD.
+    #[serde(default)]
+    pub from_pr_branch: bool,
 }
 
 fn repo_for(marketplace: &str) -> Result<(String, String)> {
@@ -262,7 +282,11 @@ pub fn prepare_add_plugin(
     gh: &GitHubClient,
     marketplace: &str,
     source_url: &str,
+    bump_level: &str,
+    version_description: &str,
 ) -> Result<AdminDraft> {
+    let bump_level = normalize_bump_level(bump_level);
+    let version_description = version_description.trim();
     let (repo, branch) = repo_for(marketplace)?;
     let plugin_repo = parse_github_marketplace_url(source_url)
         .ok_or_else(|| Error::Invalid(format!("Cannot parse owner/repo from: {source_url}")))?;
@@ -302,19 +326,10 @@ pub fn prepare_add_plugin(
         .unwrap_or("")
         .to_string();
 
-    let needs_tag = if !gh.ref_exists(&plugin_repo, &version) {
-        Some(NeedsTag {
-            repo: plugin_repo.clone(),
-            tag: version.clone(),
-        })
-    } else {
-        None
-    };
-
     // "main always published" model: the registry entry tracks the plugin repo's
-    // default branch, not the freshly-tagged version. The tag is still created
-    // (release marker / `needs_tag` above) but the registry never re-pins to it,
-    // so the app can detect future releases by reading the manifest on this ref.
+    // default branch, not the freshly-tagged version. The plugin tag is still
+    // created (release marker) but the registry never re-pins to it, so the app
+    // can detect future releases by reading the manifest on this ref.
     let plugin_branch = gh
         .get_default_branch(&plugin_repo)
         .unwrap_or_else(|_| "main".into());
@@ -325,7 +340,10 @@ pub fn prepare_add_plugin(
         "repo": plugin_repo,
         "ref": plugin_branch,
     });
-    let new_reg = add_plugin_to_registry(&registry, &name, &version, &description, source)?;
+    let with_plugin = add_plugin_to_registry(&registry, &name, &description, source)?;
+    // Adding a plugin is a catalogue change → bump the marketplace's own version
+    // so the change is a taggable marketplace release (req. #5). Same PR.
+    let (new_reg, mp_version) = bump_marketplace_version(&with_plugin, bump_level);
     let problems = validate_marketplace_registry(&new_reg);
     let old_text = serde_json::to_string_pretty(&registry).unwrap_or_default() + "\n";
     let new_text = serde_json::to_string_pretty(&new_reg).unwrap_or_default() + "\n";
@@ -335,22 +353,54 @@ pub fn prepare_add_plugin(
         path: registry_path.clone(),
         content: serialize_registry(&new_reg),
     };
-    let branch_name = make_branch_name("skillmanager/add-plugin", &[&name]);
+    let branch_name = make_branch_name("skillmanager/add-plugin", &[&name, &mp_version]);
     let entries = vec![diff_entry_modify(&registry_path, &old_text, &new_text)];
+
+    // Two tags: the plugin repo at its manifest version (cut from its default
+    // branch, which already carries that manifest) and the marketplace repo at
+    // its freshly-bumped version (cut from this PR's branch, which carries the
+    // registry change). Both share the user-supplied release notes.
+    let mut tags: Vec<TagSpec> = Vec::new();
+    if !gh.ref_exists(&plugin_repo, &version) {
+        tags.push(TagSpec {
+            repo: plugin_repo.clone(),
+            tag: version.clone(),
+            description: version_description.to_string(),
+            from_pr_branch: false,
+        });
+    }
+    if !gh.ref_exists(&repo, &mp_version) {
+        tags.push(TagSpec {
+            repo: repo.clone(),
+            tag: mp_version.clone(),
+            description: version_description.to_string(),
+            from_pr_branch: true,
+        });
+    }
+
+    let mut pr_body = format!(
+        "Adds plugin `{name}` v{version} to the registry and bumps the marketplace to v{mp_version} ({bump_level} bump)."
+    );
+    if !description.trim().is_empty() {
+        pr_body.push_str(&format!("\n\n{}", description.trim()));
+    }
+    if !version_description.is_empty() {
+        pr_body.push_str(&format!("\n\n---\n{version_description}"));
+    }
 
     Ok(AdminDraft {
         target_repo: repo,
         base_branch: branch,
         branch_name,
-        pr_title: format!("Add plugin: {name}"),
-        pr_body: format!("Adds plugin `{name}` v{version} to the registry.\n\n{description}"),
+        pr_title: format!("Add plugin: {name} (marketplace v{mp_version})"),
+        pr_body,
         branch_prefix: "skillmanager/add-plugin".to_string(),
         changes: vec![change],
         deletions: Vec::new(),
         entries,
         problems,
         conflicts,
-        needs_tag,
+        tags,
         companion: None,
         pending_meta: Some(PendingMeta {
             marketplace_name: marketplace.to_string(),
@@ -373,9 +423,11 @@ pub fn prepare_bump_plugin(
     marketplace: &str,
     plugin_name: &str,
     new_version: &str,
+    version_description: &str,
 ) -> Result<AdminDraft> {
     let (repo, branch) = repo_for(marketplace)?;
     let new_version = new_version.trim();
+    let version_description = version_description.trim();
     if new_version.is_empty() {
         return Err(Error::Invalid("Empty new version.".into()));
     }
@@ -397,17 +449,18 @@ pub fn prepare_bump_plugin(
         })
         .unwrap_or_default();
 
-    let needs_tag = if !plugin_source_repo.is_empty()
+    let mut tags: Vec<TagSpec> = Vec::new();
+    if !plugin_source_repo.is_empty()
         && plugin_source_repo != repo
         && !gh.ref_exists(&plugin_source_repo, new_version)
     {
-        Some(NeedsTag {
+        tags.push(TagSpec {
             repo: plugin_source_repo.clone(),
             tag: new_version.to_string(),
-        })
-    } else {
-        None
-    };
+            description: version_description.to_string(),
+            from_pr_branch: false,
+        });
+    }
 
     // "main always published" model: only the informational `version` moves;
     // `source.ref` is deliberately left pointing at the tracked branch (main).
@@ -427,19 +480,24 @@ pub fn prepare_bump_plugin(
     let branch_name = make_branch_name("skillmanager/bump-mp", &[plugin_name, new_version]);
     let entries = vec![diff_entry_modify(&registry_path, &old_text, &new_text)];
 
+    let mut pr_body = format!("Updates `{plugin_name}` to v`{new_version}` in the registry.");
+    if !version_description.is_empty() {
+        pr_body.push_str(&format!("\n\n---\n{version_description}"));
+    }
+
     Ok(AdminDraft {
         target_repo: repo,
         base_branch: branch,
         branch_name,
         pr_title: format!("Bump {plugin_name} to {new_version}"),
-        pr_body: format!("Updates `{plugin_name}` to v`{new_version}` in the registry."),
+        pr_body,
         branch_prefix: "skillmanager/bump-mp".to_string(),
         changes: vec![change],
         deletions: Vec::new(),
         entries,
         problems,
         conflicts,
-        needs_tag,
+        tags,
         companion: None,
         pending_meta: Some(PendingMeta {
             marketplace_name: marketplace.to_string(),
@@ -489,7 +547,7 @@ pub fn prepare_remove_plugin(
         entries,
         problems,
         conflicts,
-        needs_tag: None,
+        tags: Vec::new(),
         companion: None,
         pending_meta: Some(PendingMeta {
             marketplace_name: marketplace.to_string(),
@@ -513,19 +571,20 @@ pub struct UploadSkillArgs {
     /// Defaults to the local folder name when empty.
     #[serde(default)]
     pub target_name: String,
-    /// Skill version stamped on SKILL.md. Independent from the plugin version
-    /// (the plugin always bumps by `plugin_bump_level`).
+    /// Skill version stamped on SKILL.md. When empty the backend derives it
+    /// from `bump_level` (bump the existing version on update, else "0.1.0").
+    /// The wizard pre-fills it, so it normally arrives non-empty.
     #[serde(default)]
     pub new_version: String,
-    /// How to bump the plugin's own version (manifest.json +
-    /// .claude-plugin/plugin.json). Accepts "patch" (default), "minor", "major".
+    /// Shared bump level (patch/minor/major) — drives BOTH the plugin's own
+    /// version (manifest.json + .claude-plugin/plugin.json) and the pre-filled
+    /// skill version. Defaults to "patch".
     #[serde(default)]
-    pub plugin_bump_level: String,
-    /// Open a companion PR on the marketplace registry that bumps the plugin
-    /// version. Only meaningful when the plugin lives in a different repo than
-    /// the marketplace.
+    pub bump_level: String,
+    /// Free-text release notes for the tag/release and PR body created by this
+    /// upload.
     #[serde(default)]
-    pub also_bump_marketplace: bool,
+    pub version_description: String,
 }
 
 fn plugin_source_repo_of(registry: &Value, plugin_name: &str) -> String {
@@ -635,12 +694,33 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         problems.push("No SKILL.md found in the local folder.".into());
     }
 
-    // Skill version is stamped on SKILL.md only. Priority:
-    //   1. user-supplied newVersion
-    //   2. existing skill version in SKILL.md frontmatter
-    //   3. "0.1.0" (auto-initialised for brand-new skills)
+    let bump_level = normalize_bump_level(&args.bump_level);
+
+    let base_branch = if target_repo == mp_repo {
+        mp_branch.clone()
+    } else {
+        gh.get_default_branch(&target_repo)?
+    };
+
+    // Resolve "is this an update" via existence of SKILL.md on the target.
+    let skill_md_existing = gh.get_file_sha_or_none(
+        &target_repo,
+        &format!("{target_subpath}/SKILL.md"),
+        &base_branch,
+    );
+    let is_update = skill_md_existing.is_some();
+    let action_word = if is_update { "Update" } else { "Add" };
+
+    // Skill version stamped on SKILL.md. Priority:
+    //   1. user-supplied newVersion (the wizard pre-fills the incremented value)
+    //   2. on an update with a known current version → bump it by `bump_level`,
+    //      so the skill version always moves on an upgrade (req. #2)
+    //   3. an existing version with no bump context → keep as-is
+    //   4. "0.1.0" for a brand-new skill
     let effective_skill_version = if !args.new_version.trim().is_empty() {
         args.new_version.trim().to_string()
+    } else if is_update && !skill_existing_version.is_empty() {
+        bump_version(&skill_existing_version, bump_level)
     } else if !skill_existing_version.is_empty() {
         skill_existing_version.clone()
     } else {
@@ -659,21 +739,6 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
             content: new_text.into_bytes(),
         };
     }
-
-    let base_branch = if target_repo == mp_repo {
-        mp_branch.clone()
-    } else {
-        gh.get_default_branch(&target_repo)?
-    };
-
-    // Resolve "is this an update" via existence of SKILL.md on the target.
-    let skill_md_existing = gh.get_file_sha_or_none(
-        &target_repo,
-        &format!("{target_subpath}/SKILL.md"),
-        &base_branch,
-    );
-    let is_update = skill_md_existing.is_some();
-    let action_word = if is_update { "Update" } else { "Add" };
 
     // Build per-file diff entries (bounded to 10 + summary tail).
     let mut entries: Vec<DiffEntry> = Vec::new();
@@ -694,15 +759,9 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         });
     }
 
-    // Plugin version is independent from the skill version: any upload bumps
-    // the plugin. Otherwise Claude clients keep seeing the same version even
-    // though the plugin contents changed. Bump level (patch/minor/major)
-    // defaults to "patch" but the user can promote it from the upload dialog.
-    let bump_level = match args.plugin_bump_level.trim().to_lowercase().as_str() {
-        "major" => "major",
-        "minor" => "minor",
-        _ => "patch",
-    };
+    // The plugin version always bumps on any upload — otherwise Claude clients
+    // keep seeing the same version though the contents changed. It bumps by the
+    // same shared `bump_level` as the skill version (req. #3).
     let (manifest_files, current_plugin_version) =
         fetch_plugin_manifests(gh, &target_repo, &base_branch);
     if manifest_files.is_empty() {
@@ -743,7 +802,8 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
     let pr_title = format!(
         "{action_word} skill: {target_name} (skill v{effective_skill_version}, plugin v{new_plugin_version})"
     );
-    let pr_body = format!(
+    let version_description = args.version_description.trim();
+    let mut pr_body = format!(
         "{action_word}s skill `{target_name}` (v{effective_skill_version}, {} file(s)) on plugin `{}` from local folder `{}`.\n\nBumps plugin `{}` from v{} to v{} ({} bump).",
         changes.len(),
         args.plugin_name,
@@ -753,48 +813,28 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         new_plugin_version,
         bump_level
     );
+    if !version_description.is_empty() {
+        pr_body.push_str(&format!("\n\n---\n{version_description}"));
+    }
 
-    // Optional companion PR refreshing only the registry's informational
-    // `version` field. `source.ref` stays on the tracked branch (main), so this
-    // is purely cosmetic — the app's manifest-based detection doesn't need it.
-    // Off by default in the UI under the "main always published" model.
-    let companion = if args.also_bump_marketplace && target_repo != mp_repo {
-        match prepare_bump_plugin(gh, &args.marketplace, &args.plugin_name, &new_plugin_version) {
-            Ok(mut d) => {
-                d.pr_body = format!(
-                    "Companion PR.\n\nUpdates the informational `version` of `{}` to v`{}` in the registry (source.ref stays on main).",
-                    args.plugin_name, new_plugin_version
-                );
-                // The companion's needs_tag triggers a tag-creation step that
-                // expects the manifest bump to already be on the plugin
-                // repo's default branch. In this flow the manifest bump is in
-                // the SAME PR opened by the main draft — submit_draft creates
-                // the tag from the main PR's branch SHA. Clearing the
-                // companion's needs_tag avoids prompting the user twice.
-                d.needs_tag = None;
-                Some(Box::new(d))
-            }
-            Err(e) => {
-                problems.push(format!("Companion bump preparation failed: {e}"));
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // No companion registry PR: the registry no longer carries per-plugin
+    // versions, so a skill upload only bumps the plugin's own manifest + tag.
+    let companion: Option<Box<AdminDraft>> = None;
 
     // The main PR introduces the new manifest version on the plugin repo, so
-    // the tag must point at the PR branch (not default-branch HEAD). Storing
-    // needs_tag here makes submit_draft create the tag automatically once the
-    // branch exists.
-    let needs_tag = if target_repo != mp_repo && !gh.ref_exists(&target_repo, &new_plugin_version) {
-        Some(NeedsTag {
+    // the tag must point at the PR branch (not default-branch HEAD). Storing it
+    // in `tags` makes submit_draft create the tag automatically once the branch
+    // exists. (When the plugin lives in the marketplace repo there's nothing to
+    // tag separately.)
+    let mut tags: Vec<TagSpec> = Vec::new();
+    if target_repo != mp_repo && !gh.ref_exists(&target_repo, &new_plugin_version) {
+        tags.push(TagSpec {
             repo: target_repo.clone(),
             tag: new_plugin_version.clone(),
-        })
-    } else {
-        None
-    };
+            description: version_description.to_string(),
+            from_pr_branch: true,
+        });
+    }
 
     Ok(AdminDraft {
         target_repo,
@@ -808,7 +848,7 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         entries,
         problems,
         conflicts,
-        needs_tag,
+        tags,
         companion,
         pending_meta: Some(PendingMeta {
             marketplace_name: args.marketplace.clone(),
@@ -922,17 +962,18 @@ pub fn prepare_delete_skill(
     // the live manifest version at refresh. Avoids per-edit registry noise.
     let companion: Option<Box<AdminDraft>> = None;
 
-    let needs_tag = if !new_version.is_empty()
+    let mut tags: Vec<TagSpec> = Vec::new();
+    if !new_version.is_empty()
         && target_repo != mp_repo
         && !gh.ref_exists(&target_repo, &new_version)
     {
-        Some(NeedsTag {
+        tags.push(TagSpec {
             repo: target_repo.clone(),
             tag: new_version.clone(),
-        })
-    } else {
-        None
-    };
+            description: String::new(),
+            from_pr_branch: true,
+        });
+    }
 
     Ok(AdminDraft {
         target_repo,
@@ -950,7 +991,7 @@ pub fn prepare_delete_skill(
         entries,
         problems,
         conflicts,
-        needs_tag,
+        tags,
         companion,
         pending_meta: Some(PendingMeta {
             marketplace_name: marketplace.to_string(),
@@ -995,76 +1036,87 @@ pub fn submit_draft(gh: &GitHubClient, draft: &AdminDraft) -> Result<UploadResul
             ..Default::default()
         });
     }
-    // When the draft introduces a new version on the same repo it tags (upload
-    // skill / delete skill), the tag must point at the PR branch — default
-    // branch HEAD doesn't yet contain the manifest bump. We do it here so the
-    // user gets one click ("Open PR") instead of a separate tagging step that
-    // would race the merge.
-    if let Some(nt) = &draft.needs_tag {
-        if nt.repo == draft.target_repo {
-            match gh.get_branch_sha(&draft.target_repo, &result.branch) {
-                Ok(sha) => {
-                    if let Err(e) = gh.create_tag(&draft.target_repo, &nt.tag, &sha) {
-                        tracing::warn!(
-                            "auto-create tag {} on {} failed: {}",
-                            nt.tag,
-                            draft.target_repo,
-                            e
-                        );
-                    } else {
-                        tracing::info!(
-                            "auto-created tag {} on {}@{}",
-                            nt.tag,
-                            draft.target_repo,
-                            sha
-                        );
-                        // Release is best-effort: a failure here shouldn't
-                        // block the PR (the tag still exists and the user
-                        // can publish a release manually).
-                        let plugin = draft
-                            .pending_meta
-                            .as_ref()
-                            .map(|m| m.plugin_name.as_str())
-                            .unwrap_or("");
-                        let release_name = if plugin.is_empty() {
-                            format!("v{}", nt.tag)
-                        } else {
-                            format!("{plugin} v{}", nt.tag)
-                        };
-                        let release_body = format!(
-                            "Auto-created by SkillManager from PR [{}]({}).",
-                            result.pr_number, result.pr_url
-                        );
-                        match gh.create_release(
-                            &draft.target_repo,
-                            &nt.tag,
-                            &release_name,
-                            &release_body,
-                        ) {
-                            Ok(_) => tracing::info!(
-                                "auto-created release {} on {}",
-                                nt.tag,
-                                draft.target_repo
-                            ),
-                            Err(e) => tracing::warn!(
-                                "auto-create release {} on {} failed: {}",
-                                nt.tag,
-                                draft.target_repo,
-                                e
-                            ),
-                        }
-                    }
-                }
-                Err(e) => tracing::warn!(
-                    "could not resolve branch SHA for tag creation on {}/{}: {}",
-                    draft.target_repo,
-                    result.branch,
-                    e
-                ),
-            }
-        }
+    // Create every requested tag/release. All are best-effort: a forge-side
+    // failure (permissions, race) is logged but never blocks the PR — the user
+    // still gets a one-click "Open PR" instead of a separate tagging step.
+    let plugin = draft
+        .pending_meta
+        .as_ref()
+        .map(|m| m.plugin_name.as_str())
+        .unwrap_or("");
+    for tag in &draft.tags {
+        create_one_tag(gh, tag, plugin, &draft.target_repo, &result);
     }
     Ok(result)
+}
+
+/// Resolve the commit a [`TagSpec`] should point at, then create the tag and a
+/// best-effort release. `from_pr_branch` tags are cut from the just-opened PR
+/// branch (which carries the version bump); others from their repo's default
+/// branch HEAD.
+fn create_one_tag(
+    gh: &GitHubClient,
+    tag: &TagSpec,
+    plugin: &str,
+    target_repo: &str,
+    result: &UploadResult,
+) {
+    if gh.ref_exists(&tag.repo, &tag.tag) {
+        tracing::debug!("tag {} already exists on {}, skipping", tag.tag, tag.repo);
+        return;
+    }
+    let sha = if tag.from_pr_branch && tag.repo == target_repo {
+        gh.get_branch_sha(&tag.repo, &result.branch)
+    } else {
+        gh.get_default_branch(&tag.repo)
+            .and_then(|b| gh.get_branch_sha(&tag.repo, &b))
+    };
+    let sha = match sha {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                "could not resolve SHA for tag {} on {}: {}",
+                tag.tag,
+                tag.repo,
+                e
+            );
+            return;
+        }
+    };
+    if let Err(e) = gh.create_tag(&tag.repo, &tag.tag, &sha) {
+        tracing::warn!("auto-create tag {} on {} failed: {}", tag.tag, tag.repo, e);
+        return;
+    }
+    tracing::info!("auto-created tag {} on {}@{}", tag.tag, tag.repo, sha);
+
+    let release_name = if plugin.is_empty() {
+        format!("v{}", tag.tag)
+    } else {
+        format!("{plugin} v{}", tag.tag)
+    };
+    // User-supplied release notes when present; otherwise a provenance footer.
+    let release_body = if tag.description.trim().is_empty() {
+        format!(
+            "Auto-created by SkillManager from PR [{}]({}).",
+            result.pr_number, result.pr_url
+        )
+    } else {
+        format!(
+            "{}\n\n---\nAuto-created by SkillManager from PR [{}]({}).",
+            tag.description.trim(),
+            result.pr_number,
+            result.pr_url
+        )
+    };
+    match gh.create_release(&tag.repo, &tag.tag, &release_name, &release_body) {
+        Ok(_) => tracing::info!("auto-created release {} on {}", tag.tag, tag.repo),
+        Err(e) => tracing::warn!(
+            "auto-create release {} on {} failed: {}",
+            tag.tag,
+            tag.repo,
+            e
+        ),
+    }
 }
 
 // ============================================================

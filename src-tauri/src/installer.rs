@@ -3,7 +3,7 @@
 use crate::config;
 use crate::error::{Error, Result};
 use crate::github_client::{long_path, GitHubClient};
-use crate::models::Plugin;
+use crate::models::{Plugin, PluginSource};
 use crate::plugin_state;
 use chrono::Utc;
 use serde_json::{json, Map, Value};
@@ -97,12 +97,6 @@ pub fn install_plugin(gh: &GitHubClient, plugin: &Plugin) -> Result<PathBuf> {
             tracing::error!("plugin {} has no source", plugin.name);
             Error::Invalid(format!("Plugin {} has no source.", plugin.name))
         })?;
-    let version = plugin
-        .latest_version
-        .clone()
-        .or_else(|| Some(src.r#ref.clone()))
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "0.0.0".to_string());
 
     if !src.repo.is_empty() {
         let r#ref = if src.r#ref.is_empty() {
@@ -110,6 +104,30 @@ pub fn install_plugin(gh: &GitHubClient, plugin: &Plugin) -> Result<PathBuf> {
         } else {
             src.r#ref.clone()
         };
+        // Version recorded in installed_plugins.json. Priority:
+        //   1. caller-supplied latest_version (set by the refresh pipeline)
+        //   2. the plugin repo's own manifest version on the ref we install from
+        //   3. the ref name itself (e.g. a tag), then "0.0.0"
+        //
+        // Step 2 is what fixes the "freshly-installed plugin shows 0.0.0" bug:
+        // for a plugin that wasn't installed yet, the refresh never read its
+        // manifest (it only does so for already-installed plugins), so
+        // latest_version is empty. Reading the manifest here records the real
+        // version immediately, without requiring an extra "update" round-trip.
+        let version = plugin
+            .latest_version
+            .clone()
+            .filter(|v| !v.is_empty())
+            .or_else(|| {
+                let probe = PluginSource {
+                    r#ref: r#ref.clone(),
+                    ..src.clone()
+                };
+                crate::marketplace_remote::fetch_plugin_manifest_version(gh, &probe)
+            })
+            .or_else(|| Some(r#ref.clone()))
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "0.0.0".to_string());
         return install_from_github(
             gh,
             &src.repo,
@@ -120,6 +138,12 @@ pub fn install_plugin(gh: &GitHubClient, plugin: &Plugin) -> Result<PathBuf> {
             &src.path,
         );
     }
+    let version = plugin
+        .latest_version
+        .clone()
+        .or_else(|| Some(src.r#ref.clone()))
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "0.0.0".to_string());
     if src.kind == "directory" && !src.path.is_empty() {
         return install_from_directory(
             Path::new(&src.path),

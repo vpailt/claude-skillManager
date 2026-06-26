@@ -222,9 +222,13 @@ export interface ConflictEntry {
   paths: string[];
 }
 
-export interface NeedsTag {
+export interface TagSpec {
   repo: string;
   tag: string;
+  /** Free-text release notes; empty → a default body is used. */
+  description: string;
+  /** Cut from the PR branch (carries the bump) vs. the repo's default HEAD. */
+  fromPrBranch: boolean;
 }
 
 export interface PendingMeta {
@@ -255,7 +259,7 @@ export interface AdminDraft {
   entries: DiffEntry[];
   problems: string[];
   conflicts: ConflictEntry[];
-  needsTag: NeedsTag | null;
+  tags: TagSpec[];
   companion: AdminDraft | null;
   pendingMeta: PendingMeta | null;
 }
@@ -266,16 +270,21 @@ export interface UploadResult {
   prNumber: number;
 }
 
+export type BumpLevel = "patch" | "minor" | "major";
+
 export interface UploadSkillArgs {
   marketplace: string;
   pluginName: string;
   localFolder: string;
   targetName?: string;
-  /** Skill version stamped on SKILL.md. Independent from the plugin version. */
+  /** Skill version stamped on SKILL.md. The wizard pre-fills the incremented
+   *  value; empty → backend derives it from `bumpLevel`. */
   newVersion?: string;
-  /** How to bump the plugin's own version: "patch" (default), "minor", "major". */
-  pluginBumpLevel?: "patch" | "minor" | "major";
-  alsoBumpMarketplace?: boolean;
+  /** Shared bump level driving BOTH the plugin version and the skill version
+   *  pre-fill: "patch" (default), "minor", "major". */
+  bumpLevel?: BumpLevel;
+  /** Free-text release notes for the tag/release and PR body. */
+  versionDescription?: string;
 }
 
 export interface LocalSkill {

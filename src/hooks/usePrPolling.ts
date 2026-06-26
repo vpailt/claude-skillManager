@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import type { PRRecord } from "@/lib/types";
 import { useNotifications } from "@/stores/notifications";
 import { createLogger } from "@/lib/logger";
 
@@ -50,6 +51,11 @@ export function usePrPolling() {
 
   const lastTickRef = useRef<number>(0);
   const lastTrackedRef = useRef<number>(0);
+  // PRs we've already notified about, keyed by `repo#number:newStatus`. Guards
+  // against re-firing the same transition: the effect's `tick` closure can hold
+  // a stale `history.data` (a status change doesn't change the array length, so
+  // the effect doesn't re-run), and without this every poll would re-notify.
+  const notifiedRef = useRef<Set<string>>(new Set());
   const enabled = settings.data?.ui?.prPollingEnabled ?? false;
   const intervalSec = Math.max(
     15,
@@ -76,7 +82,12 @@ export function usePrPolling() {
         qc.invalidateQueries({ queryKey: ["tracked-prs"] });
       }
 
-      const items = history.data ?? [];
+      // Read the freshest history from the query cache rather than the
+      // closed-over `history.data`. A status transition (open→merged) leaves the
+      // array length unchanged, so this effect doesn't re-run and its closure
+      // would otherwise keep comparing against a stale "open" — re-firing the
+      // notification on every tick.
+      const items = qc.getQueryData<PRRecord[]>(["pr-history"]) ?? history.data ?? [];
       const open = items.filter((it) => it.status === "open");
       if (open.length === 0) return;
       log.debug(`polling tick: ${open.length} open PR(s)`);
@@ -88,17 +99,21 @@ export function usePrPolling() {
             number: it.number,
           });
           if (newStatus !== it.status) {
-            log.info(
-              `PR #${it.number} ${it.repo} status: ${it.status} → ${newStatus}`
-            );
-            push(
-              {
-                kind: newStatus === "merged" ? "success" : "info",
-                title: `PR #${it.number} ${newStatus}`,
-                body: `${it.repo} — ${it.title}`,
-              },
-              { native: true }
-            );
+            const key = `${it.repo}#${it.number}:${newStatus}`;
+            if (!notifiedRef.current.has(key)) {
+              notifiedRef.current.add(key);
+              log.info(
+                `PR #${it.number} ${it.repo} status: ${it.status} → ${newStatus}`
+              );
+              push(
+                {
+                  kind: newStatus === "merged" ? "success" : "info",
+                  title: `PR #${it.number} ${newStatus}`,
+                  body: `${it.repo} — ${it.title}`,
+                },
+                { native: true }
+              );
+            }
             // The backend already drops matching pending records when status
             // leaves "open"; refresh the query so the Admin badges clear.
             if (newStatus !== "open") {
