@@ -1087,6 +1087,14 @@ pub struct TrackedPr {
     pub title: String,
     pub url: String,
     pub author: String,
+    /// True when the PR's author is this client's authenticated user — drives
+    /// the "Mes demandes" section. Forge-specific, computed per fetching client.
+    pub mine: bool,
+    /// Whether the current user may approve this PR, per the hybrid policy in
+    /// [`GitHubClient::can_approve`] — drives the "Demandes à valider" section.
+    pub can_approve: bool,
+    /// PR target branch (`base.ref`); used to resolve the branch-protection rule.
+    pub base_branch: String,
     pub created_at: String,
     pub provider: Provider,
     pub base_url: String,
@@ -1119,10 +1127,40 @@ fn tracked_pr_from_value(
             .and_then(|x| x.as_str())
             .unwrap_or("")
             .to_string(),
+        // `mine` / `can_approve` are stamped afterwards by `enrich_tracked_pr`,
+        // which needs the fetching client and its authenticated login.
+        mine: false,
+        can_approve: false,
+        base_branch: v
+            .get("base")
+            .and_then(|b| b.get("ref"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
         created_at: v.get("created_at").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         provider,
         base_url: base_url.to_string(),
     })
+}
+
+/// Stamp `mine` / `can_approve` on a freshly-mapped [`TrackedPr`]. `login` is
+/// the fetching client's authenticated user (forge-specific); `approve_cache`
+/// memoizes the per-(repo, branch) approval decision so repeated PRs on the
+/// same branch don't re-query the forge.
+fn enrich_tracked_pr(
+    pr: &mut TrackedPr,
+    client: &GitHubClient,
+    login: Option<&str>,
+    approve_cache: &mut std::collections::HashMap<String, bool>,
+) {
+    pr.mine = match login {
+        Some(l) => !l.is_empty() && !pr.author.is_empty() && l.eq_ignore_ascii_case(&pr.author),
+        None => false,
+    };
+    let key = format!("{}@{}", pr.repo, pr.base_branch);
+    pr.can_approve = *approve_cache
+        .entry(key)
+        .or_insert_with(|| client.can_approve(&pr.repo, &pr.base_branch, login.unwrap_or("")));
 }
 
 /// Fetch open PRs for every marketplace we maintain (forge push rights) or that
@@ -1141,6 +1179,13 @@ pub async fn track_marketplace_prs(only: Option<String>) -> Result<Vec<TrackedPr
     let mut out: Vec<TrackedPr> = Vec::new();
     // Avoid re-querying the same plugin repo twice within one marketplace.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Authenticated login per forge (keyed by base_url) so we resolve `/user`
+    // once per instance instead of once per repo.
+    let mut login_cache: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    // Per-(repo@branch) approval decision, shared across all PRs in this run.
+    let mut approve_cache: std::collections::HashMap<String, bool> =
+        std::collections::HashMap::new();
 
     for cfg in &s.marketplaces {
         if cfg.github_repo.is_empty() {
@@ -1172,10 +1217,22 @@ pub async fn track_marketplace_prs(only: Option<String>) -> Result<Vec<TrackedPr
             continue;
         }
 
+        let gh_login = login_cache
+            .entry(gh.base_url())
+            .or_insert_with(|| gh.current_login())
+            .clone();
+
         match gh.list_open_prs(&cfg.github_repo) {
-            Ok(prs) => out.extend(prs.iter().filter_map(|v| {
-                tracked_pr_from_value(v, &cfg.name, "marketplace", "", &cfg.github_repo, cfg.provider, &cfg.base_url)
-            })),
+            Ok(prs) => {
+                for v in &prs {
+                    if let Some(mut pr) = tracked_pr_from_value(
+                        v, &cfg.name, "marketplace", "", &cfg.github_repo, cfg.provider, &cfg.base_url,
+                    ) {
+                        enrich_tracked_pr(&mut pr, &gh, gh_login.as_deref(), &mut approve_cache);
+                        out.push(pr);
+                    }
+                }
+            }
             Err(e) => tracing::warn!(
                 "track_marketplace_prs: list PRs failed for marketplace {} ({}): {}",
                 cfg.name, cfg.github_repo, e
@@ -1216,10 +1273,21 @@ pub async fn track_marketplace_prs(only: Option<String>) -> Result<Vec<TrackedPr
             }
             let provider = pclient.provider();
             let base_url = pclient.base_url();
+            let p_login = login_cache
+                .entry(pclient.base_url())
+                .or_insert_with(|| pclient.current_login())
+                .clone();
             match pclient.list_open_prs(&src.repo) {
-                Ok(prs) => out.extend(prs.iter().filter_map(|v| {
-                    tracked_pr_from_value(v, &cfg.name, "plugin", &p.name, &src.repo, provider, &base_url)
-                })),
+                Ok(prs) => {
+                    for v in &prs {
+                        if let Some(mut pr) = tracked_pr_from_value(
+                            v, &cfg.name, "plugin", &p.name, &src.repo, provider, &base_url,
+                        ) {
+                            enrich_tracked_pr(&mut pr, &pclient, p_login.as_deref(), &mut approve_cache);
+                            out.push(pr);
+                        }
+                    }
+                }
                 Err(e) => tracing::warn!(
                     "track_marketplace_prs: list PRs failed for plugin {} ({}): {}",
                     p.name, src.repo, e

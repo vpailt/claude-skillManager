@@ -618,6 +618,11 @@ function MarketplaceTrackingSection() {
   }, [tracked.data, trackedNames]);
 
   const total = tracked.data?.length ?? 0;
+  // PRs awaiting the current user's validation (opened by others, approvable).
+  const toValidate = useMemo(
+    () => (tracked.data ?? []).filter((p) => !p.mine && p.canApprove).length,
+    [tracked.data],
+  );
 
   return (
     <section className="flex flex-col">
@@ -626,6 +631,12 @@ function MarketplaceTrackingSection() {
         <h2 className="text-lg font-semibold">Suivi des marketplaces</h2>
         {trackedNames.length > 0 && total > 0 && (
           <Badge variant="secondary">{total} PR</Badge>
+        )}
+        {trackedNames.length > 0 && toValidate > 0 && (
+          <Badge className="gap-1 bg-emerald-600 hover:bg-emerald-600 text-white">
+            <ShieldCheck className="h-3 w-3" />
+            {toValidate} à valider
+          </Badge>
         )}
       </div>
       <Card

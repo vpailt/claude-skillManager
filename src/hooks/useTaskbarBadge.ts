@@ -9,11 +9,12 @@ const log = createLogger("taskbar-badge");
 
 /**
  * Drives the Windows taskbar overlay badge (`set_overlay_icon`) with the number
- * of "actions à traiter". The total mirrors the Dashboard:
+ * of "actions à traiter" — things that need *your* action:
  *
- *   outdated plugins  +  open PRs on tracked marketplaces
+ *   outdated plugins  +  PRs awaiting your validation
  *
- * `0` clears the badge. No-op on non-Windows (the Rust command is a no-op).
+ * Your own open PRs are excluded (they wait on others, not on you). `0` clears
+ * the badge. No-op on non-Windows (the Rust command is a no-op).
  *
  * The overlay decorates the taskbar *button*, which is destroyed while the
  * window is hidden to tray, so we re-apply the last count whenever the window
@@ -52,8 +53,12 @@ export function useTaskbarBadge() {
         .filter((p) => p.installState === "outdated").length,
     [marketplaces]
   );
+  // Only PRs awaiting *your* validation (opened by others, you can approve) —
+  // not your own open PRs, which are waiting on reviewers.
   const trackedCount =
-    trackedNames.length > 0 ? tracked.data?.length ?? 0 : 0;
+    trackedNames.length > 0
+      ? (tracked.data ?? []).filter((p) => !p.mine && p.canApprove).length
+      : 0;
 
   const count = outdatedCount + trackedCount;
 

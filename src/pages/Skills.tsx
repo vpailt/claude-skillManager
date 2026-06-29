@@ -783,9 +783,21 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
 function PluginDetail({ plugin }: { plugin: Plugin }) {
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
+  const findMarketplace = useApp((s) => s.findMarketplace);
+  const installMarketplace = useInstallMarketplace();
 
   const installMutation = useMutation({
-    mutationFn: api.installPlugin,
+    mutationFn: async (p: Plugin) => {
+      // Installing a plugin fetches its own repo and doesn't strictly require the
+      // marketplace index — but Claude Code only surfaces it cleanly when the
+      // marketplace is installed too. So install the marketplace first if it
+      // isn't already (no-op when it is).
+      const mp = findMarketplace(p.marketplaceName);
+      if (mp && !mp.installed) {
+        await installMarketplace.mutateAsync(mp);
+      }
+      return api.installPlugin(p);
+    },
     onSuccess: (_, p) => {
       qc.invalidateQueries({ queryKey: ["refresh"] });
       notify({ kind: "success", title: "Plugin installé", body: p.name });

@@ -536,6 +536,85 @@ function TrackedPrRow({ pr }: { pr: TrackedPr }) {
   );
 }
 
+// Group a flat PR list by marketplace, marketplace-scoped first then per-plugin.
+// Only marketplaces actually present in `prs` get a group (no empty seeding) —
+// each role section shows just the marketplaces with PRs in that role.
+function groupPrs(prs: TrackedPr[]) {
+  const map = new Map<
+    string,
+    { marketplace: TrackedPr[]; plugins: Map<string, TrackedPr[]> }
+  >();
+  for (const pr of prs) {
+    let g = map.get(pr.marketplaceName);
+    if (!g) {
+      g = { marketplace: [], plugins: new Map() };
+      map.set(pr.marketplaceName, g);
+    }
+    if (pr.scope === "plugin") {
+      const arr = g.plugins.get(pr.pluginName) ?? [];
+      arr.push(pr);
+      g.plugins.set(pr.pluginName, arr);
+    } else {
+      g.marketplace.push(pr);
+    }
+  }
+  return map;
+}
+
+// Renders one Card per marketplace, with marketplace- then plugin-scoped PRs.
+// Shared by both "Mes demandes" and "Demandes à valider".
+function GroupedPrCards({ prs }: { prs: TrackedPr[] }) {
+  const grouped = useMemo(() => groupPrs(prs), [prs]);
+  return (
+    <div className="space-y-3">
+      {Array.from(grouped.entries()).map(([name, g]) => {
+        const count =
+          g.marketplace.length +
+          Array.from(g.plugins.values()).reduce((a, v) => a + v.length, 0);
+        return (
+          <Card key={name}>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  {name}
+                </CardTitle>
+                <Badge variant={count > 0 ? "secondary" : "outline"}>
+                  {count} PR
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {g.marketplace.length > 0 && (
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-1 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    <GitPullRequest className="h-3 w-3" />
+                    Marketplace
+                  </div>
+                  {g.marketplace.map((pr) => (
+                    <TrackedPrRow key={`${pr.repo}#${pr.number}`} pr={pr} />
+                  ))}
+                </div>
+              )}
+              {Array.from(g.plugins.entries()).map(([plugin, prs2]) => (
+                <div key={plugin} className="space-y-0.5">
+                  <div className="flex items-center gap-1 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    <Package className="h-3 w-3" />
+                    {plugin}
+                  </div>
+                  {prs2.map((pr) => (
+                    <TrackedPrRow key={`${pr.repo}#${pr.number}`} pr={pr} />
+                  ))}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
 function TrackingSection() {
   const settingsQuery = useQuery({
     queryKey: ["app-settings"],
@@ -548,15 +627,10 @@ function TrackingSection() {
     refetchOnWindowFocus: false,
   });
 
-  // Review rights per marketplace = push/maintain/admin on its repo (the
-  // `editable` flag computed at refresh from the forge token's permissions).
-  // Drives the per-marketplace "read-only" notice below.
+  // Review rights = push/maintain/admin on a tracked repo (the `editable` flag
+  // from the forge token's permissions). Used only to decide whether to show
+  // the "Demandes à valider" section when its queue is currently empty.
   const appMarketplaces = useApp((s) => s.marketplaces);
-  const editableByName = useMemo(() => {
-    const m = new Map<string, boolean>();
-    for (const mp of appMarketplaces) m.set(mp.name, mp.editable);
-    return m;
-  }, [appMarketplaces]);
 
   const trackedNames = useMemo(
     () =>
@@ -566,35 +640,34 @@ function TrackingSection() {
     [settingsQuery.data],
   );
 
-  // Group PRs: marketplace-scoped first, then per-plugin, under each marketplace.
-  const grouped = useMemo(() => {
-    const map = new Map<
-      string,
-      { marketplace: TrackedPr[]; plugins: Map<string, TrackedPr[]> }
-    >();
-    for (const name of trackedNames) {
-      map.set(name, { marketplace: [], plugins: new Map() });
-    }
-    for (const pr of tracked.data ?? []) {
-      if (!map.has(pr.marketplaceName)) {
-        map.set(pr.marketplaceName, { marketplace: [], plugins: new Map() });
-      }
-      const g = map.get(pr.marketplaceName)!;
-      if (pr.scope === "plugin") {
-        const arr = g.plugins.get(pr.pluginName) ?? [];
-        arr.push(pr);
-        g.plugins.set(pr.pluginName, arr);
-      } else {
-        g.marketplace.push(pr);
-      }
-    }
-    return map;
-  }, [tracked.data, trackedNames]);
+  const all = tracked.data ?? [];
+  // "Mes demandes" = PRs I opened; "Demandes à valider" = others' PRs I can
+  // approve (per the backend's hybrid branch-protection / push-rights check).
+  const mine = useMemo(() => all.filter((p) => p.mine), [all]);
+  const toValidate = useMemo(
+    () => all.filter((p) => !p.mine && p.canApprove),
+    [all],
+  );
+  // Leftovers: PRs by others on a repo you only *watch* (track_prs) without
+  // approval rights. Kept visible (read-only) so the header count and the
+  // sections stay consistent; empty for any marketplace you maintain.
+  const others = useMemo(
+    () => all.filter((p) => !p.mine && !p.canApprove),
+    [all],
+  );
 
-  const total = tracked.data?.length ?? 0;
+  // Show "Demandes à valider" when there is something to review now, or when the
+  // user has approval rights somewhere (so the empty queue is still visible and
+  // explains itself, rather than the whole section silently vanishing).
+  const hasReviewRights = useMemo(
+    () => toValidate.length > 0 || appMarketplaces.some((m) => m.editable),
+    [toValidate.length, appMarketplaces],
+  );
+
+  const total = all.length;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex items-center justify-between gap-2">
         <div>
           <h3 className="flex items-center gap-2 text-sm font-semibold">
@@ -644,80 +717,66 @@ function TrackingSection() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {Array.from(grouped.entries()).map(([name, g]) => {
-            const count =
-              g.marketplace.length +
-              Array.from(g.plugins.values()).reduce((a, v) => a + v.length, 0);
-            const canReview = editableByName.get(name) ?? false;
-            return (
-              <Card key={name}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <Globe className="h-4 w-4 text-muted-foreground" />
-                      {name}
-                    </CardTitle>
-                    <div className="flex items-center gap-2">
-                      {!canReview && (
-                        <Badge
-                          variant="outline"
-                          className="gap-1 text-amber-600 dark:text-amber-400"
-                          title="Votre token GitHub/Gitea n'a pas les droits (push) sur ce repo"
-                        >
-                          <Lock className="h-3 w-3" />
-                          lecture seule
-                        </Badge>
-                      )}
-                      <Badge variant={count > 0 ? "secondary" : "outline"}>
-                        {count} PR
-                      </Badge>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  {!canReview && (
-                    <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300">
-                      <Lock className="h-3 w-3 shrink-0" />
-                      Vous n'avez pas les droits pour faire la review sur ce
-                      marketplace (lecture seule).
-                    </div>
+        <>
+          <section className="space-y-3">
+            <h4 className="flex items-center gap-2 text-sm font-semibold">
+              <GitPullRequest className="h-4 w-4 text-sky-500" />
+              Mes demandes
+              {mine.length > 0 && (
+                <Badge variant="secondary">{mine.length}</Badge>
+              )}
+            </h4>
+            {mine.length === 0 ? (
+              <p className="px-1 text-xs text-muted-foreground">
+                Vous n'avez aucune PR ouverte sur les marketplaces suivis.
+              </p>
+            ) : (
+              <GroupedPrCards prs={mine} />
+            )}
+          </section>
+
+          {hasReviewRights && (
+            <section className="space-y-3">
+              <div>
+                <h4 className="flex items-center gap-2 text-sm font-semibold">
+                  <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                  Demandes à valider
+                  {toValidate.length > 0 && (
+                    <Badge variant="secondary">{toValidate.length}</Badge>
                   )}
-                  {count === 0 ? (
-                    <p className="px-2 text-xs text-muted-foreground">
-                      Aucune PR ouverte sur ce marketplace ni ses plugins.
-                    </p>
-                  ) : (
-                    <>
-                      {g.marketplace.length > 0 && (
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-1 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            <GitPullRequest className="h-3 w-3" />
-                            Marketplace
-                          </div>
-                          {g.marketplace.map((pr) => (
-                            <TrackedPrRow key={`${pr.repo}#${pr.number}`} pr={pr} />
-                          ))}
-                        </div>
-                      )}
-                      {Array.from(g.plugins.entries()).map(([plugin, prs]) => (
-                        <div key={plugin} className="space-y-0.5">
-                          <div className="flex items-center gap-1 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            <Package className="h-3 w-3" />
-                            {plugin}
-                          </div>
-                          {prs.map((pr) => (
-                            <TrackedPrRow key={`${pr.repo}#${pr.number}`} pr={pr} />
-                          ))}
-                        </div>
-                      ))}
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                </h4>
+                <p className="mt-1 px-1 text-xs text-muted-foreground">
+                  PR ouvertes par d'autres que vous pouvez approuver (selon la
+                  règle de protection de branche, sinon vos droits de push).
+                </p>
+              </div>
+              {toValidate.length === 0 ? (
+                <p className="px-1 text-xs text-muted-foreground">
+                  Aucune PR en attente de votre validation.
+                </p>
+              ) : (
+                <GroupedPrCards prs={toValidate} />
+              )}
+            </section>
+          )}
+
+          {others.length > 0 && (
+            <section className="space-y-3">
+              <div>
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                  <Lock className="h-4 w-4" />
+                  Autres PR suivies
+                  <Badge variant="outline">{others.length}</Badge>
+                </h4>
+                <p className="mt-1 px-1 text-xs text-muted-foreground">
+                  PR sur des marketplaces que vous suivez sans droit de
+                  validation (lecture seule).
+                </p>
+              </div>
+              <GroupedPrCards prs={others} />
+            </section>
+          )}
+        </>
       )}
     </div>
   );

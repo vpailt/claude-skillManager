@@ -82,6 +82,37 @@ fn path_has_dot_segment(path: &str) -> bool {
     path.split('/').any(|seg| seg.starts_with('.'))
 }
 
+/// Minimal shell-style glob match supporting `*` (any run, incl. empty) and
+/// `?` (one char), anchored over the whole string. Used to test a Gitea
+/// branch-protection rule pattern (e.g. `release/*`) against a branch name.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    let (mut pi, mut ti) = (0usize, 0usize);
+    // Backtracking position of the last `*` and where it started matching.
+    let (mut star, mut mark) = (None::<usize>, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteFile {
@@ -919,6 +950,123 @@ impl GitHubClient {
         ["push", "maintain", "admin"]
             .iter()
             .any(|k| p.get(*k).and_then(|v| v.as_bool()).unwrap_or(false))
+    }
+
+    /// Login of the token's authenticated user, or `None` when the token is
+    /// missing/invalid. Forge-specific (each instance has its own user). Thin
+    /// wrapper over [`auth_check`].
+    pub fn current_login(&self) -> Option<String> {
+        let (ok, who) = self.auth_check();
+        (ok && !who.is_empty()).then_some(who)
+    }
+
+    /// Whether `login` may *approve* PRs targeting `base_branch` on `repo`.
+    ///
+    /// Hybrid policy (drives the "Demandes à valider" list): when a
+    /// branch-protection rule covering `base_branch` enables an approvals
+    /// whitelist, the user must be on it — directly, or via a whitelisted team.
+    /// When there is no such rule (or the rule has no approvals whitelist), we
+    /// fall back to push rights. Any forge error degrades to the push-rights
+    /// fallback so the list never goes dark on a transient failure. GitHub has
+    /// no per-user approvals whitelist, so it always uses the fallback.
+    pub fn can_approve(&self, repo: &str, base_branch: &str, login: &str) -> bool {
+        if self.provider == Provider::Github {
+            return self.can_push(repo);
+        }
+        let rule = match self.gitea_branch_protection(repo, base_branch) {
+            Some(r) => r,
+            None => return self.can_push(repo),
+        };
+        let whitelist_on = rule
+            .get("enable_approvals_whitelist")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !whitelist_on {
+            return self.can_push(repo);
+        }
+        if login.is_empty() {
+            return false;
+        }
+        let on_user_list = rule
+            .get("approvals_whitelist_username")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|u| u.as_str())
+                    .any(|u| u.eq_ignore_ascii_case(login))
+            })
+            .unwrap_or(false);
+        if on_user_list {
+            return true;
+        }
+        let owner = repo.split('/').next().unwrap_or("");
+        rule.get("approvals_whitelist_teams")
+            .and_then(|v| v.as_array())
+            .map(|teams| {
+                teams
+                    .iter()
+                    .filter_map(|t| t.as_str())
+                    .any(|t| self.gitea_team_has_member(owner, t, login))
+            })
+            .unwrap_or(false)
+    }
+
+    /// First branch-protection rule on `repo` whose pattern covers `branch`
+    /// (exact name preferred, else a `*`/`?` glob), or `None` if the repo has
+    /// none / the call fails. Gitea-only.
+    fn gitea_branch_protection(&self, repo: &str, branch: &str) -> Option<Value> {
+        if self.provider != Provider::Gitea || branch.is_empty() {
+            return None;
+        }
+        let url = format!("/repos/{repo}/branch_protections");
+        let resp = self.request(reqwest::Method::GET, &url).send().ok()?;
+        let rules: Value = Self::check(resp, "GET", &url).ok()?.json().ok()?;
+        let arr = rules.as_array()?;
+        let pattern_of = |r: &Value| -> String {
+            r.get("rule_name")
+                .or_else(|| r.get("branch_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        if let Some(exact) = arr.iter().find(|r| pattern_of(r) == branch) {
+            return Some(exact.clone());
+        }
+        arr.iter()
+            .find(|r| glob_match(&pattern_of(r), branch))
+            .cloned()
+    }
+
+    /// Best-effort: is `login` a member of org `org`'s team named `team`?
+    /// Returns false on any lookup failure (fail-closed for the whitelist path).
+    fn gitea_team_has_member(&self, org: &str, team: &str, login: &str) -> bool {
+        if org.is_empty() || team.is_empty() || login.is_empty() {
+            return false;
+        }
+        let list_url = format!("/orgs/{org}/teams");
+        let teams: Option<Value> = self
+            .request(reqwest::Method::GET, &list_url)
+            .query(&[("limit", "50")])
+            .send()
+            .ok()
+            .and_then(|r| Self::check(r, "GET", &list_url).ok())
+            .and_then(|r| r.json().ok());
+        let team_id = teams.as_ref().and_then(|v| v.as_array()).and_then(|arr| {
+            arr.iter()
+                .find(|t| {
+                    t.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|n| n.eq_ignore_ascii_case(team))
+                        .unwrap_or(false)
+                })
+                .and_then(|t| t.get("id").and_then(|i| i.as_i64()))
+        });
+        let Some(id) = team_id else { return false };
+        let m_url = format!("/teams/{id}/members/{login}");
+        self.request(reqwest::Method::GET, &m_url)
+            .send()
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
     }
 
     pub fn get_token_scopes(&self) -> Vec<String> {

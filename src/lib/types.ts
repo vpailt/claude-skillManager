@@ -202,6 +202,13 @@ export interface TrackedPr {
   title: string;
   url: string;
   author: string;
+  /** True when the PR was opened by the current forge user ("Mes demandes"). */
+  mine: boolean;
+  /** Whether the current user may approve this PR ("Demandes à valider").
+   *  Hybrid: branch-protection approvals whitelist when set, else push rights. */
+  canApprove: boolean;
+  /** PR target branch (`base.ref`). */
+  baseBranch: string;
   createdAt: string;
   provider?: Provider;
   baseUrl?: string;
