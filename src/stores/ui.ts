@@ -4,7 +4,7 @@ import type { UiPrefs } from "@/lib/types";
 const STORAGE_KEY = "skillmanager.ui-prefs";
 
 export const DEFAULT_UI: UiPrefs = {
-  prPollingEnabled: false,
+  prPollingEnabled: true,
   prPollingIntervalSeconds: 60,
   density: "comfortable",
   theme: "auto",

@@ -65,7 +65,7 @@ import {
 } from "@/stores/settingsDialog";
 
 const DEFAULT_UI: UiPrefs = {
-  prPollingEnabled: false,
+  prPollingEnabled: true,
   prPollingIntervalSeconds: 60,
   density: "comfortable",
   theme: "auto",

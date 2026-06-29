@@ -1,6 +1,6 @@
 [package]
 name = "skillmanager"
-version = "2.1.1"
+version = "2.1.2"
 description = "GUI for managing Claude Code plugins, marketplaces and skills"
 authors = ["Valentin Pitel"]
 edition = "2021"

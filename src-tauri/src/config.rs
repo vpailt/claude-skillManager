@@ -236,7 +236,7 @@ fn default_true() -> bool {
 impl Default for UiPrefs {
     fn default() -> Self {
         Self {
-            pr_polling_enabled: false,
+            pr_polling_enabled: true,
             pr_polling_interval_seconds: default_pr_polling_interval(),
             density: default_ui_density(),
             theme: default_theme(),
@@ -339,7 +339,7 @@ fn settings_from_properties_and_marketplaces(
         marketplaces,
         gitea_instances,
         ui: UiPrefs {
-            pr_polling_enabled: props.get_bool(PROP_POLLING_ENABLED, false),
+            pr_polling_enabled: props.get_bool(PROP_POLLING_ENABLED, true),
             pr_polling_interval_seconds: props.get_u32(PROP_POLLING_INTERVAL, 60),
             density: props.get_or(PROP_UI_DENSITY, &default_ui_density()),
             theme: props.get_or(PROP_UI_THEME, &default_theme()),
