@@ -23,6 +23,7 @@ import { HelpDialog } from "@/components/HelpDialog";
 import { useAppVersion } from "@/hooks/useAppVersion";
 import { useHelpDialog } from "@/stores/helpDialog";
 import { useSettingsDialog } from "@/stores/settingsDialog";
+import { useTrackingView } from "@/stores/trackingView";
 
 interface NavItem {
   to: string;
@@ -149,7 +150,14 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
               ? "Rafraîchissement…"
               : "Rafraîchir — re-scanne l'installation locale et GitHub (quota limité)"
           }
-          onClick={() => qc.invalidateQueries({ queryKey: ["refresh"] })}
+          onClick={() => {
+            qc.invalidateQueries({ queryKey: ["refresh"] });
+            // On the Suivi Marketplace tab, also refresh the (network-heavy) PR
+            // tracking — this button replaces the tab's own refresh button.
+            if (useTrackingView.getState().active) {
+              qc.invalidateQueries({ queryKey: ["tracked-prs"] });
+            }
+          }}
           className={cn(
             "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
             collapsed && "justify-center px-0"

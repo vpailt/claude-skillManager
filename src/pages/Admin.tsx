@@ -29,6 +29,7 @@ import {
   type WizardKind,
 } from "@/components/AdminWizards";
 import { useApp } from "@/stores/app";
+import { useTrackingView } from "@/stores/trackingView";
 import type { PendingPR, Plugin, RemoteSkillInfo, TrackedPr } from "@/lib/types";
 
 // Compare two dotted version strings numerically (semver-ish), falling back to
@@ -625,6 +626,14 @@ function TrackingSection() {
     refetchOnWindowFocus: false,
   });
 
+  // Flag this view as active while mounted so the sidebar Refresh button also
+  // refreshes the PR tracking here (this tab has no dedicated refresh button).
+  const setTrackingActive = useTrackingView((s) => s.setActive);
+  useEffect(() => {
+    setTrackingActive(true);
+    return () => setTrackingActive(false);
+  }, [setTrackingActive]);
+
   // Review rights = push/maintain/admin on a tracked repo (the `editable` flag
   // from the forge token's permissions). Used only to decide whether to show
   // the "Demandes à valider" section when its queue is currently empty.
@@ -676,20 +685,16 @@ function TrackingSection() {
           <p className="mt-1 text-xs text-muted-foreground">
             PR ouvertes sur les marketplaces dont le <strong>Suivi PR</strong> est
             actif (onglet Skills, en cliquant sur un marketplace) et sur les repos
-            de leurs plugins.
+            de leurs plugins. Utilisez <strong>Rafraîchir</strong> (barre de gauche)
+            pour actualiser.
           </p>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => tracked.refetch()}
-          disabled={tracked.isFetching}
-        >
-          <RefreshCw
-            className={`mr-1 h-3 w-3 ${tracked.isFetching ? "animate-spin" : ""}`}
-          />
-          Rafraîchir
-        </Button>
+        {tracked.isFetching && (
+          <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Actualisation…
+          </span>
+        )}
       </div>
 
       {trackedNames.length === 0 ? (
