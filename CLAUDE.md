@@ -18,6 +18,30 @@ is missing, then drives `npm run build` + `npm run tauri build`. Output:
 
 There is no test suite, no linter, no formatter configured. Don't add one without asking.
 
+## Releasing a new version ("build & push")
+
+When asked to ship a change ("build & push", "fais une nouvelle version", "same as
+last time"), run this exact cycle:
+
+1. **Stop the running app** — the running `skillmanager.exe` locks the output file, so
+   the build fails with `Accès refusé (os error 5)` if it's open. Kill it first:
+   `Get-Process skillmanager -ErrorAction SilentlyContinue | Stop-Process -Force`.
+2. **Bump the version** (patch for fixes/small features) in **three** files, kept in
+   lockstep: `package.json`, `src-tauri/Cargo.toml` (`[package] version`), and
+   `src-tauri/tauri.conf.json`. `src-tauri/Cargo.lock` updates itself on build.
+3. **Build**: `.\build.ps1 -NoBundle` (call it by absolute path —
+   `& "c:\DEV\ProjetAnnexe\claude-skillManager\build.ps1" -NoBundle` — the PowerShell
+   working dir sometimes drifts). Frontend-only changes still need this (it rebundles
+   into the exe); a quick `npx tsc -b` / `cargo check` is a faster pre-flight.
+4. **Commit on `main`** (this is a solo repo; history is linear, no PR). French message
+   `vX.Y.Z: <résumé>` + a body, ending with the `Co-Authored-By:` trailer.
+5. **Push** `origin main` — only with a fresh, explicit user go-ahead for *this* round
+   (the auto-mode classifier blocks an unprompted push to the default branch).
+
+Defaults that ship by default (changed from the originals): PR-status polling
+(`polling.enabled`) and a new marketplace's `autoUpdate` are both ON; marketplace PR
+tracking auto-enables on forge push rights (`can_push`), not the `track_prs` flag.
+
 ## Hard constraint: standalone .exe, no runtime deps
 
 The shipped artifact is `src-tauri\target\release\skillmanager.exe` and it must run on a

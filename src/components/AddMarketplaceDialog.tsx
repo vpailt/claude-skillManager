@@ -1,12 +1,14 @@
 // Add-marketplace-from-URL dialog.
 //
 // Registers a marketplace (GitHub or Gitea) into the app's settings by parsing
-// `owner/repo` from a Git URL and fetching its registry. Self-contained: only
-// depends on `parseMarketplaceUrl` + `settingsUpsertMarketplace`, so it can be
-// hosted from either the Admin-local panel or the Skills page.
-import { useState } from "react";
+// `owner/repo` from a Git URL, then installs it locally in one step. Defaults to
+// the AlmaviaCX Gitea instance and proposes its default marketplace. Self-
+// contained: depends only on `parseMarketplaceUrl` + `settingsUpsertMarketplace`
+// + `installMarketplace`, so it can be hosted from either the Admin-local panel
+// or the Skills page.
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { KeyRound, Loader2, Sparkles } from "lucide-react";
 import {
   Dialog,
   DialogClose,
@@ -20,7 +22,16 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/stores/notifications";
+import { useSettingsDialog } from "@/stores/settingsDialog";
 import type { Provider } from "@/lib/types";
+
+// The AlmaviaCX Gitea instance (fixed/auto-seeded) and its default marketplace.
+const ACX_GITEA_URL = "https://git.almaviacx.local";
+const ACX_GITEA_HOST = "git.almaviacx.local";
+const DEFAULT_MARKETPLACE_URL = `${ACX_GITEA_URL}/Claude/acx-cl-marketplace`;
+
+const hostOf = (url: string) =>
+  url.trim().replace(/^https?:\/\//, "").split("/")[0];
 
 export function AddMarketplaceDialog({
   open,
@@ -31,21 +42,32 @@ export function AddMarketplaceDialog({
 }) {
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
+  const openSettingsTo = useSettingsDialog((s) => s.openTo);
   const settingsQuery = useQuery({
     queryKey: ["app-settings"],
     queryFn: api.loadAppSettings,
   });
   const giteaInstances = settingsQuery.data?.giteaInstances ?? [];
 
-  const [provider, setProvider] = useState<Provider>("github");
+  // Gitea by default — this app is primarily an AlmaviaCX Gitea front-end.
+  const [provider, setProvider] = useState<Provider>("gitea");
   const [giteaBaseUrl, setGiteaBaseUrl] = useState("");
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [parsedRepo, setParsedRepo] = useState<string | null>(null);
   const [error, setError] = useState("");
 
+  // When the dialog opens with no instance picked, default to the AlmaviaCX
+  // instance (or the first registered one). Also re-runs once the settings query
+  // resolves, so the preselection survives a slow first load.
+  useEffect(() => {
+    if (!open || provider !== "gitea" || giteaBaseUrl) return;
+    const acx = giteaInstances.find((i) => hostOf(i.baseUrl) === ACX_GITEA_HOST);
+    setGiteaBaseUrl(acx?.baseUrl ?? giteaInstances[0]?.baseUrl ?? "");
+  }, [open, provider, giteaBaseUrl, giteaInstances]);
+
   const reset = () => {
-    setProvider("github");
+    setProvider("gitea");
     setGiteaBaseUrl("");
     setUrl("");
     setName("");
@@ -53,20 +75,41 @@ export function AddMarketplaceDialog({
     setError("");
   };
 
-  const onUrlBlur = async () => {
+  const parseUrlInto = async (value: string) => {
     setError("");
-    if (!url.trim()) {
+    const trimmed = value.trim();
+    if (!trimmed) {
       setParsedRepo(null);
       return;
     }
-    const repo = await api.parseMarketplaceUrl(url.trim());
+    const repo = await api.parseMarketplaceUrl(trimmed);
     if (!repo) {
-      setError(`Impossible d'extraire owner/repo depuis : ${url}`);
+      setError(`Impossible d'extraire owner/repo depuis : ${trimmed}`);
       setParsedRepo(null);
       return;
     }
     setParsedRepo(repo);
     if (!name.trim()) setName(repo.split("/").pop() || "");
+  };
+
+  const onUrlBlur = () => parseUrlInto(url);
+
+  // One-click "proposal": fill in the AlmaviaCX default marketplace and parse it.
+  const proposeDefault = async () => {
+    setUrl(DEFAULT_MARKETPLACE_URL);
+    await parseUrlInto(DEFAULT_MARKETPLACE_URL);
+  };
+
+  const selectedInstance = giteaInstances.find(
+    (i) => hostOf(i.baseUrl) === hostOf(giteaBaseUrl)
+  );
+  // Gitea needs a token to read/clone; block add+install until one is set.
+  const giteaTokenMissing =
+    provider === "gitea" && !!giteaBaseUrl && !selectedInstance?.hasToken;
+
+  const goConfigureToken = () => {
+    onOpenChange(false);
+    openSettingsTo("connexions", "gitea");
   };
 
   const upsert = useMutation({
@@ -75,6 +118,9 @@ export function AddMarketplaceDialog({
       if (!name.trim()) throw new Error("Le nom du marketplace est requis");
       if (provider === "gitea" && !giteaBaseUrl) {
         throw new Error("Choisissez une instance Gitea (ajoutez-en une dans Paramètres d'abord)");
+      }
+      if (giteaTokenMissing) {
+        throw new Error("Configurez d'abord votre token Gitea pour cette instance.");
       }
       const cfgName = name.trim();
       const baseUrl = provider === "gitea" ? giteaBaseUrl : "";
@@ -107,6 +153,13 @@ export function AddMarketplaceDialog({
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
+  const blocked =
+    !parsedRepo ||
+    !name.trim() ||
+    (provider === "gitea" && !giteaBaseUrl) ||
+    giteaTokenMissing ||
+    upsert.isPending;
+
   return (
     <Dialog
       open={open}
@@ -129,7 +182,7 @@ export function AddMarketplaceDialog({
               Fournisseur
             </label>
             <div className="flex gap-1">
-              {(["github", "gitea"] as const).map((p) => (
+              {(["gitea", "github"] as const).map((p) => (
                 <Button
                   key={p}
                   size="sm"
@@ -159,7 +212,6 @@ export function AddMarketplaceDialog({
                   value={giteaBaseUrl}
                   onChange={(e) => setGiteaBaseUrl(e.target.value)}
                 >
-                  <option value="">— choisir —</option>
                   {giteaInstances.map((i) => (
                     <option key={i.baseUrl} value={i.baseUrl}>
                       {i.baseUrl}
@@ -186,6 +238,16 @@ export function AddMarketplaceDialog({
               onBlur={onUrlBlur}
               autoFocus
             />
+            {provider === "gitea" && (
+              <button
+                type="button"
+                onClick={proposeDefault}
+                className="mt-1 inline-flex items-center gap-1 text-xs text-primary underline underline-offset-2 hover:opacity-80"
+              >
+                <Sparkles className="h-3 w-3" />
+                Proposition : marketplace AlmaviaCX (Claude/acx-cl-marketplace)
+              </button>
+            )}
             {parsedRepo && (
               <div className="mt-1 text-xs text-muted-foreground">
                 Extrait : <code>{parsedRepo}</code>
@@ -202,6 +264,27 @@ export function AddMarketplaceDialog({
               onChange={(e) => setName(e.target.value)}
             />
           </div>
+
+          {giteaTokenMissing && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-amber-600 dark:text-amber-400">
+              <div className="flex items-start gap-2">
+                <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <div>
+                  Aucun token configuré pour <code>{hostOf(giteaBaseUrl)}</code>.
+                  Configurez d'abord votre token Gitea pour pouvoir ajouter et
+                  installer ce marketplace.{" "}
+                  <button
+                    type="button"
+                    onClick={goConfigureToken}
+                    className="font-medium underline underline-offset-2"
+                  >
+                    Configurer le token Gitea
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {error && (
             <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
               {error}
@@ -212,15 +295,7 @@ export function AddMarketplaceDialog({
           <DialogClose asChild>
             <Button variant="outline">Annuler</Button>
           </DialogClose>
-          <Button
-            onClick={() => upsert.mutate()}
-            disabled={
-              !parsedRepo ||
-              !name.trim() ||
-              (provider === "gitea" && !giteaBaseUrl) ||
-              upsert.isPending
-            }
-          >
+          <Button onClick={() => upsert.mutate()} disabled={blocked}>
             {upsert.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
             Ajouter et installer
           </Button>
