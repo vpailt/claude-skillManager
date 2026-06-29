@@ -124,7 +124,7 @@ export function AddMarketplaceDialog({
       }
       const cfgName = name.trim();
       const baseUrl = provider === "gitea" ? giteaBaseUrl : "";
-      // Register the marketplace with auto-update ON by default.
+      // Register the marketplace with auto-update AND PR tracking ON by default.
       await api.settingsUpsertMarketplace({
         name: cfgName,
         githubRepo: parsedRepo,
@@ -132,6 +132,7 @@ export function AddMarketplaceDialog({
         owned: false,
         sourcePath: "",
         autoUpdate: true,
+        trackPrs: true,
         provider,
         baseUrl,
       });
@@ -173,7 +174,8 @@ export function AddMarketplaceDialog({
           <DialogTitle>Ajouter un marketplace depuis une URL Git</DialogTitle>
           <DialogDescription>
             Enregistre le marketplace (<code>.claude-plugin/marketplace.json</code>),
-            l'installe directement en local et active la mise à jour automatique.
+            l'installe directement en local et active la mise à jour automatique
+            ainsi que le suivi des PR.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">

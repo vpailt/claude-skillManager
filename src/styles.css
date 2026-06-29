@@ -38,8 +38,11 @@
     --accent-foreground: 210 40% 98%;
     --destructive: 0 62.8% 50.6%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 22%;
-    --input: 217.2 32.6% 22%;
+    /* Brighter than the page (4.9% L) so borders — dividers, cards, inputs and
+       outline buttons — stay legible in dark mode. `input` is pushed further so
+       interactive controls read as crisp outlines. */
+    --border: 217.2 32.6% 27%;
+    --input: 217.2 32.6% 34%;
     --ring: 238 76% 65%;
   }
 }

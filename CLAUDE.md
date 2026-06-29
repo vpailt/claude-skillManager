@@ -39,8 +39,9 @@ last time"), run this exact cycle:
    (the auto-mode classifier blocks an unprompted push to the default branch).
 
 Defaults that ship by default (changed from the originals): PR-status polling
-(`polling.enabled`) and a new marketplace's `autoUpdate` are both ON; marketplace PR
-tracking auto-enables on forge push rights (`can_push`), not the `track_prs` flag.
+(`polling.enabled`) is ON; adding a marketplace (the AddMarketplaceDialog) sets both
+`autoUpdate` and `track_prs` ON; and marketplace PR tracking also auto-enables on forge
+push rights (`can_push`) even when the `track_prs` flag is off.
 
 ## Hard constraint: standalone .exe, no runtime deps
 
