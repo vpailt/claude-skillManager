@@ -103,6 +103,7 @@ pub fn run() {
             uninstall_plugin_cmd,
             install_marketplace_cmd,
             uninstall_marketplace_cmd,
+            uninstall_marketplace_cascade,
             delete_marketplace_completely,
             set_marketplace_auto_update,
             check_marketplace_updates,

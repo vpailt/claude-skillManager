@@ -88,6 +88,11 @@ export const api = {
     }),
   uninstallMarketplace: (name: string) =>
     invoke<void>("uninstall_marketplace_cmd", { name }),
+  // Uninstall a marketplace and all its installed plugins, but keep it
+  // registered (so it can be re-installed). Distinct from
+  // deleteMarketplaceCompletely, which also forgets it from settings.
+  uninstallMarketplaceCascade: (name: string) =>
+    invoke<void>("uninstall_marketplace_cascade", { name }),
   setMarketplaceAutoUpdate: (name: string, value: boolean) =>
     invoke<boolean>("set_marketplace_auto_update", { name, value }),
   checkMarketplaceUpdates: (only?: string) =>

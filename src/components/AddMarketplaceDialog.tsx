@@ -19,6 +19,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import { useNotifications } from "@/stores/notifications";
 import type { Provider } from "@/lib/types";
 
 export function AddMarketplaceDialog({
@@ -29,6 +30,7 @@ export function AddMarketplaceDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const qc = useQueryClient();
+  const notify = useNotifications((s) => s.push);
   const settingsQuery = useQuery({
     queryKey: ["app-settings"],
     queryFn: api.loadAppSettings,
@@ -74,20 +76,31 @@ export function AddMarketplaceDialog({
       if (provider === "gitea" && !giteaBaseUrl) {
         throw new Error("Choisissez une instance Gitea (ajoutez-en une dans Paramètres d'abord)");
       }
-      return api.settingsUpsertMarketplace({
-        name: name.trim(),
+      const cfgName = name.trim();
+      const baseUrl = provider === "gitea" ? giteaBaseUrl : "";
+      // Register the marketplace with auto-update ON by default.
+      await api.settingsUpsertMarketplace({
+        name: cfgName,
         githubRepo: parsedRepo,
         defaultBranch: "main",
         owned: false,
         sourcePath: "",
-        autoUpdate: false,
+        autoUpdate: true,
         provider,
-        baseUrl: provider === "gitea" ? giteaBaseUrl : "",
+        baseUrl,
       });
+      // Install it right away — download it locally and make it visible to
+      // Claude Code, no separate "Installer" step.
+      await api.installMarketplace(cfgName, parsedRepo, "main", true, provider, baseUrl);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["app-settings"] });
       qc.invalidateQueries({ queryKey: ["refresh"] });
+      notify({
+        kind: "success",
+        title: "Marketplace ajouté et installé",
+        body: name.trim(),
+      });
       reset();
       onOpenChange(false);
     },
@@ -106,8 +119,8 @@ export function AddMarketplaceDialog({
         <DialogHeader>
           <DialogTitle>Ajouter un marketplace depuis une URL Git</DialogTitle>
           <DialogDescription>
-            Récupère le registre du marketplace (<code>.claude-plugin/marketplace.json</code>) et
-            l'enregistre dans les paramètres de l'app. Utilisez « Installer » ensuite pour le télécharger localement.
+            Enregistre le marketplace (<code>.claude-plugin/marketplace.json</code>),
+            l'installe directement en local et active la mise à jour automatique.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -209,7 +222,7 @@ export function AddMarketplaceDialog({
             }
           >
             {upsert.isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-            Ajouter
+            Ajouter et installer
           </Button>
         </DialogFooter>
       </DialogContent>

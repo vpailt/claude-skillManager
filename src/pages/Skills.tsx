@@ -42,6 +42,15 @@ import {
 } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useApp } from "@/stores/app";
 import { useNotifications } from "@/stores/notifications";
 import { cn } from "@/lib/utils";
@@ -639,15 +648,56 @@ function MetaItem({ label, value }: { label: string; value: string }) {
 
 function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
   const install = useInstallMarketplace();
+  const qc = useQueryClient();
+  const notify = useNotifications((s) => s.push);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Plugins of this marketplace that have a local install (and will be removed).
+  const installedPluginCount = marketplace.plugins.filter(
+    (p) =>
+      p.installState === "installed" ||
+      p.installState === "outdated" ||
+      p.installState === "local_only"
+  ).length;
+
+  const uninstall = useMutation({
+    mutationFn: () => api.uninstallMarketplaceCascade(marketplace.name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["refresh"] });
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      notify({
+        kind: "success",
+        title: "Marketplace désinstallé",
+        body: marketplace.name,
+      });
+      setConfirmOpen(false);
+    },
+    onError: (e) =>
+      notify({
+        kind: "error",
+        title: `Échec de la désinstallation : ${marketplace.name}`,
+        body: errMsg(e),
+      }),
+  });
+
   return (
     <Card className="m-4">
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="min-w-0 truncate">{marketplace.name}</CardTitle>
           {marketplace.installed ? (
-            <Badge variant="success" className="shrink-0">
-              installé
-            </Badge>
+            <div className="flex shrink-0 items-center gap-2">
+              <Badge variant="success">installé</Badge>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirmOpen(true)}
+                title="Désinstaller ce marketplace et tous ses plugins"
+              >
+                <Trash2 className="mr-1 h-3 w-3" />
+                Désinstaller
+              </Button>
+            </div>
           ) : (
             marketplace.sourceRepo && (
               <Button
@@ -688,6 +738,44 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
           </div>
         )}
       </CardContent>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Désinstaller « {marketplace.name} »</DialogTitle>
+            <DialogDescription>
+              Supprime localement ce marketplace
+              {installedPluginCount > 0 ? (
+                <>
+                  {" "}et désinstalle ses{" "}
+                  <strong>
+                    {installedPluginCount} plugin
+                    {installedPluginCount > 1 ? "s" : ""} installé
+                    {installedPluginCount > 1 ? "s" : ""}
+                  </strong>
+                </>
+              ) : null}
+              . Le marketplace reste enregistré — vous pourrez le réinstaller.
+              Vos compétences personnelles ne sont pas touchées.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Annuler</Button>
+            </DialogClose>
+            <Button
+              variant="destructive"
+              onClick={() => uninstall.mutate()}
+              disabled={uninstall.isPending}
+            >
+              {uninstall.isPending && (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              )}
+              Désinstaller
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

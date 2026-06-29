@@ -428,6 +428,36 @@ pub async fn delete_marketplace_completely(name: String) -> Result<Settings> {
     Ok(s)
 }
 
+/// Uninstall a marketplace AND every plugin installed from it, while keeping it
+/// registered in the app's settings so it stays available to re-install. This is
+/// the Skills-page "Désinstaller" affordance — distinct from
+/// [`delete_marketplace_completely`], which additionally forgets the marketplace
+/// from settings.
+///
+/// Per-plugin failures are non-fatal (logged, then we continue) so partial
+/// cleanup still happens; a failure removing the marketplace folder itself is
+/// surfaced to the caller.
+#[tauri::command]
+pub async fn uninstall_marketplace_cascade(name: String) -> Result<()> {
+    tracing::info!("uninstall_marketplace_cascade: {}", name);
+    let plugins = local_scanner::installed_plugins_by_marketplace()
+        .remove(&name)
+        .unwrap_or_default();
+    for plugin in plugins {
+        if let Err(e) = installer::uninstall(&plugin) {
+            tracing::warn!(
+                "uninstall_marketplace_cascade: failed to uninstall plugin '{}' from '{}': {}",
+                plugin.name,
+                name,
+                e
+            );
+        }
+    }
+    marketplace_installer::uninstall_marketplace(&name)?;
+    tracing::info!("uninstall_marketplace_cascade ok: {}", name);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn set_marketplace_auto_update(name: String, value: bool) -> Result<bool> {
     tracing::info!("set_marketplace_auto_update: {} -> {}", name, value);
@@ -1095,9 +1125,13 @@ fn tracked_pr_from_value(
     })
 }
 
-/// Fetch open PRs for every marketplace flagged `track_prs` (or just `only`
-/// when given) plus each of their plugins' source repos. Network-heavy and
-/// provider-aware; per-repo failures are logged and skipped, never fatal.
+/// Fetch open PRs for every marketplace we maintain (forge push rights) or that
+/// is explicitly flagged `track_prs` — optionally narrowed to `only` — plus each
+/// of their plugins' source repos we can push to. Tracking thus turns itself on
+/// for the repos you maintain, no manual toggle needed; the `track_prs` flag
+/// stays a manual override for repos you don't own but still want to watch.
+/// Network-heavy and provider-aware; per-repo failures are logged and skipped,
+/// never fatal.
 ///
 /// Runs the blocking forge calls inline (same pattern as `refresh_all`): it's a
 /// user-triggered fetch, not a hot path.
@@ -1109,7 +1143,7 @@ pub async fn track_marketplace_prs(only: Option<String>) -> Result<Vec<TrackedPr
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for cfg in &s.marketplaces {
-        if !cfg.track_prs || cfg.github_repo.is_empty() {
+        if cfg.github_repo.is_empty() {
             continue;
         }
         if let Some(name) = &only {
@@ -1126,6 +1160,18 @@ pub async fn track_marketplace_prs(only: Option<String>) -> Result<Vec<TrackedPr
             }
         };
 
+        // Auto-enable: track this marketplace when we can push to its repo (same
+        // `can_push` gate that drives `editable`), or when the user opted in via
+        // the `track_prs` override. Otherwise skip it entirely.
+        let track = cfg.track_prs || gh.can_push(&cfg.github_repo);
+        if !track {
+            tracing::debug!(
+                "track_marketplace_prs: skipping {} (no push rights, track_prs off)",
+                cfg.name
+            );
+            continue;
+        }
+
         match gh.list_open_prs(&cfg.github_repo) {
             Ok(prs) => out.extend(prs.iter().filter_map(|v| {
                 tracked_pr_from_value(v, &cfg.name, "marketplace", "", &cfg.github_repo, cfg.provider, &cfg.base_url)
@@ -1136,7 +1182,10 @@ pub async fn track_marketplace_prs(only: Option<String>) -> Result<Vec<TrackedPr
             ),
         }
 
-        // Plugin-level PRs: resolve each plugin's own source repo/forge.
+        // Plugin-level PRs: resolve each plugin's own source repo/forge, and
+        // track it when we can push to that plugin repo (or the marketplace was
+        // explicitly opted in). So you see PRs on the plugins you maintain, not
+        // noise from plugins you only consume.
         let (plugins, _) = marketplace_remote::fetch_marketplace_plugins(
             &gh, &cfg.github_repo, &cfg.default_branch, &cfg.name,
         );
@@ -1158,6 +1207,13 @@ pub async fn track_marketplace_prs(only: Option<String>) -> Result<Vec<TrackedPr
                     continue;
                 }
             };
+            if !(cfg.track_prs || pclient.can_push(&src.repo)) {
+                tracing::debug!(
+                    "track_marketplace_prs: skipping plugin {} ({}) — no push rights",
+                    p.name, src.repo
+                );
+                continue;
+            }
             let provider = pclient.provider();
             let base_url = pclient.base_url();
             match pclient.list_open_prs(&src.repo) {

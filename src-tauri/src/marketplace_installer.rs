@@ -101,12 +101,15 @@ pub fn install_marketplace(
     if !sha.is_empty() {
         record["gitCommitSha"] = json!(sha);
     }
+    // Default ON for a brand-new install (no prior record): a freshly added
+    // marketplace should keep itself up to date unless the user opts out. An
+    // existing record's choice is preserved; an explicit value always wins.
     let auto = match auto_update {
         Some(v) => v,
         None => existing
             .get("autoUpdate")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false),
+            .unwrap_or(true),
     };
     record["autoUpdate"] = json!(auto);
     data.insert(name.to_string(), record);
