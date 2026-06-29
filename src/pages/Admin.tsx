@@ -9,7 +9,6 @@ import {
   Globe,
   Sparkles,
   Upload,
-  HardDrive,
   Radar,
   GitPullRequest,
   Package,
@@ -29,7 +28,6 @@ import {
   WizardHost,
   type WizardKind,
 } from "@/components/AdminWizards";
-import { AdminLocalPanel } from "@/components/AdminLocalPanel";
 import { useApp } from "@/stores/app";
 import type { PendingPR, Plugin, RemoteSkillInfo, TrackedPr } from "@/lib/types";
 
@@ -99,7 +97,7 @@ function MarketplaceAdminSection({
           {allMarketplaces.length === 0 && (
             <p>
               Aucun marketplace enregistré pour le moment. Ajoutez-en un depuis l'onglet{" "}
-              <strong>Gérer mon poste</strong> via <em>Ajouter depuis URL</em>.
+              <strong>Skills</strong> via <em>Ajouter depuis URL</em>.
             </p>
           )}
           {unconfigured.length > 0 && (
@@ -677,7 +675,8 @@ function TrackingSection() {
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
             PR ouvertes sur les marketplaces dont le <strong>Suivi PR</strong> est
-            actif (onglet Gérer mon poste) et sur les repos de leurs plugins.
+            actif (onglet Skills, en cliquant sur un marketplace) et sur les repos
+            de leurs plugins.
           </p>
         </div>
         <Button
@@ -699,7 +698,7 @@ function TrackingSection() {
             <Radar className="h-8 w-8 opacity-40" />
             <span>
               Aucun marketplace suivi. Activez le toggle <strong>Suivi PR</strong>{" "}
-              sur un marketplace dans l'onglet <strong>Gérer mon poste</strong>.
+              sur un marketplace dans l'onglet <strong>Skills</strong>.
             </span>
           </CardContent>
         </Card>
@@ -789,9 +788,8 @@ function TrackingSection() {
 export function AdminPage() {
   const location = useLocation();
   const initialTab =
-    (location.state as { tab?: "local" | "remote" | "tracking" } | null)?.tab ??
-    "local";
-  const [tab, setTab] = useState<"local" | "remote" | "tracking">(initialTab);
+    (location.state as { tab?: "remote" | "tracking" } | null)?.tab ?? "remote";
+  const [tab, setTab] = useState<"remote" | "tracking">(initialTab);
   const [wizard, setWizard] = useState<WizardKind | null>(null);
 
   return (
@@ -802,20 +800,13 @@ export function AdminPage() {
           <h1 className="text-xl font-semibold">Administration</h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          <strong>Gérer mon poste</strong> — installer / désinstaller / activer des
-          plugins sur votre machine. <strong>Proposer une amélioration</strong> —
-          pousser des changements de registre vers GitHub ou Gitea via des Pull
-          Requests.
+          <strong>Proposer une amélioration</strong> — pousser des changements de
+          registre vers GitHub ou Gitea via des Pull Requests.{" "}
+          <strong>Suivi Marketplace</strong> — suivre les PR ouvertes. (La gestion
+          locale des marketplaces et plugins se fait désormais dans l'onglet{" "}
+          <strong>Skills</strong>.)
         </p>
         <div className="mt-3 flex gap-2">
-          <Button
-            size="sm"
-            variant={tab === "local" ? "default" : "ghost"}
-            onClick={() => setTab("local")}
-          >
-            <HardDrive className="mr-1 h-3 w-3" />
-            Gérer mon poste
-          </Button>
           <Button
             size="sm"
             variant={tab === "remote" ? "default" : "ghost"}
@@ -837,7 +828,6 @@ export function AdminPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="p-4">
-          {tab === "local" && <AdminLocalPanel />}
           {tab === "remote" && <MarketplaceAdminSection onLaunch={setWizard} />}
           {tab === "tracking" && <TrackingSection />}
         </div>

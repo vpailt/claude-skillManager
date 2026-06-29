@@ -655,7 +655,7 @@ function MarketplaceTrackingSection() {
           {trackedNames.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Aucun marketplace suivi. Activez le toggle <strong>Suivi PR</strong>{" "}
-              sur un marketplace dans <strong>Administration → Gérer mon poste</strong>.
+              sur un marketplace dans l'onglet <strong>Skills</strong>.
             </p>
           ) : tracked.isLoading ? (
             <p className="text-sm text-muted-foreground">Chargement des PR en cours…</p>
@@ -907,8 +907,8 @@ function GettingStartedCard() {
           done={hasInstalledMarketplace}
           title="Installer un catalogue (marketplace)"
           desc="Ajoutez puis installez un marketplace : son catalogue de plugins devient visible. Cela clone seulement l'index — aucun plugin n'est encore téléchargé."
-          actionLabel="Gérer mon poste"
-          onAction={() => navigate("/admin", { state: { tab: "local" } })}
+          actionLabel="Ouvrir Skills"
+          onAction={() => navigate("/skills")}
         />
         <StepRow
           index={3}
@@ -933,10 +933,20 @@ function GettingStartedCard() {
 
 export function OverviewPage() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const marketplaces = useApp((s) => s.marketplaces);
   const localOnly = useApp((s) => s.localOnly);
   const setSelection = useApp((s) => s.setSelection);
   const version = useAppVersion();
+
+  // Landing on the dashboard triggers a fresh check on each visit: both the
+  // "éléments à traiter" pipeline (refresh_all → plugins obsolètes + PR statuses)
+  // and the marketplace PR tracking. Invalidate-only so it respects in-flight
+  // requests and no-ops for queries without active observers; runs once per mount.
+  useEffect(() => {
+    qc.invalidateQueries({ queryKey: ["refresh"] });
+    qc.invalidateQueries({ queryKey: ["tracked-prs"] });
+  }, [qc]);
 
   const totalPlugins = marketplaces.reduce((acc, m) => acc + m.plugins.length, 0);
   const installedPlugins = marketplaces

@@ -103,14 +103,13 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
                   <div>
                     <div className="font-medium">Administration</div>
                     <div className="text-xs text-muted-foreground">
-                      <strong>Gérer mon poste</strong> — gérer les marketplaces et
-                      les installations en masse sur votre machine, sans toucher à
-                      GitHub. <strong>Proposer une amélioration</strong> — pousser
-                      des changements de registre (ajouter un plugin, incrémenter
-                      une version, envoyer ou supprimer un skill) via des Pull
+                      <strong>Proposer une amélioration</strong> — pousser des
+                      changements de registre (ajouter un plugin, incrémenter une
+                      version, envoyer ou supprimer un skill) via des Pull
                       Requests. <strong>Suivi Marketplace</strong> — suivre les PR
                       ouvertes sur les marketplaces que vous surveillez et leurs
-                      plugins.
+                      plugins. (La gestion locale des marketplaces et plugins se
+                      fait dans l'onglet <strong>Skills</strong>.)
                     </div>
                   </div>
                 </li>

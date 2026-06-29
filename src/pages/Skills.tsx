@@ -20,7 +20,9 @@ import {
   Globe,
   Info,
   Loader2,
+  MoreHorizontal,
   Package,
+  PackageMinus,
   Plus,
   Power,
   PowerOff,
@@ -51,6 +53,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useApp } from "@/stores/app";
 import { useNotifications } from "@/stores/notifications";
 import { cn } from "@/lib/utils";
@@ -72,6 +82,7 @@ import type {
   DuplicateSkill,
   InstallState,
   Marketplace,
+  MarketplaceConfig,
   Plugin,
   Skill,
 } from "@/lib/types";
@@ -650,7 +661,19 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
   const install = useInstallMarketplace();
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmMode, setConfirmMode] = useState<null | "uninstall" | "delete">(
+    null
+  );
+
+  const settingsQuery = useQuery({
+    queryKey: ["app-settings"],
+    queryFn: api.loadAppSettings,
+  });
+  const cfg = settingsQuery.data?.marketplaces.find(
+    (m) => m.name === marketplace.name
+  );
+  const cfgAutoUpdate = cfg?.autoUpdate ?? false;
+  const cfgTrackPrs = cfg?.trackPrs ?? false;
 
   // Plugins of this marketplace that have a local install (and will be removed).
   const installedPluginCount = marketplace.plugins.filter(
@@ -659,6 +682,64 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
       p.installState === "outdated" ||
       p.installState === "local_only"
   ).length;
+
+  // Persist a flag toggle. Re-reads settings fresh (not the cached query) so we
+  // never clobber a Gitea marketplace's provider/baseUrl with a synthesized
+  // entry on a cold cache. Spreading the existing config preserves those fields;
+  // when the marketplace isn't yet in app settings (an orphan added via Claude
+  // Code) we synthesize one — without it the flag would never stick AND
+  // refresh_all would skip it (it only iterates configured marketplaces).
+  const persistCfg = async (patch: Partial<MarketplaceConfig>) => {
+    const settings = await api.loadAppSettings();
+    const existing = settings.marketplaces.find(
+      (m) => m.name === marketplace.name
+    );
+    const next: MarketplaceConfig = existing
+      ? { ...existing, ...patch }
+      : {
+          name: marketplace.name,
+          githubRepo: marketplace.sourceRepo,
+          defaultBranch: "main",
+          owned: false,
+          sourcePath: marketplace.sourcePath,
+          autoUpdate: false,
+          ...patch,
+        };
+    await api.settingsUpsertMarketplace(next);
+  };
+
+  const toggleAuto = useMutation({
+    mutationFn: async (next: boolean) => {
+      await persistCfg({ autoUpdate: next });
+      if (marketplace.installed) {
+        await api.setMarketplaceAutoUpdate(marketplace.name, next);
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      qc.invalidateQueries({ queryKey: ["refresh"] });
+    },
+    onError: (e) =>
+      notify({
+        kind: "error",
+        title: `Échec du basculement de la mise à jour auto : ${marketplace.name}`,
+        body: errMsg(e),
+      }),
+  });
+
+  const toggleTrack = useMutation({
+    mutationFn: (next: boolean) => persistCfg({ trackPrs: next }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      qc.invalidateQueries({ queryKey: ["tracked-prs"] });
+    },
+    onError: (e) =>
+      notify({
+        kind: "error",
+        title: `Échec du basculement du suivi des PR : ${marketplace.name}`,
+        body: errMsg(e),
+      }),
+  });
 
   const uninstall = useMutation({
     mutationFn: () => api.uninstallMarketplaceCascade(marketplace.name),
@@ -670,7 +751,7 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
         title: "Marketplace désinstallé",
         body: marketplace.name,
       });
-      setConfirmOpen(false);
+      setConfirmMode(null);
     },
     onError: (e) =>
       notify({
@@ -680,42 +761,88 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
       }),
   });
 
+  const deleteCompletely = useMutation({
+    mutationFn: () => api.deleteMarketplaceCompletely(marketplace.name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["refresh"] });
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      qc.invalidateQueries({ queryKey: ["tracked-prs"] });
+      notify({
+        kind: "success",
+        title: "Marketplace supprimé",
+        body: marketplace.name,
+      });
+      setConfirmMode(null);
+    },
+    onError: (e) =>
+      notify({
+        kind: "error",
+        title: `Échec de la suppression : ${marketplace.name}`,
+        body: errMsg(e),
+      }),
+  });
+
   return (
     <Card className="m-4">
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="min-w-0 truncate">{marketplace.name}</CardTitle>
-          {marketplace.installed ? (
-            <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
+            {marketplace.installed ? (
               <Badge variant="success">installé</Badge>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setConfirmOpen(true)}
-                title="Désinstaller ce marketplace et tous ses plugins"
-              >
-                <Trash2 className="mr-1 h-3 w-3" />
-                Désinstaller
-              </Button>
-            </div>
-          ) : (
-            marketplace.sourceRepo && (
-              <Button
-                size="sm"
-                className="shrink-0"
-                onClick={() => install.mutate(marketplace)}
-                disabled={install.isPending}
-                title="Télécharger ce marketplace localement (le rend visible par Claude Code)"
-              >
-                {install.isPending ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <Download className="mr-1 h-3 w-3" />
+            ) : (
+              marketplace.sourceRepo && (
+                <Button
+                  size="sm"
+                  onClick={() => install.mutate(marketplace)}
+                  disabled={install.isPending}
+                  title="Télécharger ce marketplace localement (le rend visible par Claude Code)"
+                >
+                  {install.isPending ? (
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  ) : (
+                    <Download className="mr-1 h-3 w-3" />
+                  )}
+                  Installer
+                </Button>
+              )
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 w-8 p-0"
+                  title="Plus d'actions"
+                  aria-label={`Plus d'actions pour ${marketplace.name}`}
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>{marketplace.name}</DropdownMenuLabel>
+                {marketplace.installed && (
+                  <DropdownMenuItem
+                    onSelect={() => setConfirmMode("uninstall")}
+                    title="Supprime les fichiers locaux mais garde ce marketplace dans la liste."
+                  >
+                    <PackageMinus className="h-4 w-4" />
+                    Désinstaller (garder dans la liste)
+                  </DropdownMenuItem>
                 )}
-                Installer
-              </Button>
-            )
-          )}
+                {marketplace.installed && <DropdownMenuSeparator />}
+                <DropdownMenuItem
+                  destructive
+                  onSelect={() => setConfirmMode("delete")}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {marketplace.installed
+                    ? "Supprimer définitivement (fichiers + liste)"
+                    : "Retirer de la liste"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
         <CardDescription>
           {marketplace.sourceRepo ||
@@ -737,26 +864,84 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
             {marketplace.installLocation}
           </div>
         )}
+
+        {marketplace.sourceRepo && (
+          <div className="space-y-3 rounded-md border p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-medium">Mise à jour auto</div>
+                <div className="text-xs text-muted-foreground">
+                  Re-télécharge ce marketplace à chaque rafraîchissement si son
+                  SHA distant a changé.
+                </div>
+              </div>
+              <Switch
+                checked={cfgAutoUpdate}
+                onCheckedChange={(v) => toggleAuto.mutate(v)}
+                disabled={toggleAuto.isPending}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-medium">Suivi PR</div>
+                <div className="text-xs text-muted-foreground">
+                  Suit les PR ouvertes de ce marketplace et de ses plugins
+                  (onglet Suivi Marketplace + Dashboard).
+                </div>
+              </div>
+              <Switch
+                checked={cfgTrackPrs}
+                onCheckedChange={(v) => toggleTrack.mutate(v)}
+                disabled={toggleTrack.isPending}
+              />
+            </div>
+          </div>
+        )}
       </CardContent>
 
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <Dialog
+        open={confirmMode !== null}
+        onOpenChange={(v) => !v && setConfirmMode(null)}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Désinstaller « {marketplace.name} »</DialogTitle>
+            <DialogTitle>
+              {confirmMode === "delete"
+                ? `Supprimer « ${marketplace.name} »`
+                : `Désinstaller « ${marketplace.name} »`}
+            </DialogTitle>
             <DialogDescription>
-              Supprime localement ce marketplace
-              {installedPluginCount > 0 ? (
+              {confirmMode === "delete" && !marketplace.installed ? (
                 <>
-                  {" "}et désinstalle ses{" "}
-                  <strong>
-                    {installedPluginCount} plugin
-                    {installedPluginCount > 1 ? "s" : ""} installé
-                    {installedPluginCount > 1 ? "s" : ""}
-                  </strong>
+                  Retire ce marketplace de la liste de l'app. Aucun fichier local
+                  n'est touché (rien n'était installé).
                 </>
-              ) : null}
-              . Le marketplace reste enregistré — vous pourrez le réinstaller.
-              Vos compétences personnelles ne sont pas touchées.
+              ) : (
+                <>
+                  Supprime localement ce marketplace
+                  {installedPluginCount > 0 ? (
+                    <>
+                      {" "}et désinstalle ses{" "}
+                      <strong>
+                        {installedPluginCount} plugin
+                        {installedPluginCount > 1 ? "s" : ""} installé
+                        {installedPluginCount > 1 ? "s" : ""}
+                      </strong>
+                    </>
+                  ) : null}
+                  {confirmMode === "delete" ? (
+                    <>
+                      , puis l'oublie de la liste de l'app.
+                    </>
+                  ) : (
+                    <>
+                      . Le marketplace reste enregistré — vous pourrez le
+                      réinstaller.
+                    </>
+                  )}{" "}
+                  Vos compétences personnelles ne sont pas touchées.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -765,13 +950,17 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
             </DialogClose>
             <Button
               variant="destructive"
-              onClick={() => uninstall.mutate()}
-              disabled={uninstall.isPending}
+              onClick={() =>
+                confirmMode === "delete"
+                  ? deleteCompletely.mutate()
+                  : uninstall.mutate()
+              }
+              disabled={uninstall.isPending || deleteCompletely.isPending}
             >
-              {uninstall.isPending && (
+              {(uninstall.isPending || deleteCompletely.isPending) && (
                 <Loader2 className="mr-1 h-3 w-3 animate-spin" />
               )}
-              Désinstaller
+              {confirmMode === "delete" ? "Supprimer" : "Désinstaller"}
             </Button>
           </DialogFooter>
         </DialogContent>
