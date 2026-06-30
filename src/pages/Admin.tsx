@@ -13,7 +13,6 @@ import {
   GitPullRequest,
   Package,
   Loader2,
-  Lock,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -655,14 +654,6 @@ function TrackingSection() {
     () => all.filter((p) => !p.mine && p.canApprove),
     [all],
   );
-  // Leftovers: PRs by others on a repo you only *watch* (track_prs) without
-  // approval rights. Kept visible (read-only) so the header count and the
-  // sections stay consistent; empty for any marketplace you maintain.
-  const others = useMemo(
-    () => all.filter((p) => !p.mine && !p.canApprove),
-    [all],
-  );
-
   // Show "Demandes à valider" when there is something to review now, or when the
   // user has approval rights somewhere (so the empty queue is still visible and
   // explains itself, rather than the whole section silently vanishing).
@@ -764,22 +755,6 @@ function TrackingSection() {
             </section>
           )}
 
-          {others.length > 0 && (
-            <section className="space-y-3">
-              <div>
-                <h4 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                  <Lock className="h-4 w-4" />
-                  Autres PR suivies
-                  <Badge variant="outline">{others.length}</Badge>
-                </h4>
-                <p className="mt-1 px-1 text-xs text-muted-foreground">
-                  PR sur des marketplaces que vous suivez sans droit de
-                  validation (lecture seule).
-                </p>
-              </div>
-              <GroupedPrCards prs={others} />
-            </section>
-          )}
         </>
       )}
     </div>

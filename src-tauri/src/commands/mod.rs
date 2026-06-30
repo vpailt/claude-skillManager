@@ -1307,6 +1307,11 @@ pub async fn track_marketplace_prs(only: Option<String>) -> Result<Vec<TrackedPr
             }
         }
     }
+    // Only surface PRs the user has a stake in: their own (`mine`) or ones they
+    // may approve (`can_approve`). Others' PRs on a merely-watched repo (no merge
+    // rights) are dropped here so they never reach the "Suivi Marketplace" list —
+    // without approval rights you see only your own requests.
+    out.retain(|pr| pr.mine || pr.can_approve);
     Ok(out)
 }
 
