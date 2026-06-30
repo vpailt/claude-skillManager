@@ -152,6 +152,38 @@ impl SkillWatch {
         save_baselines(&sh.baselines);
     }
 
+    /// Drop every persisted baseline (and dirty flag) for skill folders at or
+    /// under `root`. Called right after an install overwrites a plugin's folder
+    /// or an uninstall removes it: the on-disk content is then the new truth, so
+    /// a stale baseline from a *previous* install must not linger and read as
+    /// "you edited this skill". The next `set_watched` re-captures the survivors
+    /// as first-sight (never dirty). Path matching is normalized (strips the
+    /// Windows `\\?\` prefix, unifies separators, case-folds) so it works
+    /// regardless of how the watched-folder string was formatted.
+    pub fn forget_under(&self, root: &Path) {
+        let root_norm = norm_path(&root.to_string_lossy());
+        if root_norm.is_empty() {
+            return;
+        }
+        let prefix = format!("{root_norm}/");
+        let under = |k: &str| {
+            let kn = norm_path(k);
+            kn == root_norm || kn.starts_with(&prefix)
+        };
+        let mut sh = self.shared.lock();
+        let before = sh.baselines.len();
+        sh.baselines.retain(|k, _| !under(k));
+        sh.dirty.retain(|k| !under(k));
+        let dropped = before - sh.baselines.len();
+        if dropped > 0 {
+            save_baselines(&sh.baselines);
+            tracing::info!(
+                "skill_watch: forgot {dropped} baseline(s) under {}",
+                root.display()
+            );
+        }
+    }
+
     /// Current dirty set (re-seeds the UI without forcing a rescan).
     pub fn dirty_list(&self) -> Vec<DirtyState> {
         let sh = self.shared.lock();
@@ -304,6 +336,16 @@ fn hash_folder(folder: &Path) -> u64 {
         bytes.hash(&mut h);
     }
     h.finish()
+}
+
+/// Normalize a path string for prefix comparison: strip the Windows long-path
+/// prefix, unify separators to `/`, drop any trailing slash, and case-fold
+/// (Windows paths are case-insensitive). Both sides come from app-constructed
+/// cache paths, so this only needs to absorb formatting differences, not resolve
+/// symlinks.
+fn norm_path(p: &str) -> String {
+    let p = p.strip_prefix(r"\\?\").unwrap_or(p);
+    p.replace('\\', "/").trim_end_matches('/').to_lowercase()
 }
 
 fn baseline_path() -> PathBuf {

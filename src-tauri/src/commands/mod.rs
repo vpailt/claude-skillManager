@@ -306,7 +306,7 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
 }
 
 #[tauri::command]
-pub async fn install_plugin_cmd(plugin: Plugin) -> Result<PathBuf> {
+pub async fn install_plugin_cmd(plugin: Plugin, watch: State<'_, SkillWatch>) -> Result<PathBuf> {
     let s = config::load_settings();
     let gh = client_for_source(&s, plugin.source.as_ref(), &plugin.marketplace_name)?;
     let name = plugin.name.clone();
@@ -314,6 +314,9 @@ pub async fn install_plugin_cmd(plugin: Plugin) -> Result<PathBuf> {
     match installer::install_plugin(&gh, &plugin) {
         Ok(p) => {
             tracing::info!("install_plugin ok: {}@{}", name, mp);
+            // The freshly-extracted content is the new baseline — clear any stale
+            // one from a previous install so the plugin isn't flagged "modified".
+            watch.forget_under(&p);
             Ok(p)
         }
         Err(e) => {
@@ -324,12 +327,18 @@ pub async fn install_plugin_cmd(plugin: Plugin) -> Result<PathBuf> {
 }
 
 #[tauri::command]
-pub async fn uninstall_plugin_cmd(plugin: Plugin) -> Result<()> {
+pub async fn uninstall_plugin_cmd(plugin: Plugin, watch: State<'_, SkillWatch>) -> Result<()> {
     let name = plugin.name.clone();
     let mp = plugin.marketplace_name.clone();
+    let path = plugin.install_path.clone();
     match installer::uninstall(&plugin) {
         Ok(()) => {
             tracing::info!("uninstall_plugin ok: {}@{}", name, mp);
+            // Drop the removed plugin's baselines so a later reinstall starts
+            // clean instead of diffing against a now-deleted folder's hash.
+            if let Some(p) = &path {
+                watch.forget_under(p);
+            }
             Ok(())
         }
         Err(e) => {
