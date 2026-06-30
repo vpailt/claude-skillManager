@@ -356,30 +356,15 @@ pub fn prepare_add_plugin(
     let branch_name = make_branch_name("skillmanager/add-plugin", &[&name, &mp_version]);
     let entries = vec![diff_entry_modify(&registry_path, &old_text, &new_text)];
 
-    // Two tags: the plugin repo at its manifest version (cut from its default
-    // branch, which already carries that manifest) and the marketplace repo at
-    // its freshly-bumped version (cut from this PR's branch, which carries the
-    // registry change). Both share the user-supplied release notes.
-    let mut tags: Vec<TagSpec> = Vec::new();
-    if !gh.ref_exists(&plugin_repo, &version) {
-        tags.push(TagSpec {
-            repo: plugin_repo.clone(),
-            tag: version.clone(),
-            description: version_description.to_string(),
-            from_pr_branch: false,
-        });
-    }
-    if !gh.ref_exists(&repo, &mp_version) {
-        tags.push(TagSpec {
-            repo: repo.clone(),
-            tag: mp_version.clone(),
-            description: version_description.to_string(),
-            from_pr_branch: true,
-        });
-    }
+    // No git tags / releases: the bumped manifest + registry land on the default
+    // branch at merge, the app reads the live version from the manifest at
+    // refresh, and Teams is notified by the merged `pull_request` webhook.
+    let tags: Vec<TagSpec> = Vec::new();
 
+    // First body line `Version: X` is a stable contract for the Teams card
+    // (Power Automate parses it); the registry/marketplace bump is what publishes.
     let mut pr_body = format!(
-        "Adds plugin `{name}` v{version} to the registry and bumps the marketplace to v{mp_version} ({bump_level} bump)."
+        "Version: {mp_version}\n\nAdds plugin `{name}` v{version} to the registry and bumps the marketplace to v{mp_version} ({bump_level} bump)."
     );
     if !description.trim().is_empty() {
         pr_body.push_str(&format!("\n\n{}", description.trim()));
@@ -449,18 +434,10 @@ pub fn prepare_bump_plugin(
         })
         .unwrap_or_default();
 
-    let mut tags: Vec<TagSpec> = Vec::new();
-    if !plugin_source_repo.is_empty()
-        && plugin_source_repo != repo
-        && !gh.ref_exists(&plugin_source_repo, new_version)
-    {
-        tags.push(TagSpec {
-            repo: plugin_source_repo.clone(),
-            tag: new_version.to_string(),
-            description: version_description.to_string(),
-            from_pr_branch: false,
-        });
-    }
+    // No git tag / release: the bumped `version` lands on the registry at merge
+    // and the app reads it from the manifest at refresh (Teams is notified by the
+    // merged `pull_request` webhook).
+    let tags: Vec<TagSpec> = Vec::new();
 
     // "main always published" model: only the informational `version` moves;
     // `source.ref` is deliberately left pointing at the tracked branch (main).
@@ -480,7 +457,9 @@ pub fn prepare_bump_plugin(
     let branch_name = make_branch_name("skillmanager/bump-mp", &[plugin_name, new_version]);
     let entries = vec![diff_entry_modify(&registry_path, &old_text, &new_text)];
 
-    let mut pr_body = format!("Updates `{plugin_name}` to v`{new_version}` in the registry.");
+    // First body line `Version: X` is the stable contract parsed by the Teams card.
+    let mut pr_body =
+        format!("Version: {new_version}\n\nUpdates `{plugin_name}` to v`{new_version}` in the registry.");
     if !version_description.is_empty() {
         pr_body.push_str(&format!("\n\n---\n{version_description}"));
     }
@@ -540,7 +519,9 @@ pub fn prepare_remove_plugin(
         base_branch: branch,
         branch_name,
         pr_title: format!("Remove plugin: {plugin_name}"),
-        pr_body: format!("Removes `{plugin_name}` from the registry."),
+        // No version on a removal; keep the `Version:` first-line contract so the
+        // Teams card parses cleanly (shows "-") instead of grabbing prose.
+        pr_body: format!("Version: -\n\nRemoves `{plugin_name}` from the registry."),
         branch_prefix: "skillmanager/remove-plugin".to_string(),
         changes: vec![change],
         deletions: Vec::new(),
@@ -803,8 +784,9 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         "{action_word} skill: {target_name} (skill v{effective_skill_version}, plugin v{new_plugin_version})"
     );
     let version_description = args.version_description.trim();
+    // First body line `Version: X` is the stable contract parsed by the Teams card.
     let mut pr_body = format!(
-        "{action_word}s skill `{target_name}` (v{effective_skill_version}, {} file(s)) on plugin `{}` from local folder `{}`.\n\nBumps plugin `{}` from v{} to v{} ({} bump).",
+        "Version: {new_plugin_version}\n\n{action_word}s skill `{target_name}` (v{effective_skill_version}, {} file(s)) on plugin `{}` from local folder `{}`.\n\nBumps plugin `{}` from v{} to v{} ({} bump).",
         changes.len(),
         args.plugin_name,
         local_folder.display(),
@@ -821,20 +803,10 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
     // versions, so a skill upload only bumps the plugin's own manifest + tag.
     let companion: Option<Box<AdminDraft>> = None;
 
-    // The main PR introduces the new manifest version on the plugin repo, so
-    // the tag must point at the PR branch (not default-branch HEAD). Storing it
-    // in `tags` makes submit_draft create the tag automatically once the branch
-    // exists. (When the plugin lives in the marketplace repo there's nothing to
-    // tag separately.)
-    let mut tags: Vec<TagSpec> = Vec::new();
-    if target_repo != mp_repo && !gh.ref_exists(&target_repo, &new_plugin_version) {
-        tags.push(TagSpec {
-            repo: target_repo.clone(),
-            tag: new_plugin_version.clone(),
-            description: version_description.to_string(),
-            from_pr_branch: true,
-        });
-    }
+    // No git tag / release: the new manifest version lands on the plugin repo's
+    // default branch at merge, the app reads it live at refresh, and Teams is
+    // notified by the merged `pull_request` webhook.
+    let tags: Vec<TagSpec> = Vec::new();
 
     Ok(AdminDraft {
         target_repo,
@@ -962,26 +934,20 @@ pub fn prepare_delete_skill(
     // the live manifest version at refresh. Avoids per-edit registry noise.
     let companion: Option<Box<AdminDraft>> = None;
 
-    let mut tags: Vec<TagSpec> = Vec::new();
-    if !new_version.is_empty()
-        && target_repo != mp_repo
-        && !gh.ref_exists(&target_repo, &new_version)
-    {
-        tags.push(TagSpec {
-            repo: target_repo.clone(),
-            tag: new_version.clone(),
-            description: String::new(),
-            from_pr_branch: true,
-        });
-    }
+    // No git tag / release: the bumped manifest lands on the plugin repo at merge,
+    // the app reads it live at refresh, and Teams is notified by the merged
+    // `pull_request` webhook.
+    let tags: Vec<TagSpec> = Vec::new();
 
     Ok(AdminDraft {
         target_repo,
         base_branch,
         branch_name,
         pr_title: format!("Delete skill: {skill_name} (v{new_version})"),
+        // First body line `Version: X` is the stable contract parsed by the Teams card.
         pr_body: format!(
-            "Removes skill `{skill_name}` ({} file(s)) from plugin `{plugin_name}` and bumps the plugin to v{}.",
+            "Version: {}\n\nRemoves skill `{skill_name}` ({} file(s)) from plugin `{plugin_name}` and bumps the plugin to v{}.",
+            new_version,
             deletions.len(),
             new_version
         ),

@@ -239,15 +239,18 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
             if src.repo.is_empty() {
                 continue;
             }
-            // Authoritative latest version = the highest git tag on the plugin's
-            // own repo, falling back to its manifest `version` when the repo has
-            // no semver tags. The registry no longer pins a per-release version,
-            // so derive it from the repo and re-compute the install state — for
-            // EVERY plugin with a source, not just installed ones (otherwise a
-            // not-installed plugin shows "version inconnue"). Best-effort: a
-            // failed read (offline / VPN-gated Gitea) leaves latest_version as-is.
-            if let Some(ver) = marketplace_remote::fetch_latest_tag_version(&gh, &src.repo)
-                .or_else(|| marketplace_remote::fetch_plugin_manifest_version(&gh, &src))
+            // Authoritative latest version = the plugin repo's own manifest
+            // `version` on its tracked ref. The version is bumped inside each PR,
+            // so it lands on the default branch the moment the PR merges — no git
+            // tag needed (we stopped cutting them). Falls back to the highest
+            // semver git tag for third-party plugins that still publish via tags.
+            // The registry no longer pins a per-release version, so derive it from
+            // the repo and re-compute the install state — for EVERY plugin with a
+            // source, not just installed ones (otherwise a not-installed plugin
+            // shows "version inconnue"). Best-effort: a failed read (offline /
+            // VPN-gated Gitea) leaves latest_version as-is.
+            if let Some(ver) = marketplace_remote::fetch_plugin_manifest_version(&gh, &src)
+                .or_else(|| marketplace_remote::fetch_latest_tag_version(&gh, &src.repo))
             {
                 if plugin.latest_version.as_deref() != Some(ver.as_str()) {
                     tracing::debug!(
