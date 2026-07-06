@@ -16,6 +16,9 @@ export interface Notification {
   title: string;
   body?: string;
   createdAt: number;
+  /** Optional in-app action run when the toast is clicked (e.g. open a file).
+   *  Kept only in memory — never persisted. */
+  onClick?: () => void;
 }
 
 interface PushOptions {

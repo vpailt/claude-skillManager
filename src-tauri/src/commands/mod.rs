@@ -1716,3 +1716,24 @@ pub async fn skill_mark_synced(state: State<'_, SkillWatch>, folder: String) -> 
 pub async fn skill_dirty_list(state: State<'_, SkillWatch>) -> Result<Vec<DirtyState>> {
     Ok(state.dirty_list())
 }
+
+// ---------- Usage audit ----------
+
+/// Build the usage-audit report for the `[from, to]` window (ISO datetimes;
+/// empty = unbounded). Parsing ~130 MB of transcripts is CPU-bound, so it runs
+/// on a blocking thread; only transcripts whose stamp changed are re-parsed.
+#[tauri::command]
+pub async fn usage_audit(from: String, to: String) -> Result<crate::usage_audit::UsageReport> {
+    tokio::task::spawn_blocking(move || crate::usage_audit::build_report(&from, &to))
+        .await
+        .map_err(|e| crate::error::Error::Other(format!("join: {e}")))?
+}
+
+/// Build the report for `[from, to]` and write it as a multi-sheet `.xlsx` to
+/// `path`. Returns the written path.
+#[tauri::command]
+pub async fn usage_export_xlsx(path: String, from: String, to: String) -> Result<String> {
+    tokio::task::spawn_blocking(move || crate::usage_audit::export_xlsx(&path, &from, &to))
+        .await
+        .map_err(|e| crate::error::Error::Other(format!("join: {e}")))?
+}

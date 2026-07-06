@@ -28,6 +28,7 @@ pub mod skill_watch;
 pub mod taskbar;
 pub mod token_store;
 pub mod tray;
+pub mod usage_audit;
 
 use commands::*;
 use tauri::Manager;
@@ -170,6 +171,8 @@ pub fn run() {
             skill_watch_set,
             skill_mark_synced,
             skill_dirty_list,
+            usage_audit,
+            usage_export_xlsx,
             app_check_update,
             app_install_update,
             app_detect_uninstaller,

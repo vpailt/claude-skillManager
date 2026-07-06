@@ -1,6 +1,6 @@
 [package]
 name = "skillmanager"
-version = "2.1.11"
+version = "2.2.0"
 description = "GUI for managing Claude Code plugins, marketplaces and skills"
 authors = ["Valentin Pitel"]
 edition = "2021"
@@ -36,6 +36,7 @@ tracing-appender = "0.2"
 parking_lot = "0.12"
 walkdir = "2"
 notify = "6"
+rust_xlsxwriter = { version = "0.92.0", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

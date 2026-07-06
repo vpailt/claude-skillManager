@@ -26,12 +26,36 @@ export function NotificationStack() {
     <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-80 flex-col gap-2">
       {items.map((n) => {
         const Icon = ICONS[n.kind];
+        const clickable = !!n.onClick;
         return (
           <div
             key={n.id}
+            role={clickable ? "button" : undefined}
+            tabIndex={clickable ? 0 : undefined}
+            onClick={
+              clickable
+                ? () => {
+                    n.onClick?.();
+                    dismiss(n.id);
+                  }
+                : undefined
+            }
+            onKeyDown={
+              clickable
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      n.onClick?.();
+                      dismiss(n.id);
+                    }
+                  }
+                : undefined
+            }
             className={cn(
               "pointer-events-auto flex items-start gap-2 rounded-md border bg-card/75 p-3 text-sm shadow-lg backdrop-blur-md supports-[backdrop-filter]:bg-card/60",
-              TONES[n.kind]
+              TONES[n.kind],
+              clickable &&
+                "cursor-pointer transition-colors hover:bg-card/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             )}
           >
             <Icon className="mt-0.5 h-4 w-4 shrink-0" />
@@ -42,10 +66,21 @@ export function NotificationStack() {
                   {n.body}
                 </div>
               )}
+              {clickable && (
+                <div className="mt-1 text-xs font-medium text-primary">
+                  Cliquer pour ouvrir
+                </div>
+              )}
             </div>
             <button
               className="text-muted-foreground hover:text-foreground"
-              onClick={() => dismiss(n.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                dismiss(n.id);
+              }}
+              // Keep keyboard activation of the close button from bubbling to
+              // the row's onKeyDown (which would also fire n.onClick).
+              onKeyDown={(e) => e.stopPropagation()}
               aria-label="Fermer"
             >
               <X className="h-3.5 w-3.5" />

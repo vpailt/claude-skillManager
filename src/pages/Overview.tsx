@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Download,
   ExternalLink,
+  FileSpreadsheet,
   GitPullRequest,
   Globe,
   History,
@@ -330,7 +331,13 @@ function NeedsAttentionSection() {
   );
 }
 
-type ActivityKind = "install" | "uninstall" | "install-mp" | "uninstall-mp" | "pr";
+type ActivityKind =
+  | "install"
+  | "uninstall"
+  | "install-mp"
+  | "uninstall-mp"
+  | "pr"
+  | "export";
 type ActivityLevel = "ok" | "error";
 
 interface ActivityEvent {
@@ -445,6 +452,17 @@ const ACTIVITY_PATTERNS: {
       detail: `${m[1]} — ${m[2]}`,
     }),
   },
+  // --- usage-audit Excel export ---
+  {
+    re: /\busage_audit\.export ok: (.+)/,
+    build: (m) => ({
+      kind: "export",
+      level: "ok",
+      message: "Audit exporté",
+      // Show just the file name; the full path is in the row title.
+      detail: m[1].split(/[\\/]/).pop() || m[1],
+    }),
+  },
 ];
 
 const ACTIVITY_ICONS: Record<ActivityKind, React.ComponentType<{ className?: string }>> = {
@@ -453,6 +471,7 @@ const ACTIVITY_ICONS: Record<ActivityKind, React.ComponentType<{ className?: str
   "install-mp": Globe,
   "uninstall-mp": Trash2,
   pr: GitPullRequest,
+  export: FileSpreadsheet,
 };
 
 const ACTIVITY_OK_COLORS: Record<ActivityKind, string> = {
@@ -461,6 +480,7 @@ const ACTIVITY_OK_COLORS: Record<ActivityKind, string> = {
   "install-mp": "text-sky-500",
   "uninstall-mp": "text-muted-foreground",
   pr: "text-violet-500",
+  export: "text-teal-500",
 };
 
 const TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)/;
@@ -931,6 +951,81 @@ function GettingStartedCard() {
   );
 }
 
+// ============================================================
+// Top skills (usage audit, all-time)
+// ============================================================
+
+function TopSkillsSection() {
+  const navigate = useNavigate();
+  // All-time window (empty bounds). Shares the ["usage-audit", …] key family so
+  // the sidebar "Rafraîchir" button recomputes it too.
+  const report = useQuery({
+    queryKey: ["usage-audit", "", ""],
+    queryFn: () => api.usageAudit("", ""),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const top = useMemo(
+    () => (report.data?.skills ?? []).slice(0, 3),
+    [report.data]
+  );
+
+  return (
+    <section className="flex flex-col">
+      <div className="mb-3 flex items-center gap-2">
+        <Sparkles className="h-4 w-4 text-muted-foreground" />
+        <h2 className="text-lg font-semibold">Skills les plus utilisés</h2>
+        <Badge variant="outline" className="text-xs">
+          toutes dates
+        </Badge>
+      </div>
+      <Card
+        role="button"
+        tabIndex={0}
+        onClick={() => navigate("/audit")}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            navigate("/audit");
+          }
+        }}
+        className="flex flex-1 flex-col cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <CardContent className="flex flex-1 flex-col justify-center py-4">
+          {report.isLoading ? (
+            <p className="text-sm text-muted-foreground">
+              Analyse des transcripts…
+            </p>
+          ) : top.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Aucune utilisation de skill enregistrée pour l'instant.
+            </p>
+          ) : (
+            <ol className="space-y-2">
+              {top.map((s, i) => (
+                <li key={s.skill} className="flex items-center gap-3">
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-primary/10 text-xs font-bold text-primary">
+                    {i + 1}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium" title={s.skill}>
+                    {s.skill}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {s.projects.length} projet{s.projects.length === 1 ? "" : "s"}
+                  </span>
+                  <Badge variant="secondary" className="shrink-0 tabular-nums">
+                    {s.count}
+                  </Badge>
+                </li>
+              ))}
+            </ol>
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
 export function OverviewPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -1021,17 +1116,20 @@ export function OverviewPage() {
           <MarketplaceTrackingSection />
         </div>
 
-        {/* Marketplace AlmaviaCX (gauche) + Activité récente (droite) — même hauteur */}
+        {/* Skills les plus utilisés (gauche) + Activité récente (droite) */}
         <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch">
-          <section className="flex flex-col">
-            <div className="mb-3 flex items-center gap-2">
-              <Globe className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-lg font-semibold">Marketplace AlmaviaCX</h2>
-            </div>
-            <AcxMarketplaceCard />
-          </section>
+          <TopSkillsSection />
           <RecentActivitySection />
         </div>
+
+        {/* Marketplace AlmaviaCX (pleine largeur) */}
+        <section className="mt-6 flex flex-col">
+          <div className="mb-3 flex items-center gap-2">
+            <Globe className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-lg font-semibold">Marketplace AlmaviaCX</h2>
+          </div>
+          <AcxMarketplaceCard />
+        </section>
       </div>
     </div>
   );

@@ -17,6 +17,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { OverviewPage } from "@/pages/Overview";
 import { SkillsPage } from "@/pages/Skills";
 import { AdminPage } from "@/pages/Admin";
+import { UsageAuditPage } from "@/pages/UsageAudit";
 import { SettingsDialog } from "@/components/SettingsDialog";
 
 const appLog = createLogger("app");
@@ -131,6 +132,7 @@ export default function App() {
           <Route path="/plugins" element={<Navigate to="/skills" replace />} />
           <Route path="/skills-v2" element={<Navigate to="/skills" replace />} />
           <Route path="/admin" element={<AdminPage />} />
+          <Route path="/audit" element={<UsageAuditPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

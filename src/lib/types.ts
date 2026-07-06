@@ -372,3 +372,68 @@ export interface UninstallInfo {
   displayName: string | null;
   displayVersion: string | null;
 }
+
+// --- Usage audit ---
+
+export interface PluginUsage {
+  plugin: string;
+  /** Marketplace it's installed from, or "" if the used plugin isn't installed. */
+  marketplace: string;
+  installed: boolean;
+  total: number;
+  skillCount: number;
+  agentCount: number;
+  commandCount: number;
+}
+
+/** A skill's usage within one project: how many times, on which days. */
+export interface ProjectUsage {
+  /** Project display name (last segment of its root path). */
+  project: string;
+  /** Project root path, for opening in VS Code. "" if never captured. */
+  path: string;
+  count: number;
+  /** Distinct usage days ("YYYY-MM-DD"), ascending. No times. */
+  dates: string[];
+}
+
+export interface SkillUsage {
+  /** Full invocation id ("<plugin>:<skill>" or a bare local skill name). */
+  skill: string;
+  /** Namespace prefix, or "" for an unprefixed local skill. */
+  plugin: string;
+  count: number;
+  /** Per-project breakdown (count + usage days), ranked by count desc. */
+  projects: ProjectUsage[];
+}
+
+/** One skill line inside a project aggregate. */
+export interface ProjectSkillLine {
+  skill: string;
+  count: number;
+  dates: string[];
+}
+
+/** A project's skill usage — the inverse view of SkillUsage. */
+export interface ProjectAggregate {
+  project: string;
+  path: string;
+  total: number;
+  skills: ProjectSkillLine[];
+}
+
+export interface UsageReport {
+  /** Echoed ISO filter bounds ("" = unbounded). */
+  from: string;
+  to: string;
+  generatedAt: string;
+  totalEvents: number;
+  /** All plugins used in the window, ranked by total desc (UI shows top 3). */
+  topPlugins: PluginUsage[];
+  /** Installed plugins with zero usage in the window. */
+  unusedPlugins: string[];
+  /** Every skill invoked in the window, ranked by count desc. */
+  skills: SkillUsage[];
+  /** Skill usage grouped by project, ranked by total desc. */
+  projects: ProjectAggregate[];
+}

@@ -26,6 +26,7 @@ import type {
   UninstallInfo,
   UploadResult,
   UploadSkillArgs,
+  UsageReport,
 } from "./types";
 
 export const api = {
@@ -275,6 +276,12 @@ export const api = {
     invoke<ArchivedSkill[]>("list_archived_skills"),
   restoreArchivedSkill: (folder: string) =>
     invoke<string>("restore_archived_skill", { folder }),
+
+  // --- usage audit ---
+  usageAudit: (from: string, to: string) =>
+    invoke<UsageReport>("usage_audit", { from, to }),
+  usageExportXlsx: (path: string, from: string, to: string) =>
+    invoke<string>("usage_export_xlsx", { path, from, to }),
 };
 
 // Marketplace name used by the backend to surface standalone user skills.

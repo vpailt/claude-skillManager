@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   Sparkles,
   ShieldCheck,
+  BarChart3,
   Settings,
   Sun,
   Moon,
@@ -54,6 +55,13 @@ const NAV: NavItem[] = [
     subtitle: "PR vers les marketplaces",
     tooltip: "Administration — proposer des changements aux marketplaces via des pull requests GitHub",
     icon: ShieldCheck,
+  },
+  {
+    to: "/audit",
+    label: "Audit d'utilisation",
+    subtitle: "Usage réel des plugins & skills",
+    tooltip: "Audit d'utilisation — top plugins, plugins non utilisés et détail des skills (nb d'utilisations + projets), sur une plage de dates, avec export Excel. Reconstruit depuis les transcripts de session locaux.",
+    icon: BarChart3,
   },
 ];
 
@@ -152,6 +160,9 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           }
           onClick={() => {
             qc.invalidateQueries({ queryKey: ["refresh"] });
+            // Recompute the usage audit (dashboard top-3 skills + audit page)
+            // from the transcripts — the index re-parses only changed files.
+            qc.invalidateQueries({ queryKey: ["usage-audit"] });
             // On the Suivi Marketplace tab, also refresh the (network-heavy) PR
             // tracking — this button replaces the tab's own refresh button.
             if (useTrackingView.getState().active) {
