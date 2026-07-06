@@ -151,6 +151,15 @@ pub struct PluginUsage {
     pub command_count: u64,
 }
 
+/// One usage day and how many invocations happened on it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DayCount {
+    /// `YYYY-MM-DD` (local day).
+    pub date: String,
+    pub count: u64,
+}
+
 /// A skill's usage within one project: how many times, on which days.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,8 +169,8 @@ pub struct ProjectUsage {
     /// Project root path, for opening in VS Code. Empty if never captured.
     pub path: String,
     pub count: u64,
-    /// Distinct usage days (`YYYY-MM-DD`), ascending. No times.
-    pub dates: Vec<String>,
+    /// Per-day counts (`YYYY-MM-DD` → n), ascending by date. No times.
+    pub dates: Vec<DayCount>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -182,8 +191,8 @@ pub struct SkillUsage {
 pub struct ProjectSkillLine {
     pub skill: String,
     pub count: u64,
-    /// Distinct usage days (`YYYY-MM-DD`), ascending.
-    pub dates: Vec<String>,
+    /// Per-day counts (`YYYY-MM-DD` → n), ascending by date.
+    pub dates: Vec<DayCount>,
 }
 
 /// A project's skill usage — the inverse view of [`SkillUsage`].
@@ -582,6 +591,29 @@ fn day_of(ts: &str) -> String {
         .unwrap_or_else(|_| ts.get(..10).unwrap_or(ts).to_string())
 }
 
+/// Total invocations across a day→count map.
+fn cell_total(days: &BTreeMap<String, u64>) -> u64 {
+    days.values().sum()
+}
+
+/// A day→count map as an ascending `Vec<DayCount>` (BTreeMap iterates in date
+/// order, which is chronological for `YYYY-MM-DD`).
+fn to_day_counts(days: BTreeMap<String, u64>) -> Vec<DayCount> {
+    days.into_iter()
+        .map(|(date, count)| DayCount { date, count })
+        .collect()
+}
+
+/// `YYYY-MM-DD` → `DD/MM/YYYY` for display; passes through anything unexpected.
+fn fmt_date_fr(day: &str) -> String {
+    let p: Vec<&str> = day.split('-').collect();
+    if p.len() == 3 {
+        format!("{}/{}/{}", p[2], p[1], p[0])
+    } else {
+        day.to_string()
+    }
+}
+
 /// Aggregate the cached events into a report for the `[from, to]` window.
 fn aggregate(events: &[UsageEvent], from: &str, to: &str) -> UsageReport {
     let plugins = installed_plugins();
@@ -625,32 +657,29 @@ fn aggregate(events: &[UsageEvent], from: &str, to: &str) -> UsageReport {
     }
     let mut by_plugin: BTreeMap<String, Agg> = BTreeMap::new();
 
-    // --- Skill × project → (count, days) ; and its inverse Project × skill ---
-    struct Cell {
-        count: u64,
-        days: BTreeSet<String>,
-    }
+    // --- Skill × project → per-day counts ; and its inverse Project × skill ---
+    // days: BTreeMap<day, count> keeps days ascending and counts per day.
+    type Cell = BTreeMap<String, u64>;
     let mut by_skill: BTreeMap<String, BTreeMap<String, Cell>> = BTreeMap::new();
     let mut by_project: BTreeMap<String, BTreeMap<String, Cell>> = BTreeMap::new();
 
     for ev in &in_win {
         if ev.kind == UsageKind::Skill {
             let day = day_of(&ev.ts);
-            let sk = by_skill.entry(ev.name.clone()).or_default();
-            let cell = sk.entry(ev.project_key.clone()).or_insert_with(|| Cell {
-                count: 0,
-                days: BTreeSet::new(),
-            });
-            cell.count += 1;
-            cell.days.insert(day.clone());
-
-            let pr = by_project.entry(ev.project_key.clone()).or_default();
-            let cell = pr.entry(ev.name.clone()).or_insert_with(|| Cell {
-                count: 0,
-                days: BTreeSet::new(),
-            });
-            cell.count += 1;
-            cell.days.insert(day);
+            *by_skill
+                .entry(ev.name.clone())
+                .or_default()
+                .entry(ev.project_key.clone())
+                .or_default()
+                .entry(day.clone())
+                .or_insert(0) += 1;
+            *by_project
+                .entry(ev.project_key.clone())
+                .or_default()
+                .entry(ev.name.clone())
+                .or_default()
+                .entry(day)
+                .or_insert(0) += 1;
         }
 
         if let Some(plugin) = plugin_of(ev, &prov) {
@@ -714,14 +743,14 @@ fn aggregate(events: &[UsageEvent], from: &str, to: &str) -> UsageReport {
                 .split_once(':')
                 .map(|(p, _)| p.to_string())
                 .unwrap_or_default();
-            let count = projects.values().map(|c| c.count).sum();
+            let count = projects.values().map(cell_total).sum();
             let mut projects: Vec<ProjectUsage> = projects
                 .into_iter()
-                .map(|(key, c)| ProjectUsage {
+                .map(|(key, days)| ProjectUsage {
                     project: display_of(&key),
                     path: path_of(&key),
-                    count: c.count,
-                    dates: c.days.into_iter().collect(),
+                    count: cell_total(&days),
+                    dates: to_day_counts(days),
                 })
                 .collect();
             projects.sort_by(|a, b| b.count.cmp(&a.count).then(a.project.cmp(&b.project)));
@@ -739,13 +768,13 @@ fn aggregate(events: &[UsageEvent], from: &str, to: &str) -> UsageReport {
     let mut projects: Vec<ProjectAggregate> = by_project
         .into_iter()
         .map(|(key, sk)| {
-            let total = sk.values().map(|c| c.count).sum();
+            let total = sk.values().map(cell_total).sum();
             let mut lines: Vec<ProjectSkillLine> = sk
                 .into_iter()
-                .map(|(skill, c)| ProjectSkillLine {
+                .map(|(skill, days)| ProjectSkillLine {
                     skill,
-                    count: c.count,
-                    dates: c.days.into_iter().collect(),
+                    count: cell_total(&days),
+                    dates: to_day_counts(days),
                 })
                 .collect();
             lines.sort_by(|a, b| b.count.cmp(&a.count).then(a.skill.cmp(&b.skill)));
@@ -798,65 +827,30 @@ pub fn build_report(from: &str, to: &str) -> Result<UsageReport> {
 
 /// Build the report for `[from, to]` and write it as a multi-sheet `.xlsx` to
 /// `path`. Returns `path`.
+///
+/// Layout:
+/// - **Récapitulatif** — key figures + bar charts (top plugins, top skills) and
+///   a pie (plugins used vs unused), backed by small data tables lower down.
+/// - **Top plugins**, **Plugins non utilisés** — flat tables.
+/// - **Skills**, **Utilisation par projet** — one row *per usage day* (with that
+///   day's count), and the grouping columns (Skill/Plugin/Projet) merged
+///   vertically across their day rows.
 pub fn export_xlsx(path: &str, from: &str, to: &str) -> Result<String> {
-    use rust_xlsxwriter::{Format, Workbook};
+    use rust_xlsxwriter::{Format, FormatAlign, Workbook};
 
     let report = build_report(from, to)?;
     let mut wb = Workbook::new();
     let bold = Format::new().set_bold();
+    // Merged grouping cells read best top-left aligned + vertically centered.
+    let merged = Format::new()
+        .set_align(FormatAlign::Left)
+        .set_align(FormatAlign::VerticalCenter)
+        .set_text_wrap();
+    let date_fmt = Format::new().set_align(FormatAlign::Right);
 
-    let short = |iso: &str, fallback: &str| -> String {
-        if iso.trim().is_empty() {
-            fallback.to_string()
-        } else {
-            day_of(iso)
-        }
-    };
+    write_recap_sheet(&mut wb, &report, &bold)?;
 
-    // --- Sheet 1: Récapitulatif ---
-    {
-        let sheet = wb
-            .add_worksheet()
-            .set_name("Récapitulatif")
-            .map_err(xlsx_err)?;
-        sheet
-            .write_string_with_format(0, 0, "Audit d'utilisation — récapitulatif", &bold)
-            .map_err(xlsx_err)?;
-        let top_plugin = report
-            .top_plugins
-            .first()
-            .map(|p| format!("{} ({})", p.plugin, p.total))
-            .unwrap_or_else(|| "—".into());
-        let top_skill = report
-            .skills
-            .first()
-            .map(|s| format!("{} ({})", s.skill, s.count))
-            .unwrap_or_else(|| "—".into());
-        let rows: [(&str, String); 10] = [
-            ("Date d'export", short(&report.generated_at, "—")),
-            ("Période — du", short(&report.from, "(début de l'historique)")),
-            ("Période — au", short(&report.to, "(maintenant)")),
-            ("Invocations totales", report.total_events.to_string()),
-            ("Plugins utilisés", report.top_plugins.len().to_string()),
-            (
-                "Plugins installés non utilisés",
-                report.unused_plugins.len().to_string(),
-            ),
-            ("Skills distincts utilisés", report.skills.len().to_string()),
-            ("Projets actifs", report.projects.len().to_string()),
-            ("Plugin le plus utilisé", top_plugin),
-            ("Skill le plus utilisé", top_skill),
-        ];
-        for (i, (label, value)) in rows.iter().enumerate() {
-            let r = (i + 2) as u32;
-            sheet
-                .write_string_with_format(r, 0, *label, &bold)
-                .map_err(xlsx_err)?;
-            sheet.write_string(r, 1, value).map_err(xlsx_err)?;
-        }
-    }
-
-    // --- Sheet 2: Top plugins ---
+    // --- Top plugins ---
     {
         let sheet = wb
             .add_worksheet()
@@ -875,6 +869,8 @@ pub fn export_xlsx(path: &str, from: &str, to: &str) -> Result<String> {
                 "Commandes",
             ],
         )?;
+        let _ = sheet.set_column_width(0, 30);
+        let _ = sheet.set_column_width(1, 22);
         for (i, p) in report.top_plugins.iter().enumerate() {
             let r = (i + 1) as u32;
             sheet.write_string(r, 0, &p.plugin).map_err(xlsx_err)?;
@@ -895,7 +891,7 @@ pub fn export_xlsx(path: &str, from: &str, to: &str) -> Result<String> {
         }
     }
 
-    // --- Sheet 3: Plugins installés non utilisés ---
+    // --- Plugins installés non utilisés ---
     {
         let sheet = wb
             .add_worksheet()
@@ -904,12 +900,13 @@ pub fn export_xlsx(path: &str, from: &str, to: &str) -> Result<String> {
         sheet
             .write_string_with_format(0, 0, "Plugin installé non utilisé", &bold)
             .map_err(xlsx_err)?;
+        let _ = sheet.set_column_width(0, 32);
         for (i, p) in report.unused_plugins.iter().enumerate() {
             sheet.write_string((i + 1) as u32, 0, p).map_err(xlsx_err)?;
         }
     }
 
-    // --- Sheet 4: Skills (one row per skill × project, with usage days) ---
+    // --- Skills: one row per (skill × project × day); Skill/Plugin/Projet merged ---
     {
         let sheet = wb.add_worksheet().set_name("Skills").map_err(xlsx_err)?;
         write_headers(
@@ -917,31 +914,30 @@ pub fn export_xlsx(path: &str, from: &str, to: &str) -> Result<String> {
             &bold,
             &["Skill", "Plugin", "Projet", "Utilisations", "Dates d'utilisation"],
         )?;
+        let _ = sheet.set_column_width(0, 34);
+        let _ = sheet.set_column_width(1, 18);
+        let _ = sheet.set_column_width(2, 22);
+        let _ = sheet.set_column_width(3, 12);
+        let _ = sheet.set_column_width(4, 16);
         let mut r = 1u32;
         for s in &report.skills {
+            let skill_start = r;
             if s.projects.is_empty() {
-                sheet.write_string(r, 0, &s.skill).map_err(xlsx_err)?;
-                sheet.write_string(r, 1, &s.plugin).map_err(xlsx_err)?;
                 sheet.write_number(r, 3, s.count as f64).map_err(xlsx_err)?;
                 r += 1;
-                continue;
+            } else {
+                for proj in &s.projects {
+                    let proj_start = r;
+                    r = write_day_rows(sheet, r, 3, proj.count, &proj.dates, &date_fmt)?;
+                    merge_or_write(sheet, proj_start, r - 1, 2, &proj.project, &merged)?;
+                }
             }
-            for proj in &s.projects {
-                sheet.write_string(r, 0, &s.skill).map_err(xlsx_err)?;
-                sheet.write_string(r, 1, &s.plugin).map_err(xlsx_err)?;
-                sheet.write_string(r, 2, &proj.project).map_err(xlsx_err)?;
-                sheet
-                    .write_number(r, 3, proj.count as f64)
-                    .map_err(xlsx_err)?;
-                sheet
-                    .write_string(r, 4, &proj.dates.join(", "))
-                    .map_err(xlsx_err)?;
-                r += 1;
-            }
+            merge_or_write(sheet, skill_start, r - 1, 0, &s.skill, &merged)?;
+            merge_or_write(sheet, skill_start, r - 1, 1, &s.plugin, &merged)?;
         }
     }
 
-    // --- Sheet 5: Utilisation par projet ---
+    // --- Utilisation par projet: one row per (project × skill × day); Projet/Skill merged ---
     {
         let sheet = wb
             .add_worksheet()
@@ -952,19 +948,22 @@ pub fn export_xlsx(path: &str, from: &str, to: &str) -> Result<String> {
             &bold,
             &["Projet", "Skill", "Utilisations", "Dates d'utilisation"],
         )?;
+        let _ = sheet.set_column_width(0, 22);
+        let _ = sheet.set_column_width(1, 34);
+        let _ = sheet.set_column_width(2, 12);
+        let _ = sheet.set_column_width(3, 16);
         let mut r = 1u32;
         for p in &report.projects {
-            for line in &p.skills {
-                sheet.write_string(r, 0, &p.project).map_err(xlsx_err)?;
-                sheet.write_string(r, 1, &line.skill).map_err(xlsx_err)?;
-                sheet
-                    .write_number(r, 2, line.count as f64)
-                    .map_err(xlsx_err)?;
-                sheet
-                    .write_string(r, 3, &line.dates.join(", "))
-                    .map_err(xlsx_err)?;
-                r += 1;
+            if p.skills.is_empty() {
+                continue;
             }
+            let proj_start = r;
+            for line in &p.skills {
+                let skill_start = r;
+                r = write_day_rows(sheet, r, 2, line.count, &line.dates, &date_fmt)?;
+                merge_or_write(sheet, skill_start, r - 1, 1, &line.skill, &merged)?;
+            }
+            merge_or_write(sheet, proj_start, r - 1, 0, &p.project, &merged)?;
         }
     }
 
@@ -973,6 +972,213 @@ pub fn export_xlsx(path: &str, from: &str, to: &str) -> Result<String> {
     // dashboard's "Activité récente" (parsed from the log tail).
     tracing::info!("usage_audit.export ok: {path}");
     Ok(path.to_string())
+}
+
+/// Write one row per usage day (count in `count_col`, `DD/MM/YYYY` in the next
+/// column). When `dates` is empty, writes a single fallback row carrying the
+/// total `total`. Returns the next free row.
+fn write_day_rows(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    mut r: u32,
+    count_col: u16,
+    total: u64,
+    dates: &[DayCount],
+    date_fmt: &rust_xlsxwriter::Format,
+) -> Result<u32> {
+    if dates.is_empty() {
+        sheet
+            .write_number(r, count_col, total as f64)
+            .map_err(xlsx_err)?;
+        return Ok(r + 1);
+    }
+    for dc in dates {
+        sheet
+            .write_number(r, count_col, dc.count as f64)
+            .map_err(xlsx_err)?;
+        sheet
+            .write_string_with_format(r, count_col + 1, &fmt_date_fr(&dc.date), date_fmt)
+            .map_err(xlsx_err)?;
+        r += 1;
+    }
+    Ok(r)
+}
+
+/// Merge `[r1..=r2]` in `col` into one cell holding `text`, or write a plain cell
+/// when the span is a single row (Excel rejects a 1-cell merge).
+fn merge_or_write(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    r1: u32,
+    r2: u32,
+    col: u16,
+    text: &str,
+    fmt: &rust_xlsxwriter::Format,
+) -> Result<()> {
+    if r2 > r1 {
+        sheet
+            .merge_range(r1, col, r2, col, text, fmt)
+            .map_err(xlsx_err)?;
+    } else {
+        sheet
+            .write_string_with_format(r1, col, text, fmt)
+            .map_err(xlsx_err)?;
+    }
+    Ok(())
+}
+
+/// The Récapitulatif sheet: key figures (col A/B), backing data tables lower
+/// down, and native Excel charts (two bars + a pie) anchored to the right.
+fn write_recap_sheet(
+    wb: &mut rust_xlsxwriter::Workbook,
+    report: &UsageReport,
+    bold: &rust_xlsxwriter::Format,
+) -> Result<()> {
+    use rust_xlsxwriter::{Chart, ChartType, Format};
+
+    const SHEET: &str = "Récapitulatif";
+    let title = Format::new().set_bold().set_font_size(14);
+
+    let sheet = wb.add_worksheet().set_name(SHEET).map_err(xlsx_err)?;
+    let _ = sheet.set_column_width(0, 32);
+    let _ = sheet.set_column_width(1, 24);
+
+    sheet
+        .write_string_with_format(0, 0, "Audit d'utilisation — récapitulatif", &title)
+        .map_err(xlsx_err)?;
+
+    let short = |iso: &str, fallback: &str| -> String {
+        if iso.trim().is_empty() {
+            fallback.to_string()
+        } else {
+            fmt_date_fr(&day_of(iso))
+        }
+    };
+    let top_plugin = report
+        .top_plugins
+        .first()
+        .map(|p| format!("{} ({})", p.plugin, p.total))
+        .unwrap_or_else(|| "—".into());
+    let top_skill = report
+        .skills
+        .first()
+        .map(|s| format!("{} ({})", s.skill, s.count))
+        .unwrap_or_else(|| "—".into());
+    let used = report.top_plugins.len();
+    let unused = report.unused_plugins.len();
+    let kv: [(&str, String); 10] = [
+        ("Date d'export", short(&report.generated_at, "—")),
+        ("Période — du", short(&report.from, "(début de l'historique)")),
+        ("Période — au", short(&report.to, "(maintenant)")),
+        ("Invocations totales", report.total_events.to_string()),
+        ("Plugins utilisés", used.to_string()),
+        ("Plugins installés non utilisés", unused.to_string()),
+        ("Skills distincts utilisés", report.skills.len().to_string()),
+        ("Projets actifs", report.projects.len().to_string()),
+        ("Plugin le plus utilisé", top_plugin),
+        ("Skill le plus utilisé", top_skill),
+    ];
+    for (i, (label, value)) in kv.iter().enumerate() {
+        let r = (i + 2) as u32;
+        sheet
+            .write_string_with_format(r, 0, *label, bold)
+            .map_err(xlsx_err)?;
+        sheet.write_string(r, 1, value).map_err(xlsx_err)?;
+    }
+
+    // Backing data tables (col A/B), below the key figures. Charts reference
+    // these ranges. Capped for a readable chart.
+    const CAP: usize = 12;
+    let mut r = 14u32;
+
+    // Top plugins by invocations.
+    let plug_n = report.top_plugins.len().min(CAP) as u32;
+    let plug_first = r + 1;
+    if plug_n > 0 {
+        sheet
+            .write_string_with_format(r, 0, "Plugin", bold)
+            .map_err(xlsx_err)?;
+        sheet
+            .write_string_with_format(r, 1, "Invocations", bold)
+            .map_err(xlsx_err)?;
+        for (i, p) in report.top_plugins.iter().take(CAP).enumerate() {
+            let rr = plug_first + i as u32;
+            sheet.write_string(rr, 0, &p.plugin).map_err(xlsx_err)?;
+            sheet.write_number(rr, 1, p.total as f64).map_err(xlsx_err)?;
+        }
+        r = plug_first + plug_n + 1;
+    }
+
+    // Top skills by usage.
+    let skill_n = report.skills.len().min(CAP) as u32;
+    let skill_first = r + 1;
+    if skill_n > 0 {
+        sheet
+            .write_string_with_format(r, 0, "Skill", bold)
+            .map_err(xlsx_err)?;
+        sheet
+            .write_string_with_format(r, 1, "Utilisations", bold)
+            .map_err(xlsx_err)?;
+        for (i, s) in report.skills.iter().take(CAP).enumerate() {
+            let rr = skill_first + i as u32;
+            sheet.write_string(rr, 0, &s.skill).map_err(xlsx_err)?;
+            sheet.write_number(rr, 1, s.count as f64).map_err(xlsx_err)?;
+        }
+        r = skill_first + skill_n + 1;
+    }
+
+    // Plugins used vs unused (pie).
+    let split_first = r + 1;
+    sheet
+        .write_string_with_format(r, 0, "Répartition plugins", bold)
+        .map_err(xlsx_err)?;
+    sheet
+        .write_string_with_format(r, 1, "Nombre", bold)
+        .map_err(xlsx_err)?;
+    sheet
+        .write_string(split_first, 0, "Utilisés")
+        .map_err(xlsx_err)?;
+    sheet
+        .write_number(split_first, 1, used as f64)
+        .map_err(xlsx_err)?;
+    sheet
+        .write_string(split_first + 1, 0, "Non utilisés")
+        .map_err(xlsx_err)?;
+    sheet
+        .write_number(split_first + 1, 1, unused as f64)
+        .map_err(xlsx_err)?;
+
+    // --- Charts (anchored to the right, cols D+) ---
+    if plug_n > 0 {
+        let mut chart = Chart::new(ChartType::Bar);
+        chart
+            .add_series()
+            .set_categories((SHEET, plug_first, 0, plug_first + plug_n - 1, 0))
+            .set_values((SHEET, plug_first, 1, plug_first + plug_n - 1, 1))
+            .set_name("Invocations");
+        chart.title().set_name("Top plugins");
+        chart.legend().set_hidden();
+        sheet.insert_chart(2, 3, &chart).map_err(xlsx_err)?;
+    }
+    if skill_n > 0 {
+        let mut chart = Chart::new(ChartType::Bar);
+        chart
+            .add_series()
+            .set_categories((SHEET, skill_first, 0, skill_first + skill_n - 1, 0))
+            .set_values((SHEET, skill_first, 1, skill_first + skill_n - 1, 1))
+            .set_name("Utilisations");
+        chart.title().set_name("Top skills");
+        chart.legend().set_hidden();
+        sheet.insert_chart(2, 11, &chart).map_err(xlsx_err)?;
+    }
+    if used + unused > 0 {
+        let mut pie = Chart::new(ChartType::Pie);
+        pie.add_series()
+            .set_categories((SHEET, split_first, 0, split_first + 1, 0))
+            .set_values((SHEET, split_first, 1, split_first + 1, 1));
+        pie.title().set_name("Plugins : utilisés vs non utilisés");
+        sheet.insert_chart(18, 3, &pie).map_err(xlsx_err)?;
+    }
+
+    Ok(())
 }
 
 fn write_headers(

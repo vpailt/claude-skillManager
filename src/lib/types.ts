@@ -386,6 +386,13 @@ export interface PluginUsage {
   commandCount: number;
 }
 
+/** One usage day and how many invocations happened on it. */
+export interface DayCount {
+  /** "YYYY-MM-DD" (local day). */
+  date: string;
+  count: number;
+}
+
 /** A skill's usage within one project: how many times, on which days. */
 export interface ProjectUsage {
   /** Project display name (last segment of its root path). */
@@ -393,8 +400,8 @@ export interface ProjectUsage {
   /** Project root path, for opening in VS Code. "" if never captured. */
   path: string;
   count: number;
-  /** Distinct usage days ("YYYY-MM-DD"), ascending. No times. */
-  dates: string[];
+  /** Per-day counts, ascending by date. No times. */
+  dates: DayCount[];
 }
 
 export interface SkillUsage {
@@ -411,7 +418,7 @@ export interface SkillUsage {
 export interface ProjectSkillLine {
   skill: string;
   count: number;
-  dates: string[];
+  dates: DayCount[];
 }
 
 /** A project's skill usage — the inverse view of SkillUsage. */

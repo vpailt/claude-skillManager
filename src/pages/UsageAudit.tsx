@@ -318,7 +318,13 @@ export function UsageAuditPage() {
                                   {s.projects.map((proj) => {
                                     const openable = !!proj.path;
                                     const datesLabel = proj.dates.length
-                                      ? `Utilisé le ${proj.dates.join(", ")}`
+                                      ? `Utilisé le ${proj.dates
+                                          .map((d) =>
+                                            d.count > 1
+                                              ? `${d.date} (${d.count})`
+                                              : d.date
+                                          )
+                                          .join(", ")}`
                                       : "";
                                     const title = openable
                                       ? `Ouvrir ${proj.path} dans VS Code${
