@@ -36,6 +36,8 @@ use crate::installer;
 const SKIP: &[&str] = &[".git", "__pycache__", ".DS_Store"];
 
 const BASELINE_FILE: &str = "skill_baselines.json";
+/// Folders explicitly flagged "new, not yet pushed" (persisted set).
+const PENDING_NEW_FILE: &str = "skill_new.json";
 /// Tauri event emitted when a folder's dirty flag flips.
 const EVENT: &str = "skill-dirty";
 
@@ -56,6 +58,11 @@ struct Shared {
     baselines: HashMap<String, u64>,
     /// folder input strings currently considered dirty.
     dirty: HashSet<String>,
+    /// Folders explicitly flagged as "new, not yet pushed" (a skill just created
+    /// inside a plugin). Always read dirty regardless of their content hash until
+    /// a PR is opened for them (`mark_synced`). Persisted so the nudge survives a
+    /// refresh (which re-captures a first-sight baseline) and an app restart.
+    pending_new: HashSet<String>,
 }
 
 /// Managed Tauri state: holds the live watcher, the watched-path set, and the
@@ -78,6 +85,7 @@ impl SkillWatch {
         SkillWatch {
             shared: Arc::new(Mutex::new(Shared {
                 baselines: load_baselines(),
+                pending_new: load_pending_new(),
                 ..Default::default()
             })),
             watcher: Mutex::new(None),
@@ -120,7 +128,9 @@ impl SkillWatch {
                         hash
                     }
                 };
-                let dirty = hash != baseline;
+                // A folder flagged "new, not yet pushed" stays dirty regardless of
+                // its baseline (first-sight would otherwise read clean).
+                let dirty = sh.pending_new.contains(&input) || hash != baseline;
                 if dirty {
                     sh.dirty.insert(input.clone());
                 } else {
@@ -143,13 +153,58 @@ impl SkillWatch {
     }
 
     /// Capture the folder's current content as its new baseline and clear its
-    /// dirty flag — called once a PR has been opened for it.
+    /// dirty flag — called once a PR has been opened for it. Also clears any
+    /// "new, not yet pushed" flag so the folder stops reading dirty.
     pub fn mark_synced(&self, folder: &str) {
         let hash = hash_folder(Path::new(folder));
         let mut sh = self.shared.lock();
         sh.baselines.insert(folder.to_string(), hash);
         sh.dirty.remove(folder);
+        if sh.pending_new.remove(folder) {
+            save_pending_new(&sh.pending_new);
+        }
         save_baselines(&sh.baselines);
+    }
+
+    /// Flag a freshly-created skill folder as "new, not yet pushed": persist it,
+    /// add it to the watched roots + dirty set, and emit a `skill-dirty` event so
+    /// the badge lights up immediately (before the next refresh re-arms the
+    /// watcher). Stays dirty until `mark_synced` (a PR was opened) or
+    /// `forget_under` (the plugin was reinstalled/removed).
+    pub fn mark_new(&self, app: &AppHandle, folder: &str) {
+        self.ensure_started(app);
+        {
+            let mut sh = self.shared.lock();
+            sh.pending_new.insert(folder.to_string());
+            sh.dirty.insert(folder.to_string());
+            if !sh.roots.iter().any(|r| r == folder) {
+                sh.roots.push(folder.to_string());
+            }
+            // Capture a baseline now so a later real edit is still detectable.
+            let hash = hash_folder(Path::new(folder));
+            sh.baselines.insert(folder.to_string(), hash);
+            save_pending_new(&sh.pending_new);
+            save_baselines(&sh.baselines);
+        }
+        // Watch the new folder so subsequent edits fire the live watcher too.
+        let canon = std::fs::canonicalize(folder).unwrap_or_else(|_| PathBuf::from(folder));
+        if let Some(watcher) = self.watcher.lock().as_mut() {
+            if canon.is_dir() {
+                let mut watched = self.watched.lock();
+                if watched.insert(canon.clone()) {
+                    let _ = watcher.watch(&canon, RecursiveMode::Recursive);
+                }
+            }
+        }
+        if let Err(e) = app.emit(
+            EVENT,
+            &DirtyState {
+                folder: folder.to_string(),
+                dirty: true,
+            },
+        ) {
+            tracing::debug!("skill_watch: mark_new emit failed: {e}");
+        }
     }
 
     /// Drop every persisted baseline (and dirty flag) for skill folders at or
@@ -174,6 +229,8 @@ impl SkillWatch {
         let before = sh.baselines.len();
         sh.baselines.retain(|k, _| !under(k));
         sh.dirty.retain(|k| !under(k));
+        let pending_before = sh.pending_new.len();
+        sh.pending_new.retain(|k| !under(k));
         let dropped = before - sh.baselines.len();
         if dropped > 0 {
             save_baselines(&sh.baselines);
@@ -181,6 +238,9 @@ impl SkillWatch {
                 "skill_watch: forgot {dropped} baseline(s) under {}",
                 root.display()
             );
+        }
+        if sh.pending_new.len() != pending_before {
+            save_pending_new(&sh.pending_new);
         }
     }
 
@@ -273,14 +333,18 @@ fn worker_loop(rx: Receiver<()>, shared: Arc<Mutex<Shared>>, app: AppHandle) {
 /// folders whose dirty flag actually flipped (so emitted events stay minimal).
 fn rescan(shared: &Arc<Mutex<Shared>>) -> Vec<DirtyState> {
     let mut sh = shared.lock();
-    let roots: Vec<(String, u64)> = sh
+    let roots: Vec<(String, u64, bool)> = sh
         .roots
         .iter()
-        .filter_map(|input| sh.baselines.get(input).map(|b| (input.clone(), *b)))
+        .filter_map(|input| {
+            sh.baselines
+                .get(input)
+                .map(|b| (input.clone(), *b, sh.pending_new.contains(input)))
+        })
         .collect();
     let mut changed = Vec::new();
-    for (input, baseline) in roots {
-        let dirty = hash_folder(Path::new(&input)) != baseline;
+    for (input, baseline, is_new) in roots {
+        let dirty = is_new || hash_folder(Path::new(&input)) != baseline;
         let was = sh.dirty.contains(&input);
         if dirty == was {
             continue;
@@ -378,5 +442,25 @@ fn save_baselines(map: &HashMap<String, u64>) {
     }
     if let Err(e) = installer::atomic_write_json(&baseline_path(), &Value::Object(obj)) {
         tracing::warn!("skill_watch: could not persist baselines: {e}");
+    }
+}
+
+fn pending_new_path() -> PathBuf {
+    config::app_settings_dir().join(PENDING_NEW_FILE)
+}
+
+fn load_pending_new() -> HashSet<String> {
+    let Ok(text) = std::fs::read_to_string(pending_new_path()) else {
+        return HashSet::new();
+    };
+    serde_json::from_str::<Vec<String>>(&text)
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_default()
+}
+
+fn save_pending_new(set: &HashSet<String>) {
+    let arr: Vec<Value> = set.iter().cloned().map(Value::String).collect();
+    if let Err(e) = installer::atomic_write_json(&pending_new_path(), &Value::Array(arr)) {
+        tracing::warn!("skill_watch: could not persist pending-new set: {e}");
     }
 }

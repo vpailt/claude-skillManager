@@ -1,9 +1,11 @@
 // Typed wrappers around `invoke()` so we never write magic command names twice.
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AddSkillArgs,
   AdminDraft,
   AppUpdateInfo,
   ArchivedSkill,
+  BulkUploadArgs,
   BumpSuggestion,
   DuplicateSkill,
   GiteaStatus,
@@ -228,6 +230,8 @@ export const api = {
     }),
   adminPrepareUploadSkill: (args: UploadSkillArgs) =>
     invoke<AdminDraft>("admin_prepare_upload_skill", { args }),
+  adminPrepareUploadSkills: (args: BulkUploadArgs) =>
+    invoke<AdminDraft>("admin_prepare_upload_skills", { args }),
   adminPrepareDeleteSkill: (
     marketplace: string,
     pluginName: string,
@@ -266,6 +270,8 @@ export const api = {
   skillMarkSynced: (folder: string) =>
     invoke<void>("skill_mark_synced", { folder }),
   skillDirtyList: () => invoke<SkillDirtyState[]>("skill_dirty_list"),
+  addSkillToPlugin: (args: AddSkillArgs) =>
+    invoke<string>("add_skill_to_plugin", { args }),
 
   // --- duplicate skills ---
   listDuplicateSkills: () =>

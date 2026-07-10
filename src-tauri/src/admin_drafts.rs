@@ -161,6 +161,11 @@ pub struct AdminDraft {
     /// Filled when the draft results in a pending PR record.
     #[serde(default)]
     pub pending_meta: Option<PendingMeta>,
+    /// One pending record per skill for a multi-skill upload (they share the PR
+    /// but each row must show its own "en attente" state). When non-empty,
+    /// `submit_draft` upserts each of these instead of `pending_meta`.
+    #[serde(default)]
+    pub pending_metas: Vec<PendingMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -396,6 +401,7 @@ pub fn prepare_add_plugin(
             skill_name: String::new(),
             skill_version: String::new(),
         }),
+        pending_metas: Vec::new(),
     })
 }
 
@@ -487,6 +493,7 @@ pub fn prepare_bump_plugin(
             skill_name: String::new(),
             skill_version: String::new(),
         }),
+        pending_metas: Vec::new(),
     })
 }
 
@@ -536,6 +543,7 @@ pub fn prepare_remove_plugin(
             action: "remove".to_string(),
             ..Default::default()
         }),
+        pending_metas: Vec::new(),
     })
 }
 
@@ -617,122 +625,235 @@ fn plugin_source_url_of(registry: &Value, plugin_name: &str) -> String {
         .unwrap_or_default()
 }
 
+/// One skill to upload within a [`BulkUploadArgs`] batch (all for the same plugin).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkSkillItem {
+    pub local_folder: String,
+    /// Defaults to the local folder name when empty.
+    #[serde(default)]
+    pub target_name: String,
+    /// Skill version stamped on SKILL.md; empty → derived from `bump_level`.
+    #[serde(default)]
+    pub new_version: String,
+}
+
+/// Upload several skills to ONE plugin in a single PR. The shared `bump_level`
+/// drives each skill's version pre-fill and the plugin's single manifest bump.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkUploadArgs {
+    pub marketplace: String,
+    pub plugin_name: String,
+    pub items: Vec<BulkSkillItem>,
+    #[serde(default)]
+    pub bump_level: String,
+    #[serde(default)]
+    pub version_description: String,
+}
+
+/// Single-skill upload — a thin wrapper over [`prepare_upload_skills`] so both
+/// paths share one implementation.
 pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result<AdminDraft> {
-    let local_folder = Path::new(&args.local_folder);
-    if !local_folder.is_dir() {
-        return Err(Error::NotFound(format!(
-            "Local skill folder not found: {}",
-            local_folder.display()
-        )));
-    }
-    let target_name = if args.target_name.trim().is_empty() {
-        local_folder
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("skill")
-            .to_string()
-    } else {
-        args.target_name.trim().to_string()
+    let bulk = BulkUploadArgs {
+        marketplace: args.marketplace.clone(),
+        plugin_name: args.plugin_name.clone(),
+        items: vec![BulkSkillItem {
+            local_folder: args.local_folder.clone(),
+            target_name: args.target_name.clone(),
+            new_version: args.new_version.clone(),
+        }],
+        bump_level: args.bump_level.clone(),
+        version_description: args.version_description.clone(),
     };
+    prepare_upload_skills(gh, &bulk)
+}
+
+/// Per-skill outcome carried through the loop, used to build the title/body and
+/// one pending record per skill.
+struct SkillSummary {
+    target: String,
+    version: String,
+    is_update: bool,
+    folder: String,
+}
+
+/// Build a single PR that adds/updates one or more skills on the same plugin and
+/// bumps the plugin manifest once. One skill → identical title/body/behaviour to
+/// the old single-skill flow; several skills → a grouped title + per-skill body.
+pub fn prepare_upload_skills(gh: &GitHubClient, args: &BulkUploadArgs) -> Result<AdminDraft> {
+    if args.items.is_empty() {
+        return Err(Error::Invalid("No skills selected for upload.".into()));
+    }
+    let bump_level = normalize_bump_level(&args.bump_level);
 
     let (mp_repo, mp_branch) = repo_for(&args.marketplace)?;
     let (registry, _registry_path, _) = fetch_marketplace_registry(gh, &mp_repo, &mp_branch)?;
     let plugin_repo = plugin_source_repo_of(&registry, &args.plugin_name);
+    // For monorepo marketplaces (target_repo == mp_repo) we drop files at the repo
+    // root; the common case (separate plugin repo) is handled cleanly.
     let target_repo = if plugin_repo.is_empty() {
         mp_repo.clone()
     } else {
         plugin_repo.clone()
     };
-
-    // For monorepo marketplaces (target_repo == mp_repo) we'd ideally need to
-    // know the plugin's subpath inside the marketplace. We only handle the
-    // common case (separate plugin repo) cleanly; for monorepos we drop files
-    // at the repo root which matches the Python fallback.
-    let target_subpath = format!("skills/{target_name}").trim_end_matches('/').to_string();
-
-    let mut changes = collect_skill_folder_changes(local_folder, &target_subpath)?;
-    if changes.is_empty() {
-        return Err(Error::Invalid("No files in the skill folder.".into()));
-    }
-
-    // Locate SKILL.md so we can validate frontmatter + (re-)write version.
-    let mut problems: Vec<String> = Vec::new();
-    let mut skill_md_idx: Option<usize> = None;
-    for (i, ch) in changes.iter().enumerate() {
-        let last = ch.path.rsplit('/').next().unwrap_or("");
-        if last == "SKILL.md" || last == "skill.md" {
-            skill_md_idx = Some(i);
-            break;
-        }
-    }
-    let mut skill_existing_version = String::new();
-    if let Some(idx) = skill_md_idx {
-        let text = String::from_utf8_lossy(&changes[idx].content).to_string();
-        let (fm, _) = parse_frontmatter(&text);
-        problems.extend(validate_skill_frontmatter(&fm));
-        skill_existing_version = skill_version_from_fm(&fm);
-    } else {
-        problems.push("No SKILL.md found in the local folder.".into());
-    }
-
-    let bump_level = normalize_bump_level(&args.bump_level);
-
     let base_branch = if target_repo == mp_repo {
         mp_branch.clone()
     } else {
         gh.get_default_branch(&target_repo)?
     };
 
-    // Resolve "is this an update" via existence of SKILL.md on the target.
-    let skill_md_existing = gh.get_file_sha_or_none(
-        &target_repo,
-        &format!("{target_subpath}/SKILL.md"),
-        &base_branch,
-    );
-    let is_update = skill_md_existing.is_some();
-    let action_word = if is_update { "Update" } else { "Add" };
+    let mut problems: Vec<String> = Vec::new();
+    let mut changes: Vec<FileChange> = Vec::new();
+    let mut deletions: Vec<String> = Vec::new();
+    let mut pending_metas: Vec<PendingMeta> = Vec::new();
+    let mut summaries: Vec<SkillSummary> = Vec::new();
+    let mut any_update = false;
 
-    // Skill version stamped on SKILL.md. Priority:
-    //   1. user-supplied newVersion (the wizard pre-fills the incremented value)
-    //   2. on an update with a known current version → bump it by `bump_level`,
-    //      so the skill version always moves on an upgrade (req. #2)
-    //   3. an existing version with no bump context → keep as-is
-    //   4. "0.1.0" for a brand-new skill
-    let effective_skill_version = if !args.new_version.trim().is_empty() {
-        args.new_version.trim().to_string()
-    } else if is_update && !skill_existing_version.is_empty() {
-        bump_version(&skill_existing_version, bump_level)
-    } else if !skill_existing_version.is_empty() {
-        skill_existing_version.clone()
-    } else {
-        "0.1.0".to_string()
-    };
-
-    // Always stamp SKILL.md with the effective skill version. Without this,
-    // an "add new skill" flow would ship a skill with no version.
-    if let Some(idx) = skill_md_idx {
-        let text = String::from_utf8_lossy(&changes[idx].content).to_string();
-        let mut updates = Fields::new();
-        updates.insert("version".to_string(), effective_skill_version.clone());
-        let new_text = update_frontmatter(&text, &updates);
-        changes[idx] = FileChange {
-            path: changes[idx].path.clone(),
-            content: new_text.into_bytes(),
+    for item in &args.items {
+        let local_folder = Path::new(&item.local_folder);
+        if !local_folder.is_dir() {
+            return Err(Error::NotFound(format!(
+                "Local skill folder not found: {}",
+                local_folder.display()
+            )));
+        }
+        let target_name = if item.target_name.trim().is_empty() {
+            local_folder
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("skill")
+                .to_string()
+        } else {
+            item.target_name.trim().to_string()
         };
+        let target_subpath = format!("skills/{target_name}").trim_end_matches('/').to_string();
+
+        let mut skill_changes = collect_skill_folder_changes(local_folder, &target_subpath)?;
+        if skill_changes.is_empty() {
+            return Err(Error::Invalid(format!(
+                "No files in the skill folder '{target_name}'."
+            )));
+        }
+
+        // Locate SKILL.md so we can validate frontmatter + (re-)write version.
+        let mut skill_md_idx: Option<usize> = None;
+        for (i, ch) in skill_changes.iter().enumerate() {
+            let last = ch.path.rsplit('/').next().unwrap_or("");
+            if last == "SKILL.md" || last == "skill.md" {
+                skill_md_idx = Some(i);
+                break;
+            }
+        }
+        let mut skill_existing_version = String::new();
+        if let Some(idx) = skill_md_idx {
+            let text = String::from_utf8_lossy(&skill_changes[idx].content).to_string();
+            let (fm, _) = parse_frontmatter(&text);
+            problems.extend(validate_skill_frontmatter(&fm));
+            skill_existing_version = skill_version_from_fm(&fm);
+        } else {
+            problems.push(format!(
+                "No SKILL.md found in '{}'.",
+                local_folder.display()
+            ));
+        }
+
+        // Resolve "is this an update" via existence of SKILL.md on the target.
+        let skill_md_existing = gh.get_file_sha_or_none(
+            &target_repo,
+            &format!("{target_subpath}/SKILL.md"),
+            &base_branch,
+        );
+        let is_update = skill_md_existing.is_some();
+        any_update |= is_update;
+
+        // Skill version stamped on SKILL.md. Priority: user-supplied → bump the
+        // existing version on an update → keep as-is → "0.1.0" for a new skill.
+        let effective_skill_version = if !item.new_version.trim().is_empty() {
+            item.new_version.trim().to_string()
+        } else if is_update && !skill_existing_version.is_empty() {
+            bump_version(&skill_existing_version, bump_level)
+        } else if !skill_existing_version.is_empty() {
+            skill_existing_version.clone()
+        } else {
+            "0.1.0".to_string()
+        };
+
+        // Always stamp SKILL.md with the effective skill version.
+        if let Some(idx) = skill_md_idx {
+            let text = String::from_utf8_lossy(&skill_changes[idx].content).to_string();
+            let mut updates = Fields::new();
+            updates.insert("version".to_string(), effective_skill_version.clone());
+            let new_text = update_frontmatter(&text, &updates);
+            skill_changes[idx] = FileChange {
+                path: skill_changes[idx].path.clone(),
+                content: new_text.into_bytes(),
+            };
+        }
+
+        summaries.push(SkillSummary {
+            target: target_name.clone(),
+            version: effective_skill_version.clone(),
+            is_update,
+            folder: local_folder.display().to_string(),
+        });
+        pending_metas.push(PendingMeta {
+            marketplace_name: args.marketplace.clone(),
+            plugin_name: args.plugin_name.clone(),
+            action: if is_update {
+                "update-skill".to_string()
+            } else {
+                "add-skill".to_string()
+            },
+            // `new_version` (plugin manifest version) is filled after the bump below.
+            new_version: String::new(),
+            plugin_source_repo: plugin_repo.clone(),
+            skill_name: target_name.clone(),
+            skill_version: effective_skill_version.clone(),
+        });
+
+        // Prune files removed locally: on an update, any file still present in the
+        // remote skill folder but absent from this local upload must be deleted,
+        // otherwise stale files (e.g. a removed sub-directory) linger on the remote
+        // after the merge. `collect_skill_folder_changes` only emits create/update
+        // ops for files that still exist locally, so it can't express a removal on
+        // its own. A new skill (no remote folder) has nothing to prune.
+        // `list_dir_recursive` returns an empty list when the listing fails, so a
+        // transient error never triggers a spurious mass-deletion.
+        if is_update {
+            let local_paths: std::collections::HashSet<&str> =
+                skill_changes.iter().map(|c| c.path.as_str()).collect();
+            if let Ok(remote_files) =
+                gh.list_dir_recursive(&target_repo, &target_subpath, &base_branch)
+            {
+                for rf in remote_files {
+                    if !local_paths.contains(rf.path.as_str()) {
+                        deletions.push(rf.path);
+                    }
+                }
+            }
+        }
+        changes.extend(skill_changes);
     }
 
-    // Build per-file diff entries (bounded to 10 + summary tail).
+    // Build per-file diff entries (bounded to 10 fetched + summary tail) BEFORE
+    // the manifest bump, so the cap covers skill files, then manifests are added.
     let mut entries: Vec<DiffEntry> = Vec::new();
-    for ch in changes.iter().take(10) {
+    let mut fetched = 0usize;
+    for ch in &changes {
+        if fetched >= 10 {
+            break;
+        }
         let new_text = String::from_utf8_lossy(&ch.content).to_string();
         match gh.get_file(&target_repo, &ch.path, &base_branch) {
             Ok((old_text, _)) => entries.push(diff_entry_modify(&ch.path, &old_text, &new_text)),
             Err(_) => entries.push(diff_entry_add(&ch.path, &new_text)),
         }
+        fetched += 1;
     }
-    if changes.len() > 10 {
+    if changes.len() > fetched {
         entries.push(DiffEntry {
-            path: format!("... and {} more file(s)", changes.len() - 10),
+            path: format!("... and {} more file(s)", changes.len() - fetched),
             action: "modify".to_string(),
             old_content: None,
             new_content: None,
@@ -741,8 +862,8 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
     }
 
     // The plugin version always bumps on any upload — otherwise Claude clients
-    // keep seeing the same version though the contents changed. It bumps by the
-    // same shared `bump_level` as the skill version (req. #3).
+    // keep seeing the same version though the contents changed. Bump once for the
+    // whole batch, by the shared `bump_level`.
     let (manifest_files, current_plugin_version) =
         fetch_plugin_manifests(gh, &target_repo, &base_branch);
     if manifest_files.is_empty() {
@@ -769,44 +890,107 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         });
     }
 
-    let conflict_paths: Vec<String> = changes.iter().map(|c| c.path.clone()).collect();
+    // Surface pruned files in the diff preview so the user sees what will be
+    // removed. Fetch old content for a bounded number (mirrors the file cap
+    // above), then a summary tail for the rest.
+    let mut del_shown = 0usize;
+    for path in &deletions {
+        if del_shown >= 10 {
+            break;
+        }
+        let old_text = gh
+            .get_file(&target_repo, path, &base_branch)
+            .map(|(t, _)| t)
+            .unwrap_or_default();
+        entries.push(diff_entry_delete(path, &old_text));
+        del_shown += 1;
+    }
+    if deletions.len() > del_shown {
+        entries.push(DiffEntry {
+            path: format!("... and {} more deletion(s)", deletions.len() - del_shown),
+            action: "delete".to_string(),
+            old_content: None,
+            new_content: None,
+            unified: String::new(),
+        });
+    }
+
+    // Stamp the plugin's new manifest version into each pending record.
+    for pm in &mut pending_metas {
+        pm.new_version = new_plugin_version.clone();
+    }
+
+    let mut conflict_paths: Vec<String> = changes.iter().map(|c| c.path.clone()).collect();
+    conflict_paths.extend(deletions.iter().cloned());
     let conflicts = detect_conflicts(gh, &target_repo, &conflict_paths, &base_branch);
-    let branch_prefix = if is_update {
+
+    let branch_prefix = if any_update {
         "skillmanager/update-skill"
     } else {
         "skillmanager/add-skill"
     };
-    let branch_name = make_branch_name(
-        branch_prefix,
-        &[&target_name, &new_plugin_version],
-    );
-    let pr_title = format!(
-        "{action_word} skill: {target_name} (skill v{effective_skill_version}, plugin v{new_plugin_version})"
-    );
+    let action_word = if any_update { "Update" } else { "Add" };
     let version_description = args.version_description.trim();
-    // First body line `Version: X` is the stable contract parsed by the Teams card.
-    let mut pr_body = format!(
-        "Version: {new_plugin_version}\n\n{action_word}s skill `{target_name}` (v{effective_skill_version}, {} file(s)) on plugin `{}` from local folder `{}`.\n\nBumps plugin `{}` from v{} to v{} ({} bump).",
-        changes.len(),
-        args.plugin_name,
-        local_folder.display(),
-        args.plugin_name,
-        if current_plugin_version.is_empty() { "?" } else { &current_plugin_version },
-        new_plugin_version,
-        bump_level
-    );
+
+    // One skill → keep the original title/body verbatim. Several → grouped form.
+    let (pr_title, mut pr_body, branch_hint) = if summaries.len() == 1 {
+        let s = &summaries[0];
+        let aw = if s.is_update { "Update" } else { "Add" };
+        let title = format!(
+            "{aw} skill: {} (skill v{}, plugin v{})",
+            s.target, s.version, new_plugin_version
+        );
+        let body = format!(
+            "Version: {new_plugin_version}\n\n{aw}s skill `{}` (v{}, {} file(s)) on plugin `{}` from local folder `{}`.\n\nBumps plugin `{}` from v{} to v{} ({} bump).",
+            s.target,
+            s.version,
+            changes.len(),
+            args.plugin_name,
+            s.folder,
+            args.plugin_name,
+            if current_plugin_version.is_empty() { "?" } else { &current_plugin_version },
+            new_plugin_version,
+            bump_level
+        );
+        (title, body, s.target.clone())
+    } else {
+        let names: Vec<String> = summaries.iter().map(|s| s.target.clone()).collect();
+        let title = format!(
+            "{action_word} {} skills: {} (plugin v{new_plugin_version})",
+            summaries.len(),
+            names.join(", ")
+        );
+        let mut list = String::new();
+        for s in &summaries {
+            list.push_str(&format!(
+                "- `{}` v{} ({})\n",
+                s.target,
+                s.version,
+                if s.is_update { "update" } else { "add" }
+            ));
+        }
+        let body = format!(
+            "Version: {new_plugin_version}\n\n{action_word}s {} skill(s) on plugin `{}` (bumps v{} → v{}, {} bump):\n\n{}",
+            summaries.len(),
+            args.plugin_name,
+            if current_plugin_version.is_empty() { "?" } else { &current_plugin_version },
+            new_plugin_version,
+            bump_level,
+            list
+        );
+        (title, body, format!("{}-skills", summaries.len()))
+    };
+    if !deletions.is_empty() {
+        pr_body.push_str(&format!(
+            "\n\nPrunes {} file(s) removed locally.",
+            deletions.len()
+        ));
+    }
     if !version_description.is_empty() {
         pr_body.push_str(&format!("\n\n---\n{version_description}"));
     }
 
-    // No companion registry PR: the registry no longer carries per-plugin
-    // versions, so a skill upload only bumps the plugin's own manifest + tag.
-    let companion: Option<Box<AdminDraft>> = None;
-
-    // No git tag / release: the new manifest version lands on the plugin repo's
-    // default branch at merge, the app reads it live at refresh, and Teams is
-    // notified by the merged `pull_request` webhook.
-    let tags: Vec<TagSpec> = Vec::new();
+    let branch_name = make_branch_name(branch_prefix, &[&branch_hint, &new_plugin_version]);
 
     Ok(AdminDraft {
         target_repo,
@@ -816,25 +1000,16 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         pr_body,
         branch_prefix: branch_prefix.to_string(),
         changes,
-        deletions: Vec::new(),
+        deletions,
         entries,
         problems,
         conflicts,
-        tags,
-        companion,
-        pending_meta: Some(PendingMeta {
-            marketplace_name: args.marketplace.clone(),
-            plugin_name: args.plugin_name.clone(),
-            action: if is_update {
-                "update-skill".to_string()
-            } else {
-                "add-skill".to_string()
-            },
-            new_version: new_plugin_version,
-            plugin_source_repo: plugin_repo,
-            skill_name: target_name.clone(),
-            skill_version: effective_skill_version.clone(),
-        }),
+        // No git tags / companion: a skill upload only bumps the plugin manifest;
+        // the app reads the live version at refresh (Teams via the merge webhook).
+        tags: Vec::new(),
+        companion: None,
+        pending_meta: pending_metas.first().cloned(),
+        pending_metas,
     })
 }
 
@@ -968,6 +1143,7 @@ pub fn prepare_delete_skill(
             skill_name: skill_name.to_string(),
             skill_version: String::new(),
         }),
+        pending_metas: Vec::new(),
     })
 }
 
@@ -1008,7 +1184,16 @@ pub fn submit_draft(gh: &GitHubClient, draft: &AdminDraft) -> Result<UploadResul
         }
     }
 
-    if let Some(meta) = &draft.pending_meta {
+    // Persist pending PR record(s). A multi-skill upload emits one per skill (all
+    // sharing this PR) so each row shows its own "en attente" state; every other
+    // action emits the single `pending_meta`. Deferred tags ride on the first
+    // record only — a merge must not try to create them N times.
+    let metas: Vec<PendingMeta> = if !draft.pending_metas.is_empty() {
+        draft.pending_metas.clone()
+    } else {
+        draft.pending_meta.iter().cloned().collect()
+    };
+    for (i, meta) in metas.iter().enumerate() {
         let _ = pending_prs::upsert(PendingPR {
             marketplace_name: meta.marketplace_name.clone(),
             plugin_name: meta.plugin_name.clone(),
@@ -1021,7 +1206,11 @@ pub fn submit_draft(gh: &GitHubClient, draft: &AdminDraft) -> Result<UploadResul
             plugin_source_repo: meta.plugin_source_repo.clone(),
             skill_name: meta.skill_name.clone(),
             skill_version: meta.skill_version.clone(),
-            deferred_tags: deferred,
+            deferred_tags: if i == 0 {
+                std::mem::take(&mut deferred)
+            } else {
+                Vec::new()
+            },
             ..Default::default()
         });
     }

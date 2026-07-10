@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Guide de signature de code — SkillManager avec la CA interne AlmaviaCX (AD CS)</title><style>:root { --accent: #2f4b7c; --accent-2: #1f6f6b; --heading: #1b2733; --text: #1b2430; --muted: #5a6672; --rule: rgba(0,0,0,0.12); --bg: #ffffff; --panel: #f2f5f8; --code-bg: #0f172a; --code-fg: #e2e8f0; --font-heading: 'Segoe UI', Arial, sans-serif; --font-body: 'Segoe UI', Arial, sans-serif; --font-mono: 'Cascadia Code', 'Consolas', 'Courier New', monospace; --maxw: 900px; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; font-family: var(--font-body); font-size: 16px; line-height: 1.55;
+  color: var(--text); background: var(--bg); }
+main { max-width: var(--maxw); margin: 0 auto; padding: 40px 24px 96px; }
+
+h1,h2,h3,h4,h5,h6 { font-family: var(--font-heading); line-height: 1.15; scroll-margin-top: 24px; }
+h1 { font-size: 38px; font-weight: 700; color: var(--heading); margin: 0 0 14px; }
+h2 { font-size: 26px; font-weight: 700; color: var(--accent); margin: 46px 0 16px;
+  padding-top: 14px; border-top: 1px solid var(--rule); }
+h3 { font-size: 20px; font-weight: 700; color: var(--accent-2); margin: 28px 0 12px; }
+h4 { font-size: 17px; font-weight: 700; color: var(--heading); margin: 22px 0 10px; }
+
+p { margin: 0 0 14px; }
+ul, ol { margin: 0 0 14px; padding-left: 24px; }
+li { margin: 5px 0; }
+a { color: var(--accent); font-weight: 600; text-decoration: underline; }
+strong { font-weight: 700; }
+code { font-family: var(--font-mono); font-size: 0.9em; background: rgba(0,0,0,0.06);
+  color: var(--code-fg); border-radius: 4px; padding: 0.08em 0.36em; }
+code { color: #b5451a; background: #eef2f6; }
+
+.cover .rule { display:block; width:60px; height:4px; background:var(--accent-2);
+  margin:0 0 18px; border-radius:2px; }
+.cover .subtitle { font-family: var(--font-heading); font-weight:600; font-size:19px;
+  color: var(--accent); margin: 0 0 6px; }
+.cover-meta { color: var(--muted); font-size: 14px; margin: 0 0 10px; }
+.chips { display:flex; gap:8px; flex-wrap:wrap; }
+.chip { background: var(--panel); border:1px solid var(--rule); border-radius:999px;
+  padding: 3px 12px; font-size: 13px; font-weight: 600; color: var(--accent); }
+
+.pill { display:inline-block; padding:0.05em 0.6em; border-radius:999px; font-size:0.78em;
+  font-weight:700; line-height:1.5; white-space:nowrap; }
+
+pre.code { background: var(--code-bg); color: var(--code-fg); border-radius: 8px;
+  padding: 14px 16px; overflow-x: auto; margin: 0 0 16px; font-size: 13.5px; line-height: 1.5; }
+pre.code code { background: none; color: inherit; padding: 0; font-family: var(--font-mono); }
+
+.adm { border-left:4px solid; border-radius:0 8px 8px 0; padding:12px 16px; margin:0 0 18px; }
+.adm > *:last-child { margin-bottom: 0; }
+.adm-h { display:flex; align-items:center; gap:8px; font-weight:700; margin:0 0 8px; }
+.adm-i { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px;
+  border-radius:50%; color:#fff; font-size:12px; font-weight:700; flex:none; }
+
+.table-wrap { overflow-x:auto; margin:0 0 22px; border:1px solid var(--rule); border-radius:8px; }
+.table-wrap .cap { padding:8px 14px; font-weight:600; color:var(--muted); font-size:13px;
+  border-bottom:1px solid var(--rule); background:var(--panel); }
+table { border-collapse:collapse; width:100%; font-size:14px; }
+thead th { font-family:var(--font-heading); font-weight:600; color:var(--accent);
+  background:var(--panel); text-align:left; padding:9px 13px; }
+tbody td { padding:9px 13px; border-top:1px solid var(--rule); vertical-align:top; }
+tbody tr:nth-child(even){ background:rgba(0,0,0,0.015); }
+
+figure { margin:0 0 22px; }
+figure .cap { color:var(--muted); font-size:13px; margin-top:6px; }
+.missing { padding:20px; text-align:center; color:#b00; border:1px dashed #b00; border-radius:8px; }
+
+.prereq-list { list-style:none; padding-left:0; margin:0 0 18px; }
+.prereq { display:flex; gap:12px; align-items:flex-start; padding:10px 0;
+  border-bottom:1px solid var(--rule); }
+.prereq > div p { margin:2px 0 0; color:var(--muted); font-size:14px; }
+
+ol.steps { list-style:none; counter-reset:step; padding-left:0; margin:0 0 18px; }
+.step { position:relative; padding:0 0 20px 52px; margin:0; }
+.step::before { counter-increment:step; content:counter(step); position:absolute; left:0; top:0;
+  width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff;
+  font-family:var(--font-heading); font-weight:700; display:flex; align-items:center;
+  justify-content:center; }
+.step::after { content:""; position:absolute; left:16px; top:38px; bottom:2px; width:2px;
+  background:var(--rule); }
+.step:last-child::after { display:none; }
+.step-t { font-family:var(--font-heading); font-weight:700; font-size:17px; color:var(--heading);
+  margin:4px 0 10px; padding-top:4px; }
+.step-note { color:var(--muted); font-size:14px; font-style:italic; }
+
+.checks { list-style:none; padding-left:0; margin:0 0 18px; }
+.check { border:1px solid var(--rule); border-radius:8px; padding:12px 14px; margin:0 0 10px;
+  background:var(--panel); }
+.check-l { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.check .chk { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px;
+  border-radius:50%; background:#00875A; color:#fff; font-size:12px; font-weight:700; flex:none; }
+.check-exp { font-size:14px; color:var(--muted); margin-top:6px; }
+.check-exp span, .ts-cause span, .ts-sol span { font-weight:700; color:var(--text); }
+
+.ts { border-left:4px solid #DE350B; background:#FFF6F5; border-radius:0 8px 8px 0;
+  padding:12px 16px; margin:0 0 14px; }
+.ts-p { font-weight:700; margin-bottom:6px; }
+.ts-cause, .ts-sol { font-size:14px; margin-top:4px; }
+
+.toc { background:var(--panel); border-radius:14px; padding:20px 26px; margin:26px 0 40px; }
+.toc h2 { margin:0 0 12px; padding:0; border:none; font-size:22px; }
+.toc ol { columns:2; column-gap:32px; list-style:none; padding-left:0; margin:0; }
+.toc li { break-inside:avoid; margin:3px 0; }
+.toc li.lvl2 { padding-left:16px; font-size:0.94em; }
+.toc a { text-decoration:none; font-weight:600; }
+
+@media (max-width:640px){ main{ padding:24px 16px 64px; } h1{ font-size:28px; }
+  .toc ol{ columns:1; } }
+@media print { a { color: var(--text); } .step::after { display:none; } }
+</style></head><body><main><header class="cover"><span class="rule"></span><h1>Guide de signature de code — SkillManager avec la CA interne AlmaviaCX (AD CS)</h1><p class="subtitle">SkillManager</p><p class="cover-meta">10/07/2026 · Public : Développeur / responsable du build SkillManager</p><div class="chips"><span class="chip">Version 1.0</span><span class="chip">Windows 11 · Poste du domaine AlmaviaCX · Build Tauri (NSIS)</span></div></header><nav class="toc"><h2>Sommaire</h2><ol><li class="lvl1"><a href="#1-contexte-et-objectif">1. Contexte et objectif</a></li><li class="lvl1"><a href="#2-prérequis-et-vérification-du-terrain">2. Prérequis et vérification du terrain</a></li><li class="lvl1"><a href="#3-procédure-de-signature">3. Procédure de signature</a></li><li class="lvl1"><a href="#4-option-de-repli-signer-sans-signtool-powershell">4. Option de repli — signer sans signtool (PowerShell)</a></li><li class="lvl1"><a href="#5-vérification">5. Vérification</a></li><li class="lvl1"><a href="#6-dépannage">6. Dépannage</a></li><li class="lvl1"><a href="#7-annexe-prouver-le-mécanisme-sans-lit-dry-run-auto-signé">7. Annexe — Prouver le mécanisme sans l&#x27;IT (dry-run auto-signé)</a></li><li class="lvl1"><a href="#8-aide-mémoire">8. Aide-mémoire</a></li></ol></nav><h2 id="1-contexte-et-objectif">1. Contexte et objectif</h2><p>L&#x27;exécutable <code>skillmanager.exe</code> et son installeur NSIS ne sont pas signés. Windows affiche alors deux alertes : <strong>SmartScreen</strong> (« Windows a protégé votre ordinateur / Éditeur inconnu ») et le bandeau <strong>UAC</strong> « Éditeur inconnu » à l&#x27;élévation de droits.</p><p>Signer l&#x27;application avec un certificat <strong>de confiance</strong> émis par la CA interne AlmaviaCX (AD CS) supprime l&#x27;alerte UAC sur tous les postes du domaine, qui font déjà confiance à cette autorité.</p><div class="adm" style="background:#DEEBFF;border-color:#0052CC"><div class="adm-h" style="color:#0747A6"><span class="adm-i" style="background:#0052CC">i</span>SmartScreen en interne</div><p>SmartScreen ne se déclenche en pratique que sur les fichiers marqués « venus d&#x27;Internet » (<em>Mark-of-the-Web</em>). Un exe copié depuis un partage réseau interne n&#x27;a souvent pas cette marque : il reste muet, signé ou non.</p></div><div class="adm" style="background:#FFFAE6;border-color:#FF8B00"><div class="adm-h" style="color:#974F0C"><span class="adm-i" style="background:#FF8B00">!</span>Portée de cette signature</div><p>La signature n&#x27;est reconnue que sur les machines qui font confiance à la racine AlmaviaCX (postes du domaine). Sur un poste <strong>hors domaine</strong>, l&#x27;alerte reviendra — c&#x27;est le cas où <strong>Azure Trusted Signing</strong> prendrait le relais.</p></div><figure class="table-wrap"><figcaption class="cap">Répartition des rôles</figcaption><table><thead><tr><th>Étape</th><th>Toi</th><th>IT AlmaviaCX</th></tr></thead><tbody><tr><td>Publier le modèle <em>Code Signing</em> + accorder le droit d&#x27;enrôlement</td><td></td><td>✅</td></tr><tr><td>Obtenir le certificat</td><td>✅</td><td></td></tr><tr><td>Signer l&#x27;exe / l&#x27;installeur</td><td>✅</td><td></td></tr><tr><td>Faire confiance à la racine sur les autres postes</td><td></td><td>✅ (souvent déjà automatique)</td></tr></tbody></table></figure><h2 id="2-prérequis-et-vérification-du-terrain">2. Prérequis et vérification du terrain</h2><p>Avant de signer, vérifie que l&#x27;environnement réunit les conditions suivantes. Les trois premières sont généralement déjà satisfaites sur un poste du domaine.</p><ul class="prereq-list"><li class="prereq"><span class="pill" style="background:#0D6EFD;color:#FFFFFF">Obligatoire</span><div><strong>Poste de build <strong>joint au domaine</strong> AlmaviaCX</strong><p>Vérifiable via <code>PartOfDomain</code>.</p></div></li><li class="prereq"><span class="pill" style="background:#0D6EFD;color:#FFFFFF">Obligatoire</span><div><strong>Une <strong>CA d&#x27;entreprise (AD CS)</strong> déclarée dans l&#x27;Active Directory</strong></div></li><li class="prereq"><span class="pill" style="background:#0D6EFD;color:#FFFFFF">Obligatoire</span><div><strong>Racine interne AlmaviaCX dans le magasin <strong>Autorités racines de confiance</strong></strong><p>Distribuée automatiquement aux postes du domaine par une Enterprise CA.</p></div></li><li class="prereq"><span class="pill" style="background:#0D6EFD;color:#FFFFFF">Obligatoire</span><div><strong>Modèle <strong>Signature de code</strong> publié + droit d&#x27;<strong>enrôlement</strong> pour ton compte</strong><p>À défaut, voir l&#x27;étape 1, Cas B.</p></div></li><li class="prereq"><span class="pill" style="background:#0D6EFD;color:#FFFFFF">Obligatoire</span><div><strong>Accès Internet au moment du build pour l&#x27;<strong>horodatage</strong> (RFC 3161)</strong></div></li><li class="prereq"><span class="pill" style="background:#6C757D;color:#FFFFFF">Optionnel</span><div><strong><code>signtool</code> (Windows SDK) accessible sur le PATH</strong><p>Requis pour la signature native Tauri ; sinon, option de repli PowerShell (section 4).</p></div></li></ul><pre class="code" data-lang="powershell"><code># 1. Poste sur le domaine ?  (attendu : True)
+(Get-CimInstance Win32_ComputerSystem) | Select-Object Domain, PartOfDomain
+
+# 2. CA d&#x27;entreprise déclarée dans l&#x27;AD ?  (doit lister une ou plusieurs CA)
+$conf = ([ADSI]&quot;LDAP://RootDSE&quot;).Get(&quot;configurationNamingContext&quot;)
+([ADSI]&quot;LDAP://CN=Enrollment Services,CN=Public Key Services,CN=Services,$conf&quot;).Children |
+  ForEach-Object { &quot;{0}   (serveur : {1})&quot; -f $_.cn, $_.dNSHostName }
+
+# 3. Racine interne AlmaviaCX déjà de confiance ?
+Get-ChildItem Cert:\LocalMachine\Root, Cert:\LocalMachine\CA |
+  Where-Object Subject -match &quot;almavia&quot; |
+  Select-Object Subject, NotAfter, Thumbprint</code></pre><h2 id="3-procédure-de-signature">3. Procédure de signature</h2><ol class="steps"><li class="step"><div class="step-t">Obtenir le certificat de signature de code</div><p><strong>Cas A — le modèle est publié et tu as le droit d&#x27;enrôlement (libre-service).</strong> Depuis la console des certificats utilisateur :</p><ul><li>Ouvre <code>certmgr.msc</code> → <strong>Personnel → Certificats</strong> → clic droit → <em>Toutes les tâches → Demander un nouveau certificat</em>.</li><li><em>Suivant</em> → <strong>Stratégie d&#x27;inscription Active Directory</strong> → <em>Suivant</em>.</li><li>Coche <strong>« Signature de code »</strong> (Code Signing) → <strong>Inscription</strong>.</li><li>Le certificat et sa clé privée atterrissent dans <code>Cert:\CurrentUser\My</code>.</li></ul><div class="adm" style="background:#EAE6FF;border-color:#5243AA"><div class="adm-h" style="color:#403294"><span class="adm-i" style="background:#5243AA">≡</span>Cas B — le modèle n&#x27;apparaît pas</div><p>Demande à l&#x27;IT de <strong>publier le modèle Code Signing</strong> sur la CA d&#x27;entreprise et de t&#x27;accorder les droits <strong>Lecture + Inscription</strong>. Alternative : l&#x27;IT t&#x27;émet un fichier <code>.pfx</code>, importé via <code>Import-PfxCertificate -FilePath cert.pfx -CertStoreLocation Cert:\CurrentUser\My</code>.</p></div></li><li class="step"><div class="step-t">Récupérer l&#x27;empreinte (thumbprint) du certificat</div><pre class="code" data-lang="powershell"><code>Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+  Select-Object Subject, Thumbprint, NotAfter</code></pre><p class="step-note">Note le <code>Thumbprint</code> (hexadécimal en majuscules, sans espaces) : c&#x27;est la clé pour l&#x27;étape suivante.</p></li><li class="step"><div class="step-t">Configurer la signature native dans Tauri (recommandé)</div><p>Renseigne l&#x27;empreinte dans <code>src-tauri/tauri.conf.json</code>, section <code>bundle.windows</code>. Le build signera alors <strong>le <code>.exe</code> et l&#x27;installeur NSIS</strong> en une seule passe.</p><pre class="code" data-lang="json"><code>&quot;windows&quot;: {
+  &quot;webviewInstallMode&quot;: { &quot;type&quot;: &quot;embedBootstrapper&quot; },
+  &quot;certificateThumbprint&quot;: &quot;TON_THUMBPRINT_SANS_ESPACES&quot;,
+  &quot;digestAlgorithm&quot;: &quot;sha256&quot;,
+  &quot;timestampUrl&quot;: &quot;http://timestamp.digicert.com&quot;
+}</code></pre><div class="adm" style="background:#FFFAE6;border-color:#FF8B00"><div class="adm-h" style="color:#974F0C"><span class="adm-i" style="background:#FF8B00">!</span>signtool requis</div><p>La signature native s&#x27;appuie sur <code>signtool</code> (Windows SDK). Vérifie sa présence avec <code>Get-Command signtool</code>. Comme <code>build.ps1</code> charge déjà l&#x27;environnement VS2022, il est souvent sur le PATH. Sinon, utilise l&#x27;option de repli (section 4).</p></div><div class="adm" style="background:#DEEBFF;border-color:#0052CC"><div class="adm-h" style="color:#0747A6"><span class="adm-i" style="background:#0052CC">i</span>Horodatage</div><p>Le serveur d&#x27;horodatage (DigiCert) est <strong>public</strong> et indépendant de la CA interne ; il faut juste un accès Internet au build. Sans lui, la signature devient invalide dès l&#x27;expiration du certificat.</p></div></li><li class="step"><div class="step-t">Assurer la confiance sur les autres postes</div><p>C&#x27;est ce qui fait disparaître « éditeur inconnu » <strong>partout</strong>, pas seulement sur ton poste. Une <strong>Enterprise CA</strong> publie automatiquement sa racine dans le magasin <em>Autorités racines de confiance</em> de tous les postes du domaine (via l&#x27;AD).</p><p>Si la vérification n°3 de la section 2 a trouvé la racine présente, il n&#x27;y a rien de plus à faire : chaque poste du domaine affichera « AlmaviaCX ». En cas de doute, demande à l&#x27;IT de confirmer la distribution de la racine par GPO.</p></li><li class="step"><div class="step-t">Produire l&#x27;installeur signé</div><p>Lance le build habituel : les artefacts sont signés automatiquement.</p><pre class="code" data-lang="powershell"><code>.\build.ps1</code></pre></li></ol><h2 id="4-option-de-repli-signer-sans-signtool-powershell">4. Option de repli — signer sans signtool (PowerShell)</h2><p>Si <code>signtool</code> n&#x27;est pas disponible, signe en PowerShell pur après le build. Cette commande ne dépend d&#x27;aucun SDK.</p><div class="adm" style="background:#FFFAE6;border-color:#FF8B00"><div class="adm-h" style="color:#974F0C"><span class="adm-i" style="background:#FF8B00">!</span>Ne pas oublier l&#x27;installeur</div><p>Cette approche signe un seul fichier. Répète la commande sur l&#x27;installeur NSIS produit (<code>...\target\release\bundle\nsis\*.exe</code>).</p></div><pre class="code" data-lang="powershell"><code>$cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Select-Object -First 1
+Set-AuthenticodeSignature -FilePath &quot;.\src-tauri\target\release\skillmanager.exe&quot; `
+  -Certificate $cert -HashAlgorithm SHA256 `
+  -TimestampServer &quot;http://timestamp.digicert.com&quot;</code></pre><h2 id="5-vérification">5. Vérification</h2><p>Contrôle que la signature est valide et horodatée, puis que l&#x27;alerte a disparu.</p><ul class="checks"><li class="check"><div class="check-l"><span class="chk">✓</span><strong>La signature est <strong>valide</strong> et horodatée</strong></div><pre class="code"><code>Get-AuthenticodeSignature &quot;.\src-tauri\target\release\skillmanager.exe&quot; | Format-List Status, StatusMessage, TimeStamperCertificate</code></pre><div class="check-exp"><span>Attendu :</span> Status = Valid ; TimeStamperCertificate non vide</div></li><li class="check"><div class="check-l"><span class="chk">✓</span><strong>L&#x27;UAC affiche l&#x27;éditeur au lancement de l&#x27;installeur en élévation</strong></div><div class="check-exp"><span>Attendu :</span> « AlmaviaCX » au lieu de « Éditeur inconnu »</div></li><li class="check"><div class="check-l"><span class="chk">✓</span><strong>Pas de Mark-of-the-Web sur la copie distribuée (SmartScreen muet)</strong></div><pre class="code"><code>Get-Item .\skillmanager.exe -Stream Zone.Identifier -ErrorAction SilentlyContinue</code></pre><div class="check-exp"><span>Attendu :</span> Aucune sortie = pas de marque Internet</div></li></ul><h2 id="6-dépannage">6. Dépannage</h2><div class="ts"><div class="ts-p"><code>signtool</code> introuvable pendant le build</div><div class="ts-cause"><span>Cause :</span> Windows SDK non installé ou absent du PATH.</div><div class="ts-sol"><span>Solution :</span> Utiliser l&#x27;option de repli PowerShell (section 4), ou installer le Windows SDK et relancer depuis un shell VS2022.</div></div><div class="ts"><div class="ts-p">Après build, <code>Status</code> = NotSigned ou HashMismatch</div><div class="ts-cause"><span>Cause :</span> Thumbprint incorrect (espaces, casse) ou certificat sans clé privée.</div><div class="ts-sol"><span>Solution :</span> Revérifier le <code>Thumbprint</code> (majuscules, sans espaces) et que le certificat dans <code>Cert:\CurrentUser\My</code> possède bien sa clé privée.</div></div><div class="ts"><div class="ts-p">Le modèle « Signature de code » n&#x27;apparaît pas dans <code>certmgr.msc</code></div><div class="ts-cause"><span>Cause :</span> Modèle non publié sur la CA ou droits d&#x27;enrôlement manquants.</div><div class="ts-sol"><span>Solution :</span> Demander à l&#x27;IT de publier le modèle et d&#x27;accorder Lecture + Inscription à ton compte (Cas B).</div></div><div class="ts"><div class="ts-p">UAC affiche encore « Éditeur inconnu » sur un autre poste</div><div class="ts-cause"><span>Cause :</span> La racine AlmaviaCX n&#x27;est pas dans le magasin de confiance de ce poste (souvent un poste hors domaine).</div><div class="ts-sol"><span>Solution :</span> Déployer la racine via GPO ; si le poste est hors périmètre du domaine, envisager Azure Trusted Signing.</div></div><div class="ts"><div class="ts-p">La signature devient « invalide » après quelques mois</div><div class="ts-cause"><span>Cause :</span> Signature non horodatée : elle expire avec le certificat.</div><div class="ts-sol"><span>Solution :</span> Re-signer en incluant <code>-TimestampServer</code> (ou <code>timestampUrl</code> côté Tauri).</div></div><h2 id="7-annexe-prouver-le-mécanisme-sans-lit-dry-run-auto-signé">7. Annexe — Prouver le mécanisme sans l&#x27;IT (dry-run auto-signé)</h2><p>Pour valider toute la chaîne (signer → faire confiance → l&#x27;UAC affiche l&#x27;éditeur) avant même d&#x27;avoir le vrai certificat interne, utilise un certificat <strong>auto-signé</strong> jetable.</p><div class="adm" style="background:#FFEBE6;border-color:#DE350B"><div class="adm-h" style="color:#BF2600"><span class="adm-i" style="background:#DE350B">✕</span>Nettoyage obligatoire</div><p>Ne laisse jamais une racine auto-signée de confiance sur le poste. Les étapes 6 du bloc ci-dessus retirent le certificat de test des magasins après validation.</p></div><pre class="code" data-lang="powershell"><code># 1. Créer un cert code-signing bidon
+$cert = New-SelfSignedCertificate -Type CodeSigningCert `
+          -Subject &quot;CN=Valentin Pitel (test)&quot; -CertStoreLocation Cert:\CurrentUser\My
+
+# 2. Signer une COPIE de l&#x27;exe (jamais l&#x27;original)
+Copy-Item .\src-tauri\target\release\skillmanager.exe .\test.exe
+Set-AuthenticodeSignature -FilePath .\test.exe -Certificate $cert -HashAlgorithm SHA256
+
+# 3. À ce stade, test.exe en élévation affiche encore &quot;Éditeur inconnu&quot;
+
+# 4. Rendre le cert de confiance (admin) — SUR CE POSTE DE TEST UNIQUEMENT
+Export-Certificate -Cert $cert -FilePath $env:TEMP\test.cer
+Import-Certificate -FilePath $env:TEMP\test.cer -CertStoreLocation Cert:\LocalMachine\Root
+
+# 5. Relancer test.exe → UAC affiche &quot;Valentin Pitel (test)&quot;
+
+# 6. Nettoyage OBLIGATOIRE
+Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -match &quot;Valentin Pitel \(test\)&quot; | Remove-Item
+Get-ChildItem Cert:\CurrentUser\My   | Where-Object Subject -match &quot;Valentin Pitel \(test\)&quot; | Remove-Item
+Remove-Item .\test.exe, $env:TEMP\test.cer</code></pre><h2 id="8-aide-mémoire">8. Aide-mémoire</h2><figure class="table-wrap"><figcaption class="cap">Commandes clés</figcaption><table><thead><tr><th>Besoin</th><th>Commande</th></tr></thead><tbody><tr><td>Poste sur le domaine ?</td><td><code>(Get-CimInstance Win32_ComputerSystem).PartOfDomain</code></td></tr><tr><td>Racine interne de confiance ?</td><td><code>Get-ChildItem Cert:\LocalMachine\Root | ? Subject -match &quot;almavia&quot;</code></td></tr><tr><td>Demander un cert (GUI)</td><td><code>certmgr.msc</code> → Personnel → Demander un nouveau certificat</td></tr><tr><td>Empreinte (thumbprint)</td><td><code>Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert</code></td></tr><tr><td>Signer (PowerShell)</td><td><code>Set-AuthenticodeSignature -FilePath … -Certificate … -TimestampServer …</code></td></tr><tr><td>Vérifier la signature</td><td><code>Get-AuthenticodeSignature … | Format-List Status, …</code></td></tr></tbody></table></figure></main></body></html>

@@ -272,6 +272,8 @@ export interface AdminDraft {
   tags: TagSpec[];
   companion: AdminDraft | null;
   pendingMeta: PendingMeta | null;
+  /** One pending record per skill for a multi-skill upload (they share the PR). */
+  pendingMetas?: PendingMeta[];
 }
 
 export interface UploadResult {
@@ -295,6 +297,35 @@ export interface UploadSkillArgs {
   bumpLevel?: BumpLevel;
   /** Free-text release notes for the tag/release and PR body. */
   versionDescription?: string;
+}
+
+/** One skill in a bulk upload (all items target the same plugin). */
+export interface BulkSkillItem {
+  localFolder: string;
+  /** Defaults to the local folder name when empty. */
+  targetName?: string;
+  /** Skill version stamped on SKILL.md; empty → derived from bumpLevel. */
+  newVersion?: string;
+}
+
+/** Upload several skills to ONE plugin in a single PR. */
+export interface BulkUploadArgs {
+  marketplace: string;
+  pluginName: string;
+  items: BulkSkillItem[];
+  bumpLevel?: BumpLevel;
+  versionDescription?: string;
+}
+
+/** Args for `add_skill_to_plugin` — scaffold a blank skill or copy one in. */
+export interface AddSkillArgs {
+  plugin: Plugin;
+  mode: "blank" | "copy";
+  name: string;
+  description?: string;
+  body?: string;
+  /** Source folder to copy, for mode === "copy". */
+  sourceFolder?: string;
 }
 
 export interface LocalSkill {

@@ -27,7 +27,7 @@ pub struct UploadResult {
     pub pr_number: i64,
 }
 
-fn safe_slug(s: &str) -> String {
+pub fn safe_slug(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
@@ -148,7 +148,7 @@ pub fn build_manifest_bump(existing_manifest: &Value, new_version: &str) -> Vec<
 }
 
 const DEFAULT_MAX_BYTES: u64 = 5_000_000;
-const DEFAULT_SKIP: &[&str] = &[".git", "__pycache__", ".DS_Store"];
+pub const DEFAULT_SKIP: &[&str] = &[".git", "__pycache__", ".DS_Store"];
 
 pub fn collect_skill_folder_changes(
     local_folder: &Path,

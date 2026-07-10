@@ -6,7 +6,7 @@
 
 use crate::admin::{self, FileChange, UploadResult};
 use crate::admin_drafts::{
-    self, AdminDraft, BumpSuggestion, LocalSkill, RemoteSkillInfo, UploadSkillArgs,
+    self, AdminDraft, BulkUploadArgs, BumpSuggestion, LocalSkill, RemoteSkillInfo, UploadSkillArgs,
 };
 use crate::app_uninstaller::{self, UninstallInfo};
 use crate::app_updater::{self, AppUpdateInfo};
@@ -1514,6 +1514,26 @@ pub async fn admin_prepare_upload_skill(args: UploadSkillArgs) -> Result<AdminDr
     })
 }
 
+/// Bulk upload: several skills → ONE PR against the plugin's repo (single manifest
+/// bump). The frontend groups dirty skills by plugin and calls this once per
+/// group. Same "description de version obligatoire" rule as the single flow.
+#[tauri::command]
+pub async fn admin_prepare_upload_skills(args: BulkUploadArgs) -> Result<AdminDraft> {
+    if args.version_description.trim().is_empty() {
+        return Err(crate::error::Error::Invalid(
+            "La description de version est obligatoire.".into(),
+        ));
+    }
+    logged_admin(
+        "admin_prepare_upload_skills",
+        format!("{} ({} skills)", args.plugin_name, args.items.len()),
+        || {
+            let gh = client_for_marketplace(&args.marketplace)?;
+            admin_drafts::prepare_upload_skills(&gh, &args)
+        },
+    )
+}
+
 #[tauri::command]
 pub async fn admin_prepare_delete_skill(
     marketplace: String,
@@ -1709,6 +1729,67 @@ pub async fn skill_watch_set(
 pub async fn skill_mark_synced(state: State<'_, SkillWatch>, folder: String) -> Result<()> {
     state.mark_synced(&folder);
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddSkillArgs {
+    /// The target plugin (only `install_path` is used, to locate its folder).
+    pub plugin: Plugin,
+    /// "blank" (scaffold a SKILL.md) or "copy" (import `source_folder`).
+    pub mode: String,
+    /// Skill name → both the frontmatter `name:` and the (slugged) folder name.
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub body: String,
+    /// Source folder to copy in, for `mode == "copy"`.
+    #[serde(default)]
+    pub source_folder: String,
+}
+
+/// Create a new skill inside an installed plugin's folder (`skills/<slug>/`) and
+/// flag it "modifié" so it surfaces the push nudge / bulk selection. `blank`
+/// scaffolds a SKILL.md from name+description(+body); `copy` imports an existing
+/// local skill folder wholesale.
+#[tauri::command]
+pub async fn add_skill_to_plugin(
+    app: AppHandle,
+    watch: State<'_, SkillWatch>,
+    args: AddSkillArgs,
+) -> Result<PathBuf> {
+    let install_path = args.plugin.install_path.clone().ok_or_else(|| {
+        crate::error::Error::Invalid(
+            "Ce plugin n'est pas installé localement — impossible d'y ajouter un skill.".into(),
+        )
+    })?;
+    let mode = match args.mode.as_str() {
+        "copy" => {
+            if args.source_folder.trim().is_empty() {
+                return Err(crate::error::Error::Invalid(
+                    "Aucun dossier source fourni pour l'import.".into(),
+                ));
+            }
+            local_scanner::NewSkillMode::Copy {
+                source: PathBuf::from(args.source_folder.trim()),
+            }
+        }
+        _ => local_scanner::NewSkillMode::Blank {
+            description: args.description.clone(),
+            body: args.body.clone(),
+        },
+    };
+    let dest = local_scanner::create_skill_in_plugin(&install_path, &args.name, mode)?;
+    tracing::info!(
+        "add_skill_to_plugin: {}@{} -> {}",
+        args.plugin.name,
+        args.plugin.marketplace_name,
+        dest.display()
+    );
+    // Flag it as "new, not yet pushed" so the badge lights up immediately.
+    watch.mark_new(&app, &dest.to_string_lossy());
+    Ok(dest)
 }
 
 /// Re-seed the UI's dirty map from the watcher's in-memory state (no rescan).

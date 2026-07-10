@@ -74,7 +74,8 @@ import {
 } from "@/components/DuplicateSkillsPanel";
 import { ArchivedSkillsPanel } from "@/components/ArchivedSkillsPanel";
 import { AddMarketplaceDialog } from "@/components/AddMarketplaceDialog";
-import { WizardHost, type WizardKind } from "@/components/AdminWizards";
+import { AddSkillDialog, WizardHost, type WizardKind } from "@/components/AdminWizards";
+import { BulkPushDialog, type BulkCandidate } from "@/components/BulkPushDialog";
 import { useInstallMarketplace } from "@/hooks/useInstallMarketplace";
 import { useIsSkillDirty, useSkillDirty } from "@/stores/skillDirty";
 import type {
@@ -969,11 +970,21 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
   );
 }
 
-function PluginDetail({ plugin }: { plugin: Plugin }) {
+function PluginDetail({
+  plugin,
+  onAddSkill,
+}: {
+  plugin: Plugin;
+  onAddSkill: (p: Plugin) => void;
+}) {
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
   const findMarketplace = useApp((s) => s.findMarketplace);
   const installMarketplace = useInstallMarketplace();
+  const installed =
+    plugin.installState === "installed" ||
+    plugin.installState === "outdated" ||
+    plugin.installState === "local_only";
 
   const installMutation = useMutation({
     mutationFn: async (p: Plugin) => {
@@ -1065,9 +1076,7 @@ function PluginDetail({ plugin }: { plugin: Plugin }) {
               {plugin.installState === "outdated" ? "Mettre à jour" : "Installer"}
             </Button>
           )}
-          {(plugin.installState === "installed" ||
-            plugin.installState === "outdated" ||
-            plugin.installState === "local_only") && (
+          {installed && (
             <Button
               size="sm"
               variant="outline"
@@ -1076,6 +1085,16 @@ function PluginDetail({ plugin }: { plugin: Plugin }) {
             >
               <Trash2 className="mr-1 h-3 w-3" />
               Désinstaller
+            </Button>
+          )}
+          {installed && (
+            <Button
+              size="sm"
+              onClick={() => onAddSkill(plugin)}
+              title="Créer un nouveau skill dans le dossier de ce plugin"
+            >
+              <Plus className="mr-1 h-3 w-3" />
+              Ajouter un skill
             </Button>
           )}
           {plugin.skills.length > 0 && (
@@ -1363,6 +1382,7 @@ function DetailPanel({
   onArchived,
   onRestored,
   onPushSkill,
+  onAddSkill,
 }: {
   selection: Selection;
   localName: string;
@@ -1371,6 +1391,7 @@ function DetailPanel({
   onArchived: () => void;
   onRestored: () => void;
   onPushSkill: (entry: SkillEntry) => void;
+  onAddSkill: (p: Plugin) => void;
 }) {
   const findPlugin = useApp((s) => s.findPlugin);
   const findMarketplace = useApp((s) => s.findMarketplace);
@@ -1433,7 +1454,7 @@ function DetailPanel({
   if (selection.kind === "plugin") {
     const p = findPlugin(selection.marketplace, selection.plugin);
     if (!p) return null;
-    return <PluginDetail plugin={p} />;
+    return <PluginDetail plugin={p} onAddSkill={onAddSkill} />;
   }
 
   if (selection.kind === "duplicate") {
@@ -1498,9 +1519,12 @@ export function SkillsPage() {
   const [showDescription, setShowDescription] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [wizard, setWizard] = useState<WizardKind | null>(null);
+  const [addSkillFor, setAddSkillFor] = useState<Plugin | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
   // Folder being pushed, so we can mark it synced once the PR is opened.
   const pushFolderRef = useRef<string | null>(null);
   const setDirtyOne = useSkillDirty((s) => s.setOne);
+  const dirtyMap = useSkillDirty((s) => s.dirty);
 
   const localName = localOnly?.name ?? "(local skills)";
 
@@ -1572,6 +1596,32 @@ export function SkillsPage() {
     if (localOnly && localOnly.plugins.length > 0) out.unshift(localOnly);
     return out;
   }, [marketplaces, localOnly]);
+
+  // Dirty & pushable skills = installed skills under an editable marketplace with
+  // a source repo (same gate as the single-skill "Pousser"). Drives the bulk
+  // push button + dialog. Includes freshly-added skills (they read dirty too).
+  const bulkCandidates = useMemo<BulkCandidate[]>(() => {
+    const out: BulkCandidate[] = [];
+    for (const m of marketplaces) {
+      if (!m.editable || !m.sourceRepo) continue;
+      for (const p of m.plugins) {
+        for (const s of p.skills) {
+          if (!s.folder || !dirtyMap[s.folder]) continue;
+          const folder = s.folder;
+          const basename =
+            folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || s.name;
+          out.push({
+            marketplace: m.name,
+            plugin: p,
+            skillName: s.name,
+            folder,
+            targetName: basename,
+          });
+        }
+      }
+    }
+    return out;
+  }, [marketplaces, dirtyMap]);
 
   const filtersActive = query.trim() !== "" || stateFilter !== "all";
 
@@ -1646,6 +1696,24 @@ export function SkillsPage() {
           Ajouter
         </Button>
       </div>
+
+      {bulkCandidates.length >= 2 && (
+        <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2">
+          <UploadCloud className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span className="min-w-0 flex-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+            {bulkCandidates.length} compétences modifiées
+          </span>
+          <Button
+            size="sm"
+            className="h-7 shrink-0 gap-1 px-2 text-xs"
+            onClick={() => setBulkOpen(true)}
+            title="Ouvrir une PR par plugin pour toutes les compétences modifiées"
+          >
+            <UploadCloud className="h-3.5 w-3.5" />
+            Pousser en masse
+          </Button>
+        </div>
+      )}
 
       <div className="space-y-2 border-b p-3">
         <DuplicateSkillsPanel
@@ -1749,6 +1817,7 @@ export function SkillsPage() {
         onArchived={() => setSelection(null)}
         onRestored={() => setSelection(null)}
         onPushSkill={pushSkill}
+        onAddSkill={(p) => setAddSkillFor(p)}
       />
     </ScrollArea>
   );
@@ -1766,6 +1835,32 @@ export function SkillsPage() {
         active={wizard}
         onClose={() => setWizard(null)}
         onSubmitted={onWizardSubmitted}
+      />
+      {addSkillFor && (
+        <AddSkillDialog
+          open
+          plugin={addSkillFor}
+          onOpenChange={(v) => !v && setAddSkillFor(null)}
+          onCreated={(folder) => {
+            // Backend already flags it dirty (skill-dirty event) and a refresh is
+            // invalidated by the dialog; keep the plugin selected so the new skill
+            // shows up under it once the tree refreshes.
+            setDirtyOne(folder, true);
+            setSelection({
+              kind: "plugin",
+              marketplace: addSkillFor.marketplaceName,
+              plugin: addSkillFor.name,
+            });
+          }}
+        />
+      )}
+      <BulkPushDialog
+        open={bulkOpen}
+        onOpenChange={setBulkOpen}
+        candidates={bulkCandidates}
+        onPushed={(folders) => {
+          for (const f of folders) setDirtyOne(f, false);
+        }}
       />
     </div>
   );

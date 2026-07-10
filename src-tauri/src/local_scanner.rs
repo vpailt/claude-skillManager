@@ -144,6 +144,101 @@ fn resolve_plugin_root(install_path: &Path) -> PathBuf {
     install_path.to_path_buf()
 }
 
+/// How [`create_skill_in_plugin`] fills the new skill folder.
+pub enum NewSkillMode {
+    /// Scaffold a fresh SKILL.md from a description + optional body.
+    Blank { description: String, body: String },
+    /// Copy an existing local skill folder's contents in wholesale.
+    Copy { source: PathBuf },
+}
+
+/// Create a new skill folder inside an installed plugin's cache directory, under
+/// `<plugin_root>/skills/<slug>/`, and return the created folder.
+///
+/// Errors if the target already exists (never overwrites) or, in `Copy` mode, if
+/// the source isn't a directory or has no SKILL.md. The new folder is not yet on
+/// the plugin's remote repo, so the caller flags it dirty via
+/// `SkillWatch::mark_new` — it then shows the "modifié" badge and can be pushed
+/// (individually, or via the bulk flow).
+pub fn create_skill_in_plugin(
+    install_path: &Path,
+    skill_name: &str,
+    mode: NewSkillMode,
+) -> crate::error::Result<PathBuf> {
+    use crate::error::Error;
+    let name = skill_name.trim();
+    if name.is_empty() {
+        return Err(Error::Invalid("Skill name is required.".into()));
+    }
+    let slug = crate::admin::safe_slug(name);
+    if slug.is_empty() {
+        return Err(Error::Invalid(format!("Invalid skill name: {skill_name:?}")));
+    }
+    let plugin_root = resolve_plugin_root(install_path);
+    let dest = plugin_root.join("skills").join(&slug);
+    if dest.exists() {
+        return Err(Error::Invalid(format!(
+            "A skill folder named '{slug}' already exists in this plugin."
+        )));
+    }
+    match mode {
+        NewSkillMode::Blank { description, body } => {
+            fs::create_dir_all(&dest)?;
+            let md = crate::admin::build_skill_md(name, &description, &body);
+            fs::write(dest.join("SKILL.md"), md)?;
+        }
+        NewSkillMode::Copy { source } => {
+            if !source.is_dir() {
+                return Err(Error::NotFound(format!(
+                    "Source skill folder not found: {}",
+                    source.display()
+                )));
+            }
+            if !source.join("SKILL.md").exists() && !source.join("skill.md").exists() {
+                return Err(Error::Invalid(
+                    "The source folder has no SKILL.md — it is not a skill.".into(),
+                ));
+            }
+            copy_skill_tree(&source, &dest)?;
+        }
+    }
+    tracing::info!("create_skill_in_plugin: created {}", dest.display());
+    Ok(dest)
+}
+
+/// Recursively copy `src` into `dest`, skipping [`crate::admin::DEFAULT_SKIP`]
+/// path segments so the copied set matches what an eventual upload would ship.
+fn copy_skill_tree(src: &Path, dest: &Path) -> crate::error::Result<()> {
+    for entry in walkdir::WalkDir::new(src).sort_by_file_name() {
+        let Ok(entry) = entry else { continue };
+        let rel = match entry.path().strip_prefix(src) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if rel.as_os_str().is_empty() {
+            fs::create_dir_all(dest)?;
+            continue;
+        }
+        let skip = rel.components().any(|c| {
+            let seg = c.as_os_str().to_string_lossy();
+            crate::admin::DEFAULT_SKIP.contains(&seg.as_ref())
+        });
+        if skip {
+            continue;
+        }
+        let target = dest.join(rel);
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&target)?;
+        } else if entry.file_type().is_file() {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn scan_local_plugin(
     install_path: &Path,
     plugin_name: &str,
