@@ -370,6 +370,16 @@ impl GitHubClient {
         Ok(body)
     }
 
+    /// Turn a non-2xx response into an `Err`, extracting the forge's `message`
+    /// field when there is one.
+    ///
+    /// `404` gets [`Error::NotFound`] rather than [`Error::GitHub`], so callers
+    /// can tell "this resource does not exist" from "the call failed". That
+    /// distinction is load-bearing in `pr_poller`, which writes a tracked PR off
+    /// only on a definite 404 and never on a transport error. It also stops the
+    /// message reading `github: …` for a Gitea response — the variant name is
+    /// shared by both providers and made 404s look like they had been sent to
+    /// GitHub.
     fn check(resp: Response, method: &str, url: &str) -> Result<Response> {
         let status = resp.status();
         if status.is_client_error() || status.is_server_error() {
@@ -378,7 +388,12 @@ impl GitHubClient {
                 .ok()
                 .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
                 .unwrap_or(text);
-            return Err(Error::GitHub(format!("{method} {url} -> {status}: {msg}")));
+            let detail = format!("{method} {url} -> {status}: {msg}");
+            return Err(if status == reqwest::StatusCode::NOT_FOUND {
+                Error::NotFound(detail)
+            } else {
+                Error::GitHub(detail)
+            });
         }
         Ok(resp)
     }

@@ -16,7 +16,12 @@
 //!     toast;
 //!   * raises a **native** Windows toast itself, but only when no visible window
 //!     could have shown the in-app one — otherwise the user would get both.
+//!
+//! A PR the forge no longer knows about is written off after
+//! [`MISSING_STRIKES`] consecutive 404s. Without that, a deleted PR stays `open`
+//! in the history forever and is re-checked on every single tick.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -26,7 +31,9 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::commands::{finalize_pr_outcome, gitea_client, pr_status_of};
 use crate::config;
+use crate::error::Error;
 use crate::github_client::{GitHubClient, Provider};
+use crate::pending_prs;
 use crate::pr_history;
 
 /// Emitted whenever a tracked PR leaves the state we had recorded.
@@ -38,6 +45,13 @@ const MIN_INTERVAL_SECS: u64 = 15;
 /// How long to idle between checks while polling is switched off. Short enough
 /// that re-enabling it in Settings feels immediate.
 const DISABLED_POLL_SECS: u64 = 30;
+
+/// Consecutive "not found" answers before a tracked PR is written off as gone.
+/// More than one on purpose: a forge can 404 for a transient reason (a proxy
+/// hiccup, a repo momentarily unreadable), and there is no way to reopen a
+/// wrongly closed record from the UI. Only a real `404` counts — a transport
+/// failure never does, or a day off the VPN would bury every tracked PR.
+const MISSING_STRIKES: u32 = 3;
 
 /// Guards against arming the worker twice (the window can be recreated many
 /// times over a session; polling must not be).
@@ -66,6 +80,13 @@ pub fn start(app: AppHandle) {
 }
 
 fn worker(app: AppHandle) {
+    // Consecutive-404 tally per PR, reset by any successful read. Deliberately
+    // in memory rather than on the record: persisting it would mean rewriting
+    // `pr_history.json` on every failing tick, which is exactly the write churn
+    // `atomic_write_json` now exists to avoid. Losing the tally on restart only
+    // means a gone PR takes a few more ticks to be written off.
+    let mut missing: HashMap<(String, i64), u32> = HashMap::new();
+
     // Let the first refresh settle before adding network work of our own.
     std::thread::sleep(Duration::from_secs(10));
     loop {
@@ -75,17 +96,22 @@ fn worker(app: AppHandle) {
             continue;
         }
         let interval = (settings.ui.pr_polling_interval_seconds as u64).max(MIN_INTERVAL_SECS);
-        tick(&app, &settings);
+        tick(&app, &settings, &mut missing);
         std::thread::sleep(Duration::from_secs(interval));
     }
 }
 
-fn tick(app: &AppHandle, settings: &config::Settings) {
+fn tick(
+    app: &AppHandle,
+    settings: &config::Settings,
+    missing: &mut HashMap<(String, i64), u32>,
+) {
     let open: Vec<pr_history::PRRecord> = pr_history::load_all()
         .into_iter()
         .filter(|r| r.status == "open")
         .collect();
     if open.is_empty() {
+        missing.clear();
         return;
     }
     tracing::debug!("pr_poller: checking {} open PR(s)", open.len());
@@ -107,11 +133,37 @@ fn tick(app: &AppHandle, settings: &config::Settings) {
                 continue;
             }
         };
+        let key = (rec.repo.clone(), rec.number);
         let pr = match client.get_pull_request(&rec.repo, rec.number) {
-            Ok(v) => v,
+            Ok(v) => {
+                missing.remove(&key);
+                v
+            }
+            Err(Error::NotFound(detail)) => {
+                // The forge says this PR does not exist — it was deleted, or its
+                // repo was recreated. Give it a few strikes, then write it off so
+                // it stops being polled forever.
+                let strikes = missing.entry(key.clone()).or_insert(0);
+                *strikes += 1;
+                if *strikes >= MISSING_STRIKES {
+                    missing.remove(&key);
+                    write_off_missing(app, &rec);
+                } else {
+                    tracing::debug!(
+                        "pr_poller: PR {}#{} not found ({}/{}): {}",
+                        rec.repo,
+                        rec.number,
+                        strikes,
+                        MISSING_STRIKES,
+                        detail
+                    );
+                }
+                continue;
+            }
             Err(e) => {
                 // Networks flap and the Gitea instance is VPN-gated; a failed
-                // check is normal and must not be surfaced to the user.
+                // check is normal, must not be surfaced to the user, and must not
+                // count toward writing the PR off.
                 tracing::debug!(
                     "pr_poller: get PR {}#{} failed: {}",
                     rec.repo,
@@ -152,6 +204,48 @@ fn tick(app: &AppHandle, settings: &config::Settings) {
             tracing::debug!("pr_poller: emit failed: {e}");
         }
         maybe_notify(app, settings, &change);
+    }
+}
+
+/// Record a PR the forge no longer has as `closed` and drop any pending record
+/// still holding it "in review".
+///
+/// [`EVENT`] is emitted so an open UI resyncs its badges, but **no native toast**
+/// is raised: this is housekeeping, not an outcome the user is waiting on, and
+/// "PR #17 closed" popping up for something that was deleted days ago would be
+/// more confusing than useful.
+fn write_off_missing(app: &AppHandle, rec: &pr_history::PRRecord) {
+    tracing::info!(
+        "pr_poller: PR {}#{} gone from the forge after {} checks — recording it closed",
+        rec.repo,
+        rec.number,
+        MISSING_STRIKES
+    );
+    if let Err(e) = pr_history::update_status(&rec.repo, rec.number, "closed") {
+        tracing::warn!(
+            "pr_poller: could not write off {}#{}: {}",
+            rec.repo,
+            rec.number,
+            e
+        );
+        return;
+    }
+    if let Err(e) = pending_prs::remove_by_pr(&rec.repo, rec.number) {
+        tracing::debug!(
+            "pr_poller: could not drop pending record for {}#{}: {}",
+            rec.repo,
+            rec.number,
+            e
+        );
+    }
+    let change = PrStatusChange {
+        repo: rec.repo.clone(),
+        number: rec.number,
+        title: rec.title.clone(),
+        status: "closed".to_string(),
+    };
+    if let Err(e) = app.emit(EVENT, &change) {
+        tracing::debug!("pr_poller: emit failed: {e}");
     }
 }
 
