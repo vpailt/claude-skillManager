@@ -168,3 +168,7 @@ SkillManager/
 The shipped `.exe` is around **6.8 MB**. Release profile is tuned for size
 (`opt-level = "s"`, `lto = true`, `codegen-units = 1`, `strip = true`,
 `panic = "abort"`) and all dependencies are pure-Rust (no OpenSSL/C deps).
+
+## License
+
+Released under the [MIT License](LICENSE) — © 2026 Valentin Pitel.

@@ -3,6 +3,8 @@ name = "skillmanager"
 version = "2.4.1"
 description = "GUI for managing Claude Code plugins, marketplaces and skills"
 authors = ["Valentin Pitel"]
+license = "MIT"
+repository = "https://github.com/vpailt/claude-skillManager"
 edition = "2021"
 rust-version = "1.77"
 
