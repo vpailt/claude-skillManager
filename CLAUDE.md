@@ -38,6 +38,12 @@ last time"), run this exact cycle:
 5. **Push** `origin main` — only with a fresh, explicit user go-ahead for *this* round
    (the auto-mode classifier blocks an unprompted push to the default branch).
 
+When the round ends in a **published GitHub release**, build with `.uild.ps1 -Package`
+and attach **both** assets: the NSIS `…-setup.exe` *and*
+`SkillManager_<version>_x64_portable.zip`. The zip is what the in-place self-update
+downloads (`app_updater.rs`); a release without it falls back to running the installer —
+exactly the uninstall/reinstall experience the in-place path exists to avoid.
+
 Defaults that ship by default (changed from the originals): PR-status polling
 (`polling.enabled`) is ON; adding a marketplace (the AddMarketplaceDialog) sets both
 `autoUpdate` and `track_prs` ON; and marketplace PR tracking also auto-enables on forge
@@ -82,6 +88,9 @@ config and logs land there.
 ```
 SkillManager/
 ├── skillmanager.exe
+├── update/                    ← self-update scratch: the freshly downloaded binary,
+│                             then the replaced one until the next launch can
+│                             delete it (created on demand, swept at startup)
 ├── config/
 │   ├── config.properties      ← token + polling + UI prefs (Java-style key=value)
 │   ├── logging.properties     ← logger config (enabled, level, max files)
@@ -210,6 +219,20 @@ that requires `git` on the user's machine.
   `pr-status-changed` and raising the native toast itself when no window was
   visible to show the in-app one. Re-reads settings each tick, so the Settings
   page's toggle/interval take effect without a restart.
+- `app_updater.rs` — self-update **in place**: downloads the release's portable
+  binary, renames the running `skillmanager.exe` into `<exe_dir>/update/` (Windows
+  allows renaming a running image, never overwriting it), then renames the new one
+  onto the install slot. Two atomic same-volume renames, no installer, no
+  uninstall, nothing for the user to click; the session keeps running the old
+  code and the new build takes over at the next launch. `config::exe_path()` is
+  cached at startup precisely so post-rename resolutions still name the install
+  slot. The NSIS installer is only a fallback (read-only install dir, or a release
+  with no portable asset) and even then runs `/S` silent.
+- `update_poller.rs` — background thread doing the above on a timer
+  (`update.auto.enabled`, `update.auto.interval.hours`). Release-only: it is a
+  no-op in debug builds so it never swaps a binary into `target/debug`. Emits
+  `app-update-ready` (swapped, restart when you like) or `app-update-available`
+  (needs the user), raising the native toast itself when no window was visible.
 - `skill_watch.rs` — hashes each watched folder's *metadata* (path + size +
   mtime), never its contents, and re-hashes only the roots a filesystem event
   actually touched. Both matter: the old content hash read ~3 MB per event, under
@@ -244,6 +267,14 @@ that requires `git` on the user's machine.
 - `hooks/useRefresh.ts` — TanStack Query bridge for the refresh pipeline; UI components
   consume the resulting query state, not the raw command.
 - `hooks/usePrPolling.ts` — gated by `ui.prPollingEnabled` in settings; min interval 15s.
+- `hooks/useAppUpdateEvents.ts` + `stores/appUpdate.ts` — mirror of the Rust
+  self-updater: the update happens without the UI, this only reflects it
+  (sidebar pill, toast, Settings card) and exposes `restartNow()`.
+  `components/UpdateBanner.tsx` is the top bar, and it is deliberately narrower
+  than that: it appears **only** for an update still waiting on the user, never
+  for one already swapped in — that one is done, and a permanent bar would be
+  noise. Dismissal is per-version and session-only. `App.tsx` is a flex
+  **column** for the bar, so don't turn the root back into a row.
 - `stores/ui.ts` — single source of truth for theme/density/sidebar/polling prefs.
   `stores/theme.ts` is a thin re-export alias kept for legacy imports.
 - `stores/notifications.ts` — in-app toast queue. The polling hook and Settings page

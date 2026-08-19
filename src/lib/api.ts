@@ -23,6 +23,7 @@ import type {
   Settings,
   SettingsPaths,
   SkillDirtyState,
+  StagedUpdate,
   TrackedPr,
   UiPrefs,
   UninstallInfo,
@@ -257,6 +258,14 @@ export const api = {
 
   // --- app self-update ---
   appCheckUpdate: () => invoke<AppUpdateInfo>("app_check_update"),
+  /** Update already swapped onto disk this session (null when none). */
+  appUpdateStaged: () => invoke<StagedUpdate | null>("app_update_staged"),
+  /** In-place update: swap the new binary in, keep this session running. */
+  appApplyUpdate: (info: AppUpdateInfo) =>
+    invoke<StagedUpdate>("app_apply_update", { info }),
+  /** Relaunch into whatever skillmanager.exe now holds. */
+  appRestart: () => invoke<void>("app_restart"),
+  /** Fallback for read-only installs: run the NSIS installer silently. */
   appInstallUpdate: (assetUrl: string, assetName: string) =>
     invoke<void>("app_install_update", { assetUrl, assetName }),
 

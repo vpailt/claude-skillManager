@@ -78,6 +78,21 @@ pub fn exe_dir() -> PathBuf {
         .clone()
 }
 
+/// Absolute path of `skillmanager.exe`, captured at startup.
+///
+/// Cached deliberately: the in-place self-update *renames* the running image
+/// out of the way (`app_updater`), and a path resolved after that must still
+/// name the install slot — the file the next launch will run — not the parked
+/// old binary.
+pub fn exe_path() -> PathBuf {
+    static CACHE: OnceLock<PathBuf> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            std::env::current_exe().unwrap_or_else(|_| exe_dir().join("skillmanager.exe"))
+        })
+        .clone()
+}
+
 /// `<exe_dir>/config`. Always created on first access.
 pub fn app_settings_dir() -> PathBuf {
     let dir = exe_dir().join("config");
@@ -88,6 +103,15 @@ pub fn app_settings_dir() -> PathBuf {
 /// `<exe_dir>/logs`. Always created on first access.
 pub fn logs_dir() -> PathBuf {
     let dir = exe_dir().join("logs");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
+/// `<exe_dir>/update` — scratch space for the in-place self-update: the freshly
+/// downloaded binary lands here, and the replaced one is parked here until the
+/// next launch can delete it (Windows keeps the running image locked).
+pub fn update_dir() -> PathBuf {
+    let dir = exe_dir().join("update");
     let _ = fs::create_dir_all(&dir);
     dir
 }
@@ -230,6 +254,18 @@ pub struct UiPrefs {
     pub notify_warning: bool,
     #[serde(default = "default_true")]
     pub notify_error: bool,
+    /// Look for a new SkillManager release in the background and, when the
+    /// release ships a portable binary, swap it in place (see `app_updater`).
+    /// Off means the user drives updates from the Settings page.
+    #[serde(default = "default_true")]
+    pub auto_update_enabled: bool,
+    /// Hours between background update checks. Floored at 1 by the poller.
+    #[serde(default = "default_update_interval_hours")]
+    pub auto_update_interval_hours: u32,
+}
+
+fn default_update_interval_hours() -> u32 {
+    6
 }
 
 fn default_close_to_tray() -> bool {
@@ -256,6 +292,8 @@ impl Default for UiPrefs {
             notify_info: true,
             notify_warning: true,
             notify_error: true,
+            auto_update_enabled: true,
+            auto_update_interval_hours: default_update_interval_hours(),
         }
     }
 }
@@ -331,10 +369,13 @@ const PROP_UI_NOTIFY_SUCCESS: &str = "ui.notifications.native.success";
 const PROP_UI_NOTIFY_INFO: &str = "ui.notifications.native.info";
 const PROP_UI_NOTIFY_WARNING: &str = "ui.notifications.native.warning";
 const PROP_UI_NOTIFY_ERROR: &str = "ui.notifications.native.error";
+const PROP_UPDATE_AUTO: &str = "update.auto.enabled";
+const PROP_UPDATE_INTERVAL: &str = "update.auto.interval.hours";
 
 const PROPS_SECTIONS: &[(&str, &[&str])] = &[
     ("PR status polling", &["polling."]),
     ("UI preferences", &["ui."]),
+    ("Application updates", &["update."]),
 ];
 
 fn settings_from_properties_and_marketplaces(
@@ -362,6 +403,9 @@ fn settings_from_properties_and_marketplaces(
             notify_info: props.get_bool(PROP_UI_NOTIFY_INFO, true),
             notify_warning: props.get_bool(PROP_UI_NOTIFY_WARNING, true),
             notify_error: props.get_bool(PROP_UI_NOTIFY_ERROR, true),
+            auto_update_enabled: props.get_bool(PROP_UPDATE_AUTO, true),
+            auto_update_interval_hours: props
+                .get_u32(PROP_UPDATE_INTERVAL, default_update_interval_hours()),
         },
     }
 }
@@ -381,6 +425,8 @@ fn settings_to_properties(s: &Settings) -> Properties {
     p.set_bool(PROP_UI_NOTIFY_INFO, s.ui.notify_info);
     p.set_bool(PROP_UI_NOTIFY_WARNING, s.ui.notify_warning);
     p.set_bool(PROP_UI_NOTIFY_ERROR, s.ui.notify_error);
+    p.set_bool(PROP_UPDATE_AUTO, s.ui.auto_update_enabled);
+    p.set_u32(PROP_UPDATE_INTERVAL, s.ui.auto_update_interval_hours);
     p
 }
 

@@ -29,6 +29,7 @@ pub mod skill_watch;
 pub mod taskbar;
 pub mod token_store;
 pub mod tray;
+pub mod update_poller;
 pub mod usage_audit;
 
 use commands::*;
@@ -41,6 +42,23 @@ pub fn run() {
         "SkillManager starting (version {})",
         env!("CARGO_PKG_VERSION")
     );
+
+    // Pin the executable path before anything can rename it (the self-update
+    // does exactly that), so every later resolution names the install slot.
+    let _ = config::exe_path();
+
+    // Relaunched by the self-updater: the outgoing process is still alive for a
+    // moment. Wait it out *here*, before the single-instance plugin arms —
+    // otherwise the guard sees the old process, hands the session back to the
+    // build we just replaced, and this one exits.
+    if let Some(pid) = app_updater::wait_pid_from_args() {
+        tracing::info!("waiting for the outgoing process {} to exit", pid);
+        app_updater::wait_for_pid(pid, 15_000);
+    }
+    // Sweep the binary a previous update parked in <exe_dir>/update — it was
+    // locked while its process ran, and this launch is the first that can
+    // delete it.
+    app_updater::cleanup_stale();
 
     tauri::Builder::default()
         // Single-instance must be registered first so the callback fires before
@@ -104,6 +122,10 @@ pub fn run() {
             // PR status polling lives in Rust so it keeps running (and keeps
             // raising notifications) when the UI has been released to tray.
             pr_poller::start(app.handle().clone());
+
+            // Same reasoning for the self-updater: it swaps the binary in place
+            // in the background, so it must survive the window being released.
+            update_poller::start(app.handle().clone());
 
             // Honor `start_minimized`: send the main window straight to tray.
             let prefs = config::load_settings().ui;
@@ -200,6 +222,9 @@ pub fn run() {
             usage_audit,
             usage_export_xlsx,
             app_check_update,
+            app_update_staged,
+            app_apply_update,
+            app_restart,
             app_install_update,
             app_detect_uninstaller,
             app_uninstall,

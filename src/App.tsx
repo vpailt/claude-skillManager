@@ -2,11 +2,13 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Sidebar } from "@/components/Sidebar";
 import { NotificationStack } from "@/components/NotificationStack";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { useRefresh } from "@/hooks/useRefresh";
 import { usePrPolling } from "@/hooks/usePrPolling";
 import { useTrayEvents } from "@/hooks/useTrayEvents";
 import { useTaskbarBadge } from "@/hooks/useTaskbarBadge";
 import { useSkillWatch } from "@/hooks/useSkillWatch";
+import { useAppUpdateEvents } from "@/hooks/useAppUpdateEvents";
 import { useUi } from "@/stores/ui";
 import { useNotifications } from "@/stores/notifications";
 import { useQuery } from "@tanstack/react-query";
@@ -58,6 +60,8 @@ export default function App() {
   useTaskbarBadge();
   // Watch editable skill folders for local edits → "Pousser la modification".
   useSkillWatch();
+  // Self-update: reflect what the Rust updater did (or couldn't do) in the UI.
+  useAppUpdateEvents();
 
   // Track window visibility so notifications can prefer native toasts when
   // the window is hidden in the tray.
@@ -147,25 +151,31 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
-      <Sidebar onOpenPalette={() => setPaletteOpen(true)} />
-      <main className="flex min-w-0 flex-1 overflow-hidden">
-        <Suspense fallback={<PageFallback />}>
-          <Routes>
-            <Route path="/" element={<OverviewPage />} />
-            <Route path="/skills" element={<SkillsPage />} />
-            {/* Anciens menus Plugins / Skills V2 fusionnés dans /skills */}
-            <Route path="/plugins" element={<Navigate to="/skills" replace />} />
-            <Route
-              path="/skills-v2"
-              element={<Navigate to="/skills" replace />}
-            />
-            <Route path="/admin" element={<AdminPage />} />
-            <Route path="/audit" element={<UsageAuditPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
-      </main>
+    // Column, not row: the update banner spans the full width above both the
+    // sidebar and the page, and `min-h-0` keeps the row below it scrollable
+    // instead of pushing the layout past the viewport when the banner shows.
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+      <UpdateBanner />
+      <div className="flex min-h-0 flex-1">
+        <Sidebar onOpenPalette={() => setPaletteOpen(true)} />
+        <main className="flex min-w-0 flex-1 overflow-hidden">
+          <Suspense fallback={<PageFallback />}>
+            <Routes>
+              <Route path="/" element={<OverviewPage />} />
+              <Route path="/skills" element={<SkillsPage />} />
+              {/* Anciens menus Plugins / Skills V2 fusionnés dans /skills */}
+              <Route path="/plugins" element={<Navigate to="/skills" replace />} />
+              <Route
+                path="/skills-v2"
+                element={<Navigate to="/skills" replace />}
+              />
+              <Route path="/admin" element={<AdminPage />} />
+              <Route path="/audit" element={<UsageAuditPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </main>
+      </div>
       {/* No fallback: both mount hidden and render nothing until opened. */}
       <Suspense fallback={null}>
         {paletteOpen && (

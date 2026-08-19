@@ -13,6 +13,7 @@ import {
   ChevronsRight,
   Search,
   HelpCircle,
+  ArrowUpCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -25,6 +26,8 @@ import { useAppVersion } from "@/hooks/useAppVersion";
 import { useHelpDialog } from "@/stores/helpDialog";
 import { useSettingsDialog } from "@/stores/settingsDialog";
 import { useTrackingView } from "@/stores/trackingView";
+import { useAppUpdate } from "@/stores/appUpdate";
+import { restartNow } from "@/hooks/useAppUpdateEvents";
 
 interface NavItem {
   to: string;
@@ -82,6 +85,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const setHelpOpen = useHelpDialog((s) => s.setOpen);
   const openSettings = useSettingsDialog((s) => s.openTo);
   const version = useAppVersion();
+  const staged = useAppUpdate((s) => s.staged);
   const cycleTheme = () => {
     const idx = THEME_CYCLE.indexOf(theme);
     patch({ theme: THEME_CYCLE[(idx + 1) % THEME_CYCLE.length] });
@@ -320,6 +324,27 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           )}
         </Button>
       </div>
+      {staged && (
+        <button
+          type="button"
+          onClick={restartNow}
+          title={`SkillManager ${staged.version} est installé — redémarrer pour l'utiliser`}
+          className={cn(
+            "mx-2 mb-2 flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1.5 text-xs text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-300",
+            collapsed && "justify-center px-0"
+          )}
+        >
+          <ArrowUpCircle className="h-4 w-4 shrink-0" />
+          {!collapsed && (
+            <span className="min-w-0 text-left leading-tight">
+              <span className="block font-medium">{staged.version} prête</span>
+              <span className="block text-[11px] opacity-80">
+                Redémarrer maintenant
+              </span>
+            </span>
+          )}
+        </button>
+      )}
       {!collapsed && (
         <div className="px-3 pb-2 text-center text-xs text-muted-foreground/60">
           <div>Conçu par @vpailt</div>

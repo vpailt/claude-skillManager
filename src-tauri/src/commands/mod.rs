@@ -9,7 +9,7 @@ use crate::admin_drafts::{
     self, AdminDraft, BulkUploadArgs, BumpSuggestion, LocalSkill, RemoteSkillInfo, UploadSkillArgs,
 };
 use crate::app_uninstaller::{self, UninstallInfo};
-use crate::app_updater::{self, AppUpdateInfo};
+use crate::app_updater::{self, AppUpdateInfo, StagedUpdate};
 use crate::config::{self, GiteaInstance, LoggingConfig, MarketplaceConfig, Settings, UiPrefs};
 use crate::logger;
 use crate::error::Result;
@@ -1657,9 +1657,45 @@ pub async fn app_check_update() -> Result<AppUpdateInfo> {
     app_updater::check_for_update()
 }
 
-/// Downloads the installer asset to %TEMP%, spawns it, then exits SkillManager
-/// so NSIS can replace files in-place. The caller (front-end) will see the
-/// window disappear and the OS-level UAC prompt from the installer take over.
+/// The update already swapped onto disk this session, if any. The UI asks on
+/// mount so a window opened *after* the background updater ran still shows the
+/// "restart to finish" affordance.
+#[tauri::command]
+pub async fn app_update_staged() -> Option<StagedUpdate> {
+    app_updater::staged()
+}
+
+/// Update in place: download the release's portable binary and swap it onto
+/// `skillmanager.exe`. Nothing is uninstalled, no installer window appears, and
+/// this session keeps running the old build until the user restarts.
+#[tauri::command]
+pub async fn app_apply_update(info: AppUpdateInfo) -> Result<StagedUpdate> {
+    tracing::info!(
+        "app_apply_update: {} -> {}",
+        info.current_version,
+        info.latest_version.as_deref().unwrap_or("?")
+    );
+    app_updater::apply_update(&info)
+}
+
+/// Restart into whatever `skillmanager.exe` now holds — the new build after an
+/// in-place update. The relaunched process waits for this one to exit before it
+/// arms the single-instance guard.
+#[tauri::command]
+pub async fn app_restart(app: AppHandle) -> Result<()> {
+    app_updater::relaunch()?;
+    tracing::info!("app_restart: successor spawned, exiting");
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        app.exit(0);
+    });
+    Ok(())
+}
+
+/// Fallback for installs the in-place swap can't touch (read-only directory, or
+/// a release that ships no portable binary): download the NSIS installer to
+/// %TEMP%, spawn it silently, then exit so it can replace files. The user may
+/// still see a UAC prompt when the install location needs elevation.
 #[tauri::command]
 pub async fn app_install_update(
     app: AppHandle,

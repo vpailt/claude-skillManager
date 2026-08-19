@@ -17,6 +17,8 @@ export const DEFAULT_UI: UiPrefs = {
   notifyInfo: true,
   notifyWarning: true,
   notifyError: true,
+  autoUpdateEnabled: true,
+  autoUpdateIntervalHours: 6,
 };
 
 interface UiState {

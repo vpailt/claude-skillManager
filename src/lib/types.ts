@@ -121,6 +121,10 @@ export interface UiPrefs {
   notifyInfo: boolean;
   notifyWarning: boolean;
   notifyError: boolean;
+  /** Check GitHub in the background and swap the new binary in place. */
+  autoUpdateEnabled: boolean;
+  /** Hours between background update checks (floored at 1 by the backend). */
+  autoUpdateIntervalHours: number;
 }
 
 /** Payload of the backend `pr-status-changed` event (see `pr_poller.rs`). */
@@ -401,12 +405,37 @@ export interface AppUpdateInfo {
   latestVersion: string | null;
   hasUpdate: boolean;
   releaseUrl: string | null;
+  /** Standalone binary (.exe or .zip) — the asset the in-place update uses. */
+  portableAssetName: string | null;
+  portableAssetUrl: string | null;
+  portableAssetSize: number;
+  /** NSIS/MSI installer — fallback only. */
   installerAssetName: string | null;
   installerAssetUrl: string | null;
   installerAssetSize: number;
+  /** Portable asset present *and* install directory writable. */
+  canSelfUpdate: boolean;
   releaseNotes: string;
   /** "no_release" or "ok" */
   status: string;
+}
+
+/** An update already written onto skillmanager.exe; live at the next launch. */
+export interface StagedUpdate {
+  version: string;
+  runningVersion: string;
+  releaseNotes: string;
+  releaseUrl: string | null;
+}
+
+/** Payload of the `app-update-ready` / `app-update-available` backend events. */
+export interface UpdateEvent {
+  version: string;
+  runningVersion: string;
+  releaseNotes: string;
+  releaseUrl: string | null;
+  /** True for `app-update-ready`: the binary is already swapped in. */
+  staged: boolean;
 }
 
 export interface UninstallInfo {

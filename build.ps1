@@ -4,12 +4,16 @@
 #   .\build.ps1            # full build with NSIS installer (in src-tauri\target\release\bundle\)
 #   .\build.ps1 -NoBundle  # just the .exe (faster, no installer)
 #   .\build.ps1 -Dev       # run in dev mode with hot reload
+#   .\build.ps1 -Package   # also zip the standalone .exe as the release's portable
+#                            asset - the one the in-place self-update downloads
+#                            (see src-tauri/src/app_updater.rs)
 #   .\build.ps1 -Clean     # wipe stale tauri/skillmanager build artifacts before building
 #                            (use after moving the project on disk or upgrading tauri)
 param(
     [switch]$Dev,
     [switch]$NoBundle,
-    [switch]$Clean
+    [switch]$Clean,
+    [switch]$Package
 )
 
 $ErrorActionPreference = "Stop"
@@ -98,4 +102,17 @@ if (Test-Path $exe) {
 } else {
     Write-Host "==> Build failed: $exe not found" -ForegroundColor Red
     exit 1
+}
+
+if ($Package) {
+    # The self-updater swaps this binary onto the running one — no installer
+    # involved — so every release needs it attached alongside the NSIS setup.
+    # Zipped: same bytes, roughly a third of the download.
+    $version = (Get-Content "package.json" -Raw | ConvertFrom-Json).version
+    $zip = "src-tauri\target\release\SkillManager_${version}_x64_portable.zip"
+elease\SkillManager_${version}_x64_portable.zip"
+    if (Test-Path $zip) { Remove-Item $zip -Force }
+    Compress-Archive -Path $exe -DestinationPath $zip -CompressionLevel Optimal
+    $zipSize = (Get-Item $zip).Length / 1MB
+    Write-Host ("==> Portable asset: {0}  ({1:N1} MB)" -f $zip, $zipSize) -ForegroundColor Green
 }

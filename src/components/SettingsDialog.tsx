@@ -8,6 +8,7 @@ import {
   Eye,
   Trash2,
   RefreshCw,
+  RotateCw,
   FolderOpen,
   Bell,
   CheckCircle2,
@@ -58,6 +59,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useNotifications } from "@/stores/notifications";
 import { setFrontendLogLevel } from "@/lib/logger";
 import { useAppVersion } from "@/hooks/useAppVersion";
+import { useAppUpdate } from "@/stores/appUpdate";
+import { restartNow } from "@/hooks/useAppUpdateEvents";
 import { GiteaInstancesCard } from "@/components/GiteaInstancesCard";
 import {
   useSettingsDialog,
@@ -78,6 +81,8 @@ const DEFAULT_UI: UiPrefs = {
   notifyInfo: true,
   notifyWarning: true,
   notifyError: true,
+  autoUpdateEnabled: true,
+  autoUpdateIntervalHours: 6,
 };
 
 const LEVELS: LogLevel[] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
@@ -164,6 +169,9 @@ export function SettingsDialog() {
   const [logTail, setLogTail] = useState<string>("");
   const [showLogs, setShowLogs] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const staged = useAppUpdate((st) => st.staged);
+  const setStaged = useAppUpdate((st) => st.setStaged);
+  const setAvailable = useAppUpdate((st) => st.setAvailable);
   const appVersion = useAppVersion();
   const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
   const [uninstallInfo, setUninstallInfo] = useState<UninstallInfo | null>(null);
@@ -334,6 +342,15 @@ export function SettingsDialog() {
           body: "Le repo n'a pas encore de release sur GitHub.",
         });
       } else if (info.hasUpdate) {
+        // Feed the top banner too: the dialog will be closed long before the
+        // user gets round to installing, and the toast doesn't outlive it.
+        setAvailable({
+          version: info.latestVersion ?? "",
+          runningVersion: info.currentVersion,
+          releaseNotes: info.releaseNotes,
+          releaseUrl: info.releaseUrl,
+          staged: false,
+        });
         push({
           kind: "info",
           title: `Mise à jour disponible : ${info.latestVersion}`,
@@ -387,6 +404,33 @@ export function SettingsDialog() {
       }),
   });
 
+  // Seamless path: the backend swaps the new binary onto skillmanager.exe while
+  // this session keeps running. Nothing is uninstalled and no wizard appears.
+  const applyUpdateMutation = useMutation({
+    mutationFn: () => {
+      if (!updateInfo) {
+        return Promise.reject(new Error("Lancez d'abord une vérification."));
+      }
+      return api.appApplyUpdate(updateInfo);
+    },
+    onSuccess: (staged) => {
+      setStaged(staged);
+      push({
+        kind: "success",
+        title: `SkillManager ${staged.version} est installé`,
+        body: "Redémarrez quand vous voulez : la nouvelle version démarrera au prochain lancement.",
+      });
+    },
+    onError: (e) =>
+      push({
+        kind: "error",
+        title: "Échec de la mise à jour",
+        body: errMsg(e),
+      }),
+  });
+
+  // Fallback: install directory not writable, or a release without a portable
+  // binary. The NSIS installer runs silently, but may need a UAC prompt.
   const installUpdateMutation = useMutation({
     mutationFn: () => {
       if (!updateInfo?.installerAssetUrl || !updateInfo.installerAssetName) {
@@ -779,109 +823,176 @@ export function SettingsDialog() {
                   Mise à jour de l'app
                 </CardTitle>
                 <CardDescription>
-                  Vérifie si une release plus récente est disponible sur le repo
-                  GitHub de SkillManager. Si l'app a été installée via
-                  l'installateur, le nouvel installateur est téléchargé dans{" "}
-                  <code>%TEMP%</code> puis lancé ; l'app se ferme ensuite pour
-                  pouvoir remplacer les fichiers.
+                  SkillManager se met à jour tout seul : le nouveau binaire est
+                  téléchargé depuis GitHub puis remplace{" "}
+                  <code>skillmanager.exe</code> sur place. Rien n'est
+                  désinstallé, aucun installateur ne s'ouvre, et la session en
+                  cours continue — la nouvelle version démarre au prochain
+                  lancement (ou tout de suite si vous redémarrez).
                 </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-300">
-                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <span>
-                  Fonctionne uniquement si SkillManager a été installé via
-                  l'<strong>installateur</strong> (<code>.exe</code> NSIS). En
-                  version <strong>portable</strong> (dossier zippé), télécharge la
-                  nouvelle version manuellement depuis la page de la release.
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="w-32 text-muted-foreground">Version actuelle</span>
-                <Badge variant="outline">
-                  {updateInfo?.currentVersion ?? appVersion ?? "…"}
-                </Badge>
-                {updateInfo?.latestVersion && (
-                  <>
-                    <span className="w-32 pl-4 text-muted-foreground">
-                      Dernière sur GitHub
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <label className="flex cursor-pointer items-center gap-3">
+                  <Switch
+                    checked={ui.autoUpdateEnabled}
+                    onCheckedChange={(v) => updateUi({ autoUpdateEnabled: v })}
+                  />
+                  <span>
+                    Installer les mises à jour automatiquement
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      (en arrière-plan, même fenêtre fermée)
                     </span>
-                    <Badge variant={updateInfo.hasUpdate ? "warning" : "success"}>
-                      {updateInfo.latestVersion}
-                    </Badge>
-                  </>
-                )}
-              </div>
-
-              {updateInfo?.status === "no_release" && (
-                <div className="text-xs text-muted-foreground">
-                  Aucune release n'a encore été publiée sur{" "}
-                  <code>vpailt/claude-skillManager</code>.
+                  </span>
+                </label>
+                <div className="flex items-center gap-3">
+                  <span className="w-32 text-muted-foreground">
+                    Vérifier toutes les
+                  </span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={168}
+                    className="h-8 w-24"
+                    disabled={!ui.autoUpdateEnabled}
+                    value={ui.autoUpdateIntervalHours}
+                    onChange={(e) =>
+                      updateUi({
+                        autoUpdateIntervalHours: Math.max(
+                          1,
+                          Number(e.target.value) || 1
+                        ),
+                      })
+                    }
+                  />
+                  <span className="text-xs text-muted-foreground">heures</span>
                 </div>
-              )}
 
-              {updateInfo &&
-                updateInfo.status === "ok" &&
-                !updateInfo.hasUpdate && (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <CheckCircle2 className="h-3 w-3 text-emerald-600" />
-                    Vous utilisez la dernière version.
+                {staged && (
+                  <div className="flex flex-wrap items-center gap-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-2.5 text-xs text-emerald-700 dark:text-emerald-300">
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                    <span className="flex-1">
+                      <strong>{staged.version}</strong> est installée. Cette
+                      session tourne encore en {staged.runningVersion} ; la
+                      nouvelle version démarre au prochain lancement.
+                    </span>
+                    <Button size="sm" onClick={restartNow}>
+                      <RotateCw className="mr-1 h-3 w-3" />
+                      Redémarrer maintenant
+                    </Button>
                   </div>
                 )}
 
-              {updateInfo?.hasUpdate && !updateInfo.installerAssetUrl && (
-                <div className="text-xs text-amber-600 dark:text-amber-400">
-                  Une version plus récente est disponible mais aucun installateur{" "}
-                  <code>.exe</code> n'est attaché à la release. Ouvrez la page de la
-                  release pour télécharger manuellement.
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="w-32 text-muted-foreground">Version actuelle</span>
+                  <Badge variant="outline">
+                    {updateInfo?.currentVersion ?? appVersion ?? "…"}
+                  </Badge>
+                  {updateInfo?.latestVersion && (
+                    <>
+                      <span className="w-32 pl-4 text-muted-foreground">
+                        Dernière sur GitHub
+                      </span>
+                      <Badge variant={updateInfo.hasUpdate ? "warning" : "success"}>
+                        {updateInfo.latestVersion}
+                      </Badge>
+                    </>
+                  )}
                 </div>
-              )}
 
-              <div className="flex flex-wrap gap-2 pt-1">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => checkUpdateMutation.mutate()}
-                  disabled={checkUpdateMutation.isPending}
-                >
-                  <RefreshCw
-                    className={`mr-1 h-3 w-3 ${checkUpdateMutation.isPending ? "animate-spin" : ""}`}
-                  />
-                  Vérifier les mises à jour
-                </Button>
+                {updateInfo?.status === "no_release" && (
+                  <div className="text-xs text-muted-foreground">
+                    Aucune release n'a encore été publiée sur{" "}
+                    <code>vpailt/claude-skillManager</code>.
+                  </div>
+                )}
 
-                {updateInfo?.hasUpdate && updateInfo.installerAssetUrl && (
+                {updateInfo &&
+                  updateInfo.status === "ok" &&
+                  !updateInfo.hasUpdate &&
+                  !staged && (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                      Vous utilisez la dernière version.
+                    </div>
+                  )}
+
+                {updateInfo?.hasUpdate && !updateInfo.canSelfUpdate && (
+                  <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-300">
+                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      {updateInfo.portableAssetUrl
+                        ? "Le dossier d'installation n'est pas modifiable (installation pour tous les utilisateurs ?). "
+                        : "Cette release ne contient pas de binaire autonome. "}
+                      {updateInfo.installerAssetUrl
+                        ? "La mise à jour passera par l'installateur, lancé en mode silencieux — Windows peut demander une élévation."
+                        : "Téléchargez la nouvelle version manuellement depuis la page de la release."}
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2 pt-1">
                   <Button
                     size="sm"
-                    onClick={() => installUpdateMutation.mutate()}
-                    disabled={installUpdateMutation.isPending}
+                    variant="outline"
+                    onClick={() => checkUpdateMutation.mutate()}
+                    disabled={checkUpdateMutation.isPending}
                   >
-                    <Download
-                      className={`mr-1 h-3 w-3 ${installUpdateMutation.isPending ? "animate-pulse" : ""}`}
+                    <RefreshCw
+                      className={`mr-1 h-3 w-3 ${checkUpdateMutation.isPending ? "animate-spin" : ""}`}
                     />
-                    {installUpdateMutation.isPending
-                      ? "Téléchargement…"
-                      : `Télécharger et installer ${updateInfo.latestVersion}`}
+                    Vérifier les mises à jour
                   </Button>
-                )}
 
-                {updateInfo?.releaseUrl && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => openExternal(updateInfo.releaseUrl!)}
-                  >
-                    <ExternalLink className="mr-1 h-3 w-3" />
-                    Ouvrir la page de la release
-                  </Button>
-                )}
-              </div>
+                  {updateInfo?.hasUpdate && !staged && updateInfo.canSelfUpdate && (
+                    <Button
+                      size="sm"
+                      onClick={() => applyUpdateMutation.mutate()}
+                      disabled={applyUpdateMutation.isPending}
+                    >
+                      <Download
+                        className={`mr-1 h-3 w-3 ${applyUpdateMutation.isPending ? "animate-pulse" : ""}`}
+                      />
+                      {applyUpdateMutation.isPending
+                        ? "Installation…"
+                        : `Installer ${updateInfo.latestVersion}`}
+                    </Button>
+                  )}
 
-              {updateInfo?.hasUpdate && updateInfo.releaseNotes && (
-                <pre className="mt-2 max-h-48 overflow-auto rounded-md border bg-muted/40 p-3 text-xs leading-snug whitespace-pre-wrap">
-                  {updateInfo.releaseNotes}
-                </pre>
-              )}
+                  {updateInfo?.hasUpdate &&
+                    !staged &&
+                    !updateInfo.canSelfUpdate &&
+                    updateInfo.installerAssetUrl && (
+                      <Button
+                        size="sm"
+                        onClick={() => installUpdateMutation.mutate()}
+                        disabled={installUpdateMutation.isPending}
+                      >
+                        <Download
+                          className={`mr-1 h-3 w-3 ${installUpdateMutation.isPending ? "animate-pulse" : ""}`}
+                        />
+                        {installUpdateMutation.isPending
+                          ? "Téléchargement…"
+                          : `Installer ${updateInfo.latestVersion} (installateur)`}
+                      </Button>
+                    )}
+
+                  {updateInfo?.releaseUrl && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => openExternal(updateInfo.releaseUrl!)}
+                    >
+                      <ExternalLink className="mr-1 h-3 w-3" />
+                      Ouvrir la page de la release
+                    </Button>
+                  )}
+                </div>
+
+                {updateInfo?.hasUpdate && updateInfo.releaseNotes && (
+                  <pre className="mt-2 max-h-48 overflow-auto rounded-md border bg-muted/40 p-3 text-xs leading-snug whitespace-pre-wrap">
+                    {updateInfo.releaseNotes}
+                  </pre>
+                )}
               </CardContent>
             </Card>
 
