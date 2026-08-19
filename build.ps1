@@ -105,12 +105,11 @@ if (Test-Path $exe) {
 }
 
 if ($Package) {
-    # The self-updater swaps this binary onto the running one — no installer
-    # involved — so every release needs it attached alongside the NSIS setup.
+    # The self-updater swaps this binary onto the running one - no installer
+    # involved - so every release needs it attached alongside the NSIS setup.
     # Zipped: same bytes, roughly a third of the download.
     $version = (Get-Content "package.json" -Raw | ConvertFrom-Json).version
     $zip = "src-tauri\target\release\SkillManager_${version}_x64_portable.zip"
-elease\SkillManager_${version}_x64_portable.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Compress-Archive -Path $exe -DestinationPath $zip -CompressionLevel Optimal
     $zipSize = (Get-Item $zip).Length / 1MB
