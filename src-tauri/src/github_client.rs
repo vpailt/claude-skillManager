@@ -14,16 +14,58 @@
 
 use crate::error::{Error, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use parking_lot::Mutex;
 use reqwest::blocking::{Client, Response};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, ETAG, IF_NONE_MATCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 const GITHUB_API: &str = "https://api.github.com";
+
+/// Whole-request budget, body included. Kept generous because the same client
+/// downloads plugin zipballs.
+const REQUEST_TIMEOUT_SECS: u64 = 30;
+/// Budget for establishing the TCP+TLS connection alone. Short on purpose: a
+/// VPN-gated Gitea host that black-holes packets otherwise parks a thread for
+/// the full request timeout on *every* call of a refresh.
+const CONNECT_TIMEOUT_SECS: u64 = 6;
+
+/// Reuse one `reqwest::blocking::Client` per (provider, host, TLS mode, token).
+///
+/// Building a blocking client is not cheap: each one **spawns its own OS thread
+/// running a private tokio runtime**, and starts with an empty connection pool
+/// so every request re-does the TLS handshake. `refresh_all` built one per
+/// marketplace (twice over) and `reconcile_open_prs` one per open PR, turning a
+/// refresh into a burst of thread spawns and full handshakes. `Client` is
+/// `Arc`-based internally, so handing out clones is free.
+static CLIENT_POOL: OnceLock<Mutex<HashMap<String, Client>>> = OnceLock::new();
+/// Cap on distinct pooled clients. The pool only grows when the token or the set
+/// of registered hosts changes; the cap just bounds a pathological case.
+const MAX_POOLED_CLIENTS: usize = 8;
+
+/// One cached conditional-GET response.
+#[derive(Clone)]
+struct CachedGet {
+    etag: String,
+    body: Value,
+}
+
+/// ETag cache for read-only JSON endpoints, keyed by (host, token, path+query).
+///
+/// This never skips the request — it only lets the server answer `304 Not
+/// Modified` with an empty body, so the response can never be stale. It saves
+/// the JSON transfer and parse on the N+1 reads a refresh performs, and on
+/// GitHub a 304 does not count against the rate limit.
+static GET_CACHE: OnceLock<Mutex<HashMap<String, CachedGet>>> = OnceLock::new();
+/// Cap on cached responses; blown wholesale rather than evicted by age, which is
+/// plenty for a cache whose only job is to survive one refresh cycle.
+const MAX_CACHED_GETS: usize = 512;
 
 /// Which Git forge a client talks to. GitHub is the default so existing
 /// marketplaces (and `MarketplaceConfig` deserialization) keep working with no
@@ -195,13 +237,29 @@ impl GitHubClient {
         }
         headers.insert("User-Agent", HeaderValue::from_static("SkillManager/1.0"));
 
-        let mut builder = Client::builder()
-            .default_headers(headers)
-            .timeout(Duration::from_secs(30));
-        if insecure_tls {
-            builder = builder.danger_accept_invalid_certs(true);
-        }
-        let client = builder.build()?;
+        let pool_key = format!("{provider:?}|{api_base}|{insecure_tls}|{token}");
+        let pool = CLIENT_POOL.get_or_init(|| Mutex::new(HashMap::new()));
+        let client = {
+            let mut map = pool.lock();
+            match map.get(&pool_key) {
+                Some(c) => c.clone(),
+                None => {
+                    let mut builder = Client::builder()
+                        .default_headers(headers)
+                        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS));
+                    if insecure_tls {
+                        builder = builder.danger_accept_invalid_certs(true);
+                    }
+                    let c = builder.build()?;
+                    if map.len() >= MAX_POOLED_CLIENTS {
+                        map.clear();
+                    }
+                    map.insert(pool_key, c.clone());
+                    c
+                }
+            }
+        };
         Ok(Self {
             provider,
             api_base,
@@ -243,6 +301,75 @@ impl GitHubClient {
         self.client.request(method, url)
     }
 
+    /// `GET` a JSON endpoint through the ETag cache.
+    ///
+    /// Sends `If-None-Match` when a previous response for the same
+    /// (host, token, path, query) carried an `ETag`; on `304` the cached body is
+    /// returned without transferring or re-parsing it. A forge that emits no
+    /// `ETag` simply never populates the cache, so this degrades to a plain GET.
+    ///
+    /// Read-only endpoints only — the response is served from cache exclusively
+    /// when the server itself confirmed nothing changed, so writes elsewhere in
+    /// the app can never make it stale.
+    fn get_json_cached(&self, path: &str, query: &[(&str, &str)]) -> Result<Value> {
+        let mut key = String::with_capacity(path.len() + 96);
+        key.push_str(&self.api_base);
+        key.push('|');
+        key.push_str(&self.token);
+        key.push('|');
+        key.push_str(path);
+        for (k, v) in query {
+            key.push('|');
+            key.push_str(k);
+            key.push('=');
+            key.push_str(v);
+        }
+
+        let cache = GET_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let cached = cache.lock().get(&key).cloned();
+
+        let mut req = self.request(reqwest::Method::GET, path);
+        if !query.is_empty() {
+            req = req.query(query);
+        }
+        if let Some(c) = &cached {
+            if let Ok(hv) = HeaderValue::from_str(&c.etag) {
+                req = req.header(IF_NONE_MATCH, hv);
+            }
+        }
+        let resp = req.send()?;
+
+        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+            // Only reachable when we sent `If-None-Match`, i.e. `cached` is Some.
+            if let Some(c) = cached {
+                tracing::trace!("GET {path} -> 304 (served from ETag cache)");
+                return Ok(c.body);
+            }
+        }
+
+        let resp = Self::check(resp, "GET", path)?;
+        let etag = resp
+            .headers()
+            .get(ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let body: Value = resp.json()?;
+        if let Some(etag) = etag {
+            let mut m = cache.lock();
+            if m.len() >= MAX_CACHED_GETS {
+                m.clear();
+            }
+            m.insert(
+                key,
+                CachedGet {
+                    etag,
+                    body: body.clone(),
+                },
+            );
+        }
+        Ok(body)
+    }
+
     fn check(resp: Response, method: &str, url: &str) -> Result<Response> {
         let status = resp.status();
         if status.is_client_error() || status.is_server_error() {
@@ -258,10 +385,7 @@ impl GitHubClient {
 
     // ---------- read ----------
     pub fn get_repo(&self, repo: &str) -> Result<Value> {
-        let url = format!("/repos/{repo}");
-        let resp = self.request(reqwest::Method::GET, &url).send()?;
-        let resp = Self::check(resp, "GET", &url)?;
-        Ok(resp.json()?)
+        self.get_json_cached(&format!("/repos/{repo}"), &[])
     }
 
     pub fn get_default_branch(&self, repo: &str) -> Result<String> {
@@ -275,12 +399,12 @@ impl GitHubClient {
 
     pub fn list_dir(&self, repo: &str, path: &str, r#ref: &str) -> Result<Vec<RemoteFile>> {
         let url = format!("/repos/{repo}/contents/{path}");
-        let mut req = self.request(reqwest::Method::GET, &url);
-        if !r#ref.is_empty() {
-            req = req.query(&[("ref", r#ref)]);
-        }
-        let resp = Self::check(req.send()?, "GET", &url)?;
-        let value: Value = resp.json()?;
+        let query: Vec<(&str, &str)> = if r#ref.is_empty() {
+            Vec::new()
+        } else {
+            vec![("ref", r#ref)]
+        };
+        let value: Value = self.get_json_cached(&url, &query)?;
         let items = if value.is_array() {
             value.as_array().cloned().unwrap_or_default()
         } else {
@@ -345,12 +469,12 @@ impl GitHubClient {
             return self.gitea_blob_get(repo, path, r#ref);
         }
         let url = format!("/repos/{repo}/contents/{path}");
-        let mut req = self.request(reqwest::Method::GET, &url);
-        if !r#ref.is_empty() {
-            req = req.query(&[("ref", r#ref)]);
-        }
-        let resp = Self::check(req.send()?, "GET", &url)?;
-        let data: Value = resp.json()?;
+        let query: Vec<(&str, &str)> = if r#ref.is_empty() {
+            Vec::new()
+        } else {
+            vec![("ref", r#ref)]
+        };
+        let data: Value = self.get_json_cached(&url, &query)?;
         if data.is_array() {
             return Err(Error::GitHub(format!("{path} is a directory")));
         }
@@ -502,25 +626,16 @@ impl GitHubClient {
         match self.provider {
             Provider::Github => {
                 let url = format!("/repos/{repo}/commits/{branch}");
-                let resp = Self::check(
-                    self.request(reqwest::Method::GET, &url).send()?,
-                    "GET",
-                    &url,
-                )?;
-                Ok(resp.json()?)
+                self.get_json_cached(&url, &[])
             }
             Provider::Gitea => {
                 // Gitea has no single-commit-by-ref endpoint; list with sha=ref
                 // and take the head. Each element carries a top-level `sha`.
                 let url = format!("/repos/{repo}/commits");
-                let resp = Self::check(
-                    self.request(reqwest::Method::GET, &url)
-                        .query(&[("sha", branch.as_str()), ("limit", "1"), ("stat", "false")])
-                        .send()?,
-                    "GET",
+                let v: Value = self.get_json_cached(
                     &url,
+                    &[("sha", branch.as_str()), ("limit", "1"), ("stat", "false")],
                 )?;
-                let v: Value = resp.json()?;
                 v.as_array()
                     .and_then(|a| a.first())
                     .cloned()

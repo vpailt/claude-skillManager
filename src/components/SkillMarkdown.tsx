@@ -1,42 +1,25 @@
-import { useMemo } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
-import { cn } from "@/lib/utils";
+// Lazy boundary around the actual renderer.
+//
+// `SkillMarkdownView` drags in react-markdown, remark-gfm, rehype-highlight and
+// (through lowlight) highlight.js — together the heaviest thing the frontend
+// depends on, and needed only once you open a skill. Keeping the import behind
+// `React.lazy` keeps all of it out of the entry chunk; the module is fetched the
+// first time a skill body is displayed and cached from then on.
+//
+// The public API is unchanged, so call sites don't know the difference.
+import { lazy, Suspense } from "react";
+import type { SkillMarkdownProps } from "./SkillMarkdownView";
 
-interface SkillMarkdownProps {
-  content: string;
-  className?: string;
-}
+const SkillMarkdownView = lazy(() => import("./SkillMarkdownView"));
 
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
-
-function splitFrontmatter(raw: string): { body: string; frontmatter: string | null } {
-  const m = raw.match(FRONTMATTER_RE);
-  if (!m) return { body: raw, frontmatter: null };
-  return { body: raw.slice(m[0].length), frontmatter: m[1] };
-}
-
-export function SkillMarkdown({ content, className }: SkillMarkdownProps) {
-  const { body, frontmatter } = useMemo(() => splitFrontmatter(content), [content]);
+export function SkillMarkdown(props: SkillMarkdownProps) {
   return (
-    <div className={cn("prose-skill", className)}>
-      {frontmatter && (
-        <details className="mb-4 rounded-md border border-dashed border-border bg-muted/30">
-          <summary className="cursor-pointer select-none px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Frontmatter
-          </summary>
-          <pre className="m-0 max-w-full overflow-x-auto rounded-none border-0 border-t border-border bg-transparent px-3 py-2 text-xs leading-relaxed text-foreground/80">
-            <code className="bg-transparent p-0 text-xs">{frontmatter}</code>
-          </pre>
-        </details>
-      )}
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
-      >
-        {body}
-      </ReactMarkdown>
-    </div>
+    <Suspense
+      fallback={
+        <p className="px-1 py-2 text-sm text-muted-foreground">Chargement…</p>
+      }
+    >
+      <SkillMarkdownView {...props} />
+    </Suspense>
   );
 }

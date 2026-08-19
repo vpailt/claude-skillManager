@@ -14,7 +14,15 @@ export function useRefresh() {
   const query = useQuery({
     queryKey: ["refresh"],
     queryFn: api.refreshAll,
-    staleTime: 60_000,
+    // `refresh_all` is an N+1 sweep across the forge (registry, push rights, then
+    // a manifest read per plugin and a skills listing per installed plugin). At
+    // the old 60 s staleness it re-ran on essentially every alt-tab into the
+    // app. Ten minutes keeps the view current without turning window focus into
+    // a network event.
+    staleTime: 10 * 60_000,
+    // The one query worth refetching on focus: coming back to the app after
+    // installing something from the CLI should show it.
+    refetchOnWindowFocus: true,
     // Periodic full refresh so derived state (notably the "plugins obsolètes"
     // count behind the taskbar badge) updates on its own. Kept slow — refresh_all
     // hits the GitHub API and is quota-limited, so we don't run it on the fast PR

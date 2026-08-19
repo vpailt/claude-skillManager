@@ -11,6 +11,7 @@ export const DEFAULT_UI: UiPrefs = {
   sidebarCollapsed: false,
   startMinimized: false,
   closeToTray: true,
+  releaseUiOnTray: true,
   nativeNotificationsEnabled: true,
   notifySuccess: true,
   notifyInfo: true,

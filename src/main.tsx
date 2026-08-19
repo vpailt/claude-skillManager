@@ -7,7 +7,17 @@ import "./styles.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: false, staleTime: 30_000 },
+    queries: {
+      retry: false,
+      staleTime: 30_000,
+      // TanStack refetches every stale query on window focus by default. With
+      // ~15 query keys in flight — several of them backed by multi-request forge
+      // sweeps, one of them VPN-gated — every alt-tab into the app fired a burst
+      // of network calls. Queries that genuinely benefit opt back in explicitly
+      // (see `useRefresh`); everything else refreshes on mount, on the sidebar's
+      // Refresh button, or on an explicit invalidation.
+      refetchOnWindowFocus: false,
+    },
   },
 });
 

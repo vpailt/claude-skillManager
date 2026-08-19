@@ -207,6 +207,13 @@ pub struct UiPrefs {
     /// Hide to tray when the window is closed instead of quitting.
     #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
+    /// When hiding to tray, **destroy** the window instead of merely hiding it,
+    /// releasing the WebView2 processes it owns (measured: ~400 MB of the app's
+    /// ~470 MB resident footprint). The window is rebuilt on the next show, which
+    /// costs a second or two of UI boot. Background work — PR polling, its
+    /// notifications, the filesystem watcher — runs in Rust and is unaffected.
+    #[serde(default = "default_true")]
+    pub release_ui_on_tray: bool,
     /// Whether the app may raise Windows notification-area toasts (e.g. on PR
     /// status changes). When off, only the in-app toast is shown. Master switch
     /// AND-ed with the per-kind flags below.
@@ -243,6 +250,7 @@ impl Default for UiPrefs {
             sidebar_collapsed: false,
             start_minimized: false,
             close_to_tray: true,
+            release_ui_on_tray: true,
             native_notifications_enabled: true,
             notify_success: true,
             notify_info: true,
@@ -317,6 +325,7 @@ const PROP_UI_DENSITY: &str = "ui.density";
 const PROP_UI_SIDEBAR: &str = "ui.sidebar.collapsed";
 const PROP_UI_START_MINIMIZED: &str = "ui.tray.start.minimized";
 const PROP_UI_CLOSE_TO_TRAY: &str = "ui.tray.close.to.tray";
+const PROP_UI_RELEASE_UI_ON_TRAY: &str = "ui.tray.release.ui";
 const PROP_UI_NATIVE_NOTIFICATIONS: &str = "ui.notifications.native.enabled";
 const PROP_UI_NOTIFY_SUCCESS: &str = "ui.notifications.native.success";
 const PROP_UI_NOTIFY_INFO: &str = "ui.notifications.native.info";
@@ -346,6 +355,7 @@ fn settings_from_properties_and_marketplaces(
             sidebar_collapsed: props.get_bool(PROP_UI_SIDEBAR, false),
             start_minimized: props.get_bool(PROP_UI_START_MINIMIZED, false),
             close_to_tray: props.get_bool(PROP_UI_CLOSE_TO_TRAY, true),
+            release_ui_on_tray: props.get_bool(PROP_UI_RELEASE_UI_ON_TRAY, true),
             native_notifications_enabled: props
                 .get_bool(PROP_UI_NATIVE_NOTIFICATIONS, true),
             notify_success: props.get_bool(PROP_UI_NOTIFY_SUCCESS, true),
@@ -365,6 +375,7 @@ fn settings_to_properties(s: &Settings) -> Properties {
     p.set_bool(PROP_UI_SIDEBAR, s.ui.sidebar_collapsed);
     p.set_bool(PROP_UI_START_MINIMIZED, s.ui.start_minimized);
     p.set_bool(PROP_UI_CLOSE_TO_TRAY, s.ui.close_to_tray);
+    p.set_bool(PROP_UI_RELEASE_UI_ON_TRAY, s.ui.release_ui_on_tray);
     p.set_bool(PROP_UI_NATIVE_NOTIFICATIONS, s.ui.native_notifications_enabled);
     p.set_bool(PROP_UI_NOTIFY_SUCCESS, s.ui.notify_success);
     p.set_bool(PROP_UI_NOTIFY_INFO, s.ui.notify_info);

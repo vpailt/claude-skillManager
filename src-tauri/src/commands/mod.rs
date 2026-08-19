@@ -37,7 +37,7 @@ fn gh() -> Result<GitHubClient> {
 
 /// Build a client for a self-hosted Gitea instance: token from the credential
 /// vault (keyed by host), TLS mode from the registered [`GiteaInstance`].
-fn gitea_client(s: &Settings, base_url: &str) -> Result<GitHubClient> {
+pub(crate) fn gitea_client(s: &Settings, base_url: &str) -> Result<GitHubClient> {
     let insecure = s
         .get_gitea_instance(base_url)
         .map(|i| i.insecure_tls)
@@ -937,7 +937,7 @@ pub async fn pr_history_clear() -> Result<()> {
 
 /// Derive a PR's lifecycle status ("merged" | "closed" | "open") from a forge
 /// PR JSON object. GitHub and Gitea share these fields.
-fn pr_status_of(pr: &Value) -> &'static str {
+pub(crate) fn pr_status_of(pr: &Value) -> &'static str {
     if pr.get("merged_at").and_then(|v| v.as_str()).is_some() {
         "merged"
     } else if pr
@@ -968,7 +968,13 @@ fn merge_commit_sha_of(pr: &Value) -> String {
 /// they point at content that actually landed). On a plain close, nothing is
 /// tagged — by design. Either way the pending record is dropped so the Admin tab
 /// stops showing the PR as "in review".
-fn finalize_pr_outcome(client: &GitHubClient, repo: &str, number: i64, pr: &Value, status: &str) {
+pub(crate) fn finalize_pr_outcome(
+    client: &GitHubClient,
+    repo: &str,
+    number: i64,
+    pr: &Value,
+    status: &str,
+) {
     if status == "merged" {
         let merge_sha = merge_commit_sha_of(pr);
         for rec in pending_prs::find_by_pr(repo, number) {

@@ -72,6 +72,7 @@ const DEFAULT_UI: UiPrefs = {
   sidebarCollapsed: false,
   startMinimized: false,
   closeToTray: true,
+  releaseUiOnTray: true,
   nativeNotificationsEnabled: true,
   notifySuccess: true,
   notifyInfo: true,
@@ -519,6 +520,20 @@ export function SettingsDialog() {
                     Démarrer minimisé dans la barre d'état
                     <span className="ml-2 text-xs text-muted-foreground">
                       (utile si ajouté au démarrage de Windows)
+                    </span>
+                  </span>
+                </label>
+                <label className="flex cursor-pointer items-center gap-3">
+                  <Switch
+                    checked={ui.releaseUiOnTray}
+                    disabled={!ui.closeToTray}
+                    onCheckedChange={(v) => updateUi({ releaseUiOnTray: v })}
+                  />
+                  <span>
+                    Libérer la mémoire une fois dans la barre d'état
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      (ferme l'interface et rend ~400 Mo ; la réouverture prend
+                      une seconde. La surveillance des PR et des skills continue)
                     </span>
                   </span>
                 </label>

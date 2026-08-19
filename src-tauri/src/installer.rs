@@ -35,9 +35,24 @@ pub fn rmtree_robust(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Write `data` as pretty JSON via a `.tmp` + `rename` so a crash never leaves a
+/// half-written file.
+///
+/// **No-op when the serialized bytes already match what's on disk.** Several of
+/// these files (`usage_index.json`, `skill_baselines.json`, `pr_history.json`)
+/// are rewritten on every refresh even when nothing changed; when the install
+/// directory sits inside a synced folder (OneDrive / Dropbox) each rewrite costs
+/// two filesystem events through the cloud filter driver plus an upload. Reading
+/// the current contents back is far cheaper than that.
 pub fn atomic_write_json(path: &Path, data: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+    }
+    let payload = serde_json::to_string_pretty(data)?;
+    if let Ok(existing) = fs::read_to_string(path) {
+        if existing == payload {
+            return Ok(());
+        }
     }
     let tmp = path.with_extension(format!(
         "{}.tmp",
@@ -48,7 +63,7 @@ pub fn atomic_write_json(path: &Path, data: &Value) -> Result<()> {
         .create(true)
         .truncate(true)
         .open(&tmp)?;
-    f.write_all(serde_json::to_string_pretty(data)?.as_bytes())?;
+    f.write_all(payload.as_bytes())?;
     drop(f);
     fs::rename(&tmp, path)?;
     Ok(())

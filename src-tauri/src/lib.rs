@@ -21,6 +21,7 @@ pub mod models;
 pub mod notification_setup;
 pub mod pending_prs;
 pub mod plugin_state;
+pub mod pr_poller;
 pub mod pr_history;
 pub mod properties;
 pub mod registry;
@@ -47,7 +48,9 @@ pub fn run() {
         // existing window (in case it was hidden to tray) and let the new
         // process exit on its own.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            tracing::info!("second instance launched — focusing existing window");
+            tracing::info!("second instance launched — surfacing existing window");
+            // The window may have been released to tray, so rebuild it first.
+            tray::ensure_main_window(app);
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
                 let _ = win.unminimize();
@@ -58,19 +61,31 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .on_window_event(|window, event| {
-            // Intercept close: if "close to tray" is enabled, hide instead.
+            // Intercept close: with "close to tray" on, the app survives it.
+            //
+            // Two ways to survive. `release_ui_on_tray` (the default) lets the
+            // close proceed — the window is destroyed and its WebView2 processes
+            // go with it, which is the whole point; `RunEvent::ExitRequested`
+            // below then keeps the process alive with just the tray icon. With
+            // the flag off we fall back to the classic hide, which keeps the
+            // webview (and its ~400 MB) resident but makes re-showing instant.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() != "main" {
                     return;
                 }
-                let close_to_tray = config::load_settings().ui.close_to_tray;
-                if close_to_tray {
-                    api.prevent_close();
-                    if let Err(e) = window.hide() {
-                        tracing::warn!("failed to hide window on close: {}", e);
-                    } else {
-                        tracing::debug!("window hidden to tray on close request");
-                    }
+                let ui = config::load_settings().ui;
+                if !ui.close_to_tray {
+                    return;
+                }
+                if ui.release_ui_on_tray {
+                    tracing::debug!("close to tray: releasing webview");
+                    return;
+                }
+                api.prevent_close();
+                if let Err(e) = window.hide() {
+                    tracing::warn!("failed to hide window on close: {}", e);
+                } else {
+                    tracing::debug!("window hidden to tray on close request");
                 }
             }
         })
@@ -86,12 +101,21 @@ pub fn run() {
             // the first time the frontend calls `skill_watch_set`).
             app.manage(skill_watch::SkillWatch::new());
 
-            // Honor `start_minimized`: hide the main window on startup.
+            // PR status polling lives in Rust so it keeps running (and keeps
+            // raising notifications) when the UI has been released to tray.
+            pr_poller::start(app.handle().clone());
+
+            // Honor `start_minimized`: send the main window straight to tray.
             let prefs = config::load_settings().ui;
             if prefs.start_minimized {
                 if let Some(win) = app.get_webview_window("main") {
-                    let _ = win.hide();
-                    tracing::info!("startup: hidden to tray (start_minimized=true)");
+                    if prefs.close_to_tray && prefs.release_ui_on_tray {
+                        let _ = win.destroy();
+                        tracing::info!("startup: released to tray (start_minimized=true)");
+                    } else {
+                        let _ = win.hide();
+                        tracing::info!("startup: hidden to tray (start_minimized=true)");
+                    }
                 }
             }
             Ok(())
@@ -183,6 +207,21 @@ pub fn run() {
             tray::hide_main_window,
             taskbar::set_taskbar_badge,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // Closing the last window normally ends the process. In tray mode it
+            // must not: the window is released on purpose and the tray icon is
+            // still the app's front door.
+            //
+            // `code: Some(_)` means someone called `AppHandle::exit` — the tray
+            // "Quit" item, or the self-updater. That is an explicit request to
+            // go away, so it is always honored.
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                if code.is_none() && config::load_settings().ui.close_to_tray {
+                    tracing::debug!("exit requested by last window closing — staying in tray");
+                    api.prevent_exit();
+                }
+            }
+        });
 }

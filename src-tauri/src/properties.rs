@@ -152,9 +152,17 @@ impl Properties {
     }
 }
 
+/// Write `content` via `.tmp` + `rename`. Skips the write entirely when the file
+/// already holds exactly `content` — see [`crate::installer::atomic_write_json`]
+/// for why that matters on synced install directories.
 pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(Error::from)?;
+    }
+    if let Ok(existing) = fs::read_to_string(path) {
+        if existing == content {
+            return Ok(());
+        }
     }
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, content).map_err(Error::from)?;

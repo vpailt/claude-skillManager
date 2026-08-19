@@ -24,11 +24,21 @@ export default defineConfig({
     },
   },
   build: {
-    // The single-chunk bundle sits a bit over Vite's default 500 kB warning
-    // threshold. The warning is harmless, but it goes to stderr and `build.ps1`
-    // runs under `$ErrorActionPreference = "Stop"`, which promotes any native
-    // stderr line to a fatal error — aborting the build before the Rust step.
-    // Raise the limit so a clean build stays quiet on stderr.
+    // Vite's default 500 kB warning goes to stderr, and `build.ps1` runs under
+    // `$ErrorActionPreference = "Stop"`, which promotes any native stderr line
+    // to a fatal error — aborting the build before the Rust step. Raise the
+    // limit so a clean build stays quiet on stderr.
     chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        // Pin the two heavy dependency trees into chunks of their own so they
+        // can only ever be reached through the lazy boundaries that need them
+        // (`SkillMarkdown`, the Admin page), never folded into the entry chunk.
+        manualChunks: {
+          markdown: ["react-markdown", "remark-gfm", "rehype-highlight"],
+          diff: ["react-diff-viewer-continued"],
+        },
+      },
+    },
   },
 });

@@ -91,7 +91,45 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Make sure the `main` window exists, rebuilding it from the same
+/// `tauri.conf.json` entry it was first created from.
+///
+/// With `release_ui_on_tray` on, closing to tray *destroys* the window to give
+/// back the WebView2 processes, so every "show" path has to be able to bring it
+/// back. Reusing the config entry keeps title/size/min-size in one place, and
+/// keeps the label `main` — the capability set in `capabilities/default.json` is
+/// scoped to that label.
+pub fn ensure_main_window(app: &AppHandle) {
+    if app.get_webview_window("main").is_some() {
+        return;
+    }
+    let cfg = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned();
+    let built = match cfg {
+        Some(c) => tauri::WebviewWindowBuilder::from_config(app, &c).and_then(|b| b.build()),
+        None => tauri::WebviewWindowBuilder::new(
+            app,
+            "main",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("SkillManager")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(900.0, 600.0)
+        .build(),
+    };
+    match built {
+        Ok(_) => tracing::info!("main window rebuilt"),
+        Err(e) => tracing::error!("could not rebuild main window: {}", e),
+    }
+}
+
 fn show_window(app: &AppHandle) {
+    ensure_main_window(app);
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
@@ -100,19 +138,29 @@ fn show_window(app: &AppHandle) {
     let _ = win.set_focus();
 }
 
+/// Send the window back to the tray, honoring `release_ui_on_tray`: destroying
+/// it frees its WebView2 processes, hiding it does not.
 fn hide_window(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    if crate::config::load_settings().ui.release_ui_on_tray {
+        tracing::debug!("releasing main window to tray (webview freed)");
+        let _ = win.destroy();
+    } else {
         let _ = win.hide();
     }
 }
 
 fn toggle_window(app: &AppHandle) {
+    // No window at all means it was released to tray — a click asks for it back.
     let Some(win) = app.get_webview_window("main") else {
+        show_window(app);
         return;
     };
     let visible = win.is_visible().unwrap_or(false);
     if visible {
-        let _ = win.hide();
+        hide_window(app);
     } else {
         let _ = win.show();
         let _ = win.unminimize();

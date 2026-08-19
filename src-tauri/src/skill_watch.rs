@@ -10,9 +10,19 @@
 //!     (re-scanned on every `set_watched`, i.e. every refresh).
 //!
 //! A folder's baseline is (re)captured when it's first seen and after a PR is
-//! opened for it (`mark_synced`). "Dirty" = current content hash differs from
-//! that baseline. The authoritative remote diff is still computed later by the
+//! opened for it (`mark_synced`). "Dirty" = current hash differs from that
+//! baseline. The authoritative remote diff is still computed later by the
 //! upload-skill wizard; this is only the cheap local nudge.
+//!
+//! ## Why the hash is metadata-only
+//!
+//! [`hash_folder`] hashes each file's *relative path + size + mtime*, never its
+//! bytes. Reading the contents meant pulling ~3 MB off disk for a typical
+//! install on every single filesystem event — for a signal whose only job is to
+//! light up a badge. Metadata catches every real edit (an editor save always
+//! moves mtime) and costs a `stat` that `walkdir` already has in hand from the
+//! directory listing. The trade is that a byte-identical rewrite now reads as
+//! "modified"; the upload wizard's remote diff still tells the truth.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -36,6 +46,10 @@ use crate::installer;
 const SKIP: &[&str] = &[".git", "__pycache__", ".DS_Store"];
 
 const BASELINE_FILE: &str = "skill_baselines.json";
+/// Baseline schema. Bumped when [`hash_folder`] changes meaning: v1 held content
+/// hashes, v2 holds metadata hashes. A mismatch drops the whole file rather than
+/// migrating — stale values would read as "every skill was modified".
+const BASELINE_VERSION: u32 = 2;
 /// Folders explicitly flagged "new, not yet pushed" (persisted set).
 const PENDING_NEW_FILE: &str = "skill_new.json";
 /// Tauri event emitted when a folder's dirty flag flips.
@@ -143,7 +157,22 @@ impl SkillWatch {
                 roots.push(input);
             }
             sh.roots = roots;
-            if baseline_changed {
+            // Drop baselines for folders that no longer exist. They accumulate
+            // forever otherwise — every plugin version bump strands the previous
+            // version's skill folders (measured: 372 entries, 136 of them dead).
+            // Pruning on *existence* rather than on "absent from the watched set"
+            // is deliberate: the watched set collapses to empty whenever the
+            // forge is unreachable (`editable` degrades to false), and wiping
+            // baselines then would lose every pending "you edited this" flag.
+            let before = sh.baselines.len();
+            sh.baselines.retain(|k, _| Path::new(k).is_dir());
+            let pruned = before - sh.baselines.len();
+            if pruned > 0 {
+                let alive: Vec<String> = sh.baselines.keys().cloned().collect();
+                sh.dirty.retain(|k| alive.contains(k));
+                tracing::debug!("skill_watch: pruned {pruned} baseline(s) for removed folders");
+            }
+            if baseline_changed || pruned > 0 {
                 save_baselines(&sh.baselines);
             }
         }
@@ -263,14 +292,15 @@ impl SkillWatch {
         if w.is_some() {
             return;
         }
-        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<PathBuf>>();
         let watcher = match notify::recommended_watcher(
             move |res: notify::Result<notify::Event>| {
-                // Coalesce everything to a "something changed" ping; the worker
-                // re-scans the (small) watched set. We don't route by path here —
-                // canonicalization mismatches make per-path matching flaky.
-                if res.is_ok() {
-                    let _ = tx.send(());
+                // Forward the changed paths so the worker can re-hash only the
+                // roots they fall under. Canonicalization mismatches make that
+                // match unreliable, so an empty or unmatched path set degrades to
+                // a full rescan rather than a missed change (see `rescan`).
+                if let Ok(ev) = res {
+                    let _ = tx.send(ev.paths);
                 }
             },
         ) {
@@ -316,12 +346,15 @@ impl SkillWatch {
     }
 }
 
-fn worker_loop(rx: Receiver<()>, shared: Arc<Mutex<Shared>>, app: AppHandle) {
-    while rx.recv().is_ok() {
+fn worker_loop(rx: Receiver<Vec<PathBuf>>, shared: Arc<Mutex<Shared>>, app: AppHandle) {
+    while let Ok(first) = rx.recv() {
         // Debounce a burst of save events (editors fire several per save) into
-        // one re-scan.
-        while rx.recv_timeout(Duration::from_millis(250)).is_ok() {}
-        for ds in rescan(&shared) {
+        // one re-scan, accumulating every path the burst touched.
+        let mut touched = first;
+        while let Ok(more) = rx.recv_timeout(Duration::from_millis(250)) {
+            touched.extend(more);
+        }
+        for ds in rescan(&shared, &touched) {
             if let Err(e) = app.emit(EVENT, &ds) {
                 tracing::debug!("skill_watch: emit failed: {e}");
             }
@@ -329,22 +362,70 @@ fn worker_loop(rx: Receiver<()>, shared: Arc<Mutex<Shared>>, app: AppHandle) {
     }
 }
 
-/// Recompute every root's hash, update the dirty set, and return only the
-/// folders whose dirty flag actually flipped (so emitted events stay minimal).
-fn rescan(shared: &Arc<Mutex<Shared>>) -> Vec<DirtyState> {
-    let mut sh = shared.lock();
-    let roots: Vec<(String, u64, bool)> = sh
-        .roots
+/// Recompute the affected roots' hashes, update the dirty set, and return only
+/// the folders whose dirty flag actually flipped (so emitted events stay
+/// minimal).
+///
+/// `touched` is the set of paths the filesystem burst reported. Only roots those
+/// paths fall under are re-hashed — an edit under one skill cannot change
+/// another's hash. An empty `touched`, or one matching no root (a
+/// canonicalization mismatch), falls back to re-hashing everything: missing a
+/// change is worse than the extra work.
+///
+/// Hashing happens **outside** the lock. `rescan` used to hold `shared` for the
+/// whole walk, so one filesystem event blocked every command touching the
+/// watcher state.
+fn rescan(shared: &Arc<Mutex<Shared>>, touched: &[PathBuf]) -> Vec<DirtyState> {
+    let snapshot: Vec<(String, u64, bool)> = {
+        let sh = shared.lock();
+        sh.roots
+            .iter()
+            .filter_map(|input| {
+                sh.baselines
+                    .get(input)
+                    .map(|b| (input.clone(), *b, sh.pending_new.contains(input)))
+            })
+            .collect()
+    };
+
+    let selected: Vec<&(String, u64, bool)> = {
+        let norms: Vec<String> = touched
+            .iter()
+            .map(|p| norm_path(&p.to_string_lossy()))
+            .collect();
+        let hit: Vec<&(String, u64, bool)> = snapshot
+            .iter()
+            .filter(|(input, _, _)| {
+                let rn = norm_path(input);
+                let prefix = format!("{rn}/");
+                norms.iter().any(|n| *n == rn || n.starts_with(&prefix))
+            })
+            .collect();
+        if hit.is_empty() {
+            snapshot.iter().collect()
+        } else {
+            hit
+        }
+    };
+
+    let computed: Vec<(String, bool)> = selected
         .iter()
-        .filter_map(|input| {
-            sh.baselines
-                .get(input)
-                .map(|b| (input.clone(), *b, sh.pending_new.contains(input)))
+        .map(|(input, baseline, is_new)| {
+            (
+                input.clone(),
+                *is_new || hash_folder(Path::new(input)) != *baseline,
+            )
         })
         .collect();
+
+    let mut sh = shared.lock();
     let mut changed = Vec::new();
-    for (input, baseline, is_new) in roots {
-        let dirty = is_new || hash_folder(Path::new(&input)) != baseline;
+    for (input, dirty) in computed {
+        // A refresh may have re-armed the watched set while we were hashing —
+        // don't resurrect a root that is no longer watched.
+        if !sh.roots.iter().any(|r| *r == input) {
+            continue;
+        }
         let was = sh.dirty.contains(&input);
         if dirty == was {
             continue;
@@ -362,12 +443,16 @@ fn rescan(shared: &Arc<Mutex<Shared>>) -> Vec<DirtyState> {
     changed
 }
 
-/// Order-independent content hash of every file under `folder` (path + bytes),
-/// skipping the [`SKIP`] segments. `DefaultHasher` (SipHash, std, fixed keys) is
-/// deterministic across runs so the persisted baseline stays comparable — no
-/// crypto-hash dependency needed for a "did it change" check.
+/// Order-independent hash of every file under `folder` — relative path, size and
+/// mtime — skipping the [`SKIP`] segments. `DefaultHasher` (SipHash, std, fixed
+/// keys) is deterministic across runs so the persisted baseline stays
+/// comparable; no crypto-hash dependency is needed for a "did it change" check.
+///
+/// Deliberately **does not read file contents**: `walkdir` already carries the
+/// metadata from the directory listing, so this costs one already-paid `stat`
+/// per file instead of a full read of the tree. See the module docs.
 fn hash_folder(folder: &Path) -> u64 {
-    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut files: Vec<(String, u64, u64)> = Vec::new();
     for entry in WalkDir::new(folder).sort_by_file_name() {
         let entry = match entry {
             Ok(e) => e,
@@ -387,17 +472,24 @@ fn hash_folder(folder: &Path) -> u64 {
         if parts.iter().any(|p| SKIP.contains(&p.as_str())) {
             continue;
         }
-        match std::fs::read(entry.path()) {
-            Ok(bytes) => files.push((parts.join("/"), bytes)),
-            Err(_) => continue,
-        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        files.push((parts.join("/"), meta.len(), mtime));
     }
     files.sort();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     files.len().hash(&mut h);
-    for (path, bytes) in files {
+    for (path, len, mtime) in files {
         path.hash(&mut h);
-        bytes.hash(&mut h);
+        len.hash(&mut h);
+        mtime.hash(&mut h);
     }
     h.finish()
 }
@@ -423,8 +515,14 @@ fn load_baselines() -> HashMap<String, u64> {
     let Ok(val) = serde_json::from_str::<Value>(&text) else {
         return HashMap::new();
     };
+    // Anything that isn't the current schema is discarded — notably the v1 flat
+    // map of *content* hashes, whose values mean nothing to the metadata hash.
+    // Starting empty makes every folder first-sight, i.e. clean.
+    if val.get("version").and_then(Value::as_u64) != Some(BASELINE_VERSION as u64) {
+        return HashMap::new();
+    }
     let mut out = HashMap::new();
-    if let Some(obj) = val.as_object() {
+    if let Some(obj) = val.get("baselines").and_then(Value::as_object) {
         for (k, v) in obj {
             // Hashes are stored as strings to dodge JSON's 2^53 integer limit.
             if let Some(n) = v.as_str().and_then(|s| s.parse::<u64>().ok()) {
@@ -440,7 +538,10 @@ fn save_baselines(map: &HashMap<String, u64>) {
     for (k, v) in map {
         obj.insert(k.clone(), Value::String(v.to_string()));
     }
-    if let Err(e) = installer::atomic_write_json(&baseline_path(), &Value::Object(obj)) {
+    let mut root = Map::new();
+    root.insert("version".into(), Value::from(BASELINE_VERSION));
+    root.insert("baselines".into(), Value::Object(obj));
+    if let Err(e) = installer::atomic_write_json(&baseline_path(), &Value::Object(root)) {
         tracing::warn!("skill_watch: could not persist baselines: {e}");
     }
 }

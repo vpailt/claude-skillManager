@@ -1,6 +1,6 @@
 [package]
 name = "skillmanager"
-version = "2.3.0"
+version = "2.4.0"
 description = "GUI for managing Claude Code plugins, marketplaces and skills"
 authors = ["Valentin Pitel"]
 edition = "2021"
@@ -21,7 +21,11 @@ tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "stream"] }
-tokio = { version = "1", features = ["full"] }
+# Only `spawn_blocking` (+ the multi-thread runtime Tauri drives) is used
+# directly. Cargo unions features across the graph, so Tauri and reqwest still
+# get whatever they declare — this just stops us pulling in net/fs/process/signal
+# drivers nothing here touches, which the size-tuned release profile pays for.
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }

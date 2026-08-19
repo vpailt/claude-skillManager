@@ -86,11 +86,22 @@ SkillManager/
 │   ├── config.properties      ← token + polling + UI prefs (Java-style key=value)
 │   ├── logging.properties     ← logger config (enabled, level, max files)
 │   ├── marketplaces.json      ← list of registered marketplaces
+│   ├── gitea.json             ← registered Gitea instances (tokens stay in the vault)
 │   ├── pr_history.json        ← rolling list of admin-opened PRs
-│   └── pending_prs.json       ← PR drafts awaiting merge
+│   ├── pending_prs.json       ← PR drafts awaiting merge
+│   ├── skill_baselines.json   ← per-skill-folder hash baselines (`skill_watch.rs`)
+│   ├── skill_new.json         ← skills created locally, not yet pushed
+│   └── usage_index.json       ← parsed-transcript cache (`usage_audit.rs`)
 └── logs/
     └── skillmanager.YYYY-MM-DD.log
 ```
+
+**Don't install into a synced folder** (OneDrive, Dropbox, a redirected Desktop).
+Every write under `config/` and `logs/` then goes through the cloud filter driver
+and schedules an upload — a cost that shows up as system load with nothing
+attributable to `skillmanager.exe`. `atomic_write_json` / `properties::write_atomic`
+skip byte-identical rewrites specifically to keep this bounded, but the right fix
+is to keep the directory out of the sync root.
 
 The two `.properties` files are hand-editable; restart the app to pick up changes
 made outside the Settings page. The properties parser is intentionally minimal
@@ -124,6 +135,23 @@ repo). So installing a plugin means: read marketplace.json → resolve plugin's
 Don't conflate "install marketplace" (clone the index) with "install plugin" (fetch the
 plugin's own repo). `installer.rs` and `marketplace_installer.rs` are separate for this
 reason.
+
+### Tray mode releases the UI
+
+`ui.tray.release.ui` (on by default, alongside `ui.tray.close.to.tray`) makes
+closing the window **destroy** it rather than hide it, so its WebView2 processes
+go away: ~470 MB resident drops to ~37 MB. `RunEvent::ExitRequested` in
+`lib::run` then keeps the process alive on the tray icon alone — it prevents the
+exit only when `code.is_none()` (the last window closing), so `AppHandle::exit`
+from the tray's Quit item or the self-updater still works. `tray::ensure_main_window`
+rebuilds the window from the same `tauri.conf.json` entry, keeping the label
+`main` so `capabilities/default.json` still applies.
+
+The consequence for new code: **nothing user-visible may depend on the frontend
+being alive.** Background work belongs in Rust — that is why PR polling moved to
+`pr_poller.rs`. Before adding a `setInterval` in the frontend, ask whether it
+needs to keep running once the window is gone; if it does, it goes in Rust and
+reaches the UI through a Tauri event.
 
 ### Refresh flow (the heart of the UI)
 
@@ -167,11 +195,31 @@ that requires `git` on the user's machine.
 - `github_client.rs::extract_zipball` — strips the top-level `<repo>-<sha>/` folder
   GitHub adds, and uses the `\\?\` long-path prefix on Windows (via `long_path()`) to
   bypass MAX_PATH. Don't replace with a naive zip extract loop.
+- `github_client.rs` — clients are **pooled** by (provider, host, TLS mode, token):
+  building a `reqwest::blocking::Client` spawns an OS thread with its own tokio
+  runtime and an empty connection pool, and `refresh_all` builds several per run.
+  Read-only JSON GETs go through `get_json_cached`, which adds `If-None-Match` and
+  serves the cached body on `304` — it never skips the request, so it cannot go
+  stale. Route new read endpoints through it; leave writes on `request()`.
 - `installer.rs::rmtree_robust` — handles read-only files and long paths on Windows.
   Use this everywhere we delete a plugin/marketplace folder, not `std::fs::remove_dir_all`
   directly.
 - `plugin_state.rs` — `~/.claude/settings.json` contains many unrelated keys (hooks,
   theme, etc.); always do a partial update preserving everything else.
+- `pr_poller.rs` — background thread polling open PR statuses, emitting
+  `pr-status-changed` and raising the native toast itself when no window was
+  visible to show the in-app one. Re-reads settings each tick, so the Settings
+  page's toggle/interval take effect without a restart.
+- `skill_watch.rs` — hashes each watched folder's *metadata* (path + size +
+  mtime), never its contents, and re-hashes only the roots a filesystem event
+  actually touched. Both matter: the old content hash read ~3 MB per event, under
+  the shared mutex. Changing what `hash_folder` means requires bumping
+  `BASELINE_VERSION`.
+- `usage_audit.rs` — transcripts are append-only, so a cache entry records how far
+  it parsed plus a hash of the file head; a file that only grew is parsed from
+  that offset instead of whole. `line_may_hold_event` skips the JSON parse for the
+  ~99 % of lines that carry no invocation. Changing the cached shape requires
+  bumping `INDEX_VERSION`.
 - `local_scanner.rs::build_marketplaces_from_settings` — also surfaces "orphan"
   marketplaces (installed locally but missing from app settings) so the user can still
   see/act on them.
@@ -209,7 +257,8 @@ that requires `git` on the user's machine.
 
 - All JSON writes that matter go through `installer::atomic_write_json` (write `.tmp`
   then `rename`) — don't write JSON in place. `properties::write_atomic` does the same
-  for `.properties` files.
+  for `.properties` files. Both **skip the write when the bytes already match** the
+  file on disk, so callers may re-save unconditionally without generating churn.
 - Timestamps in install records use `installer::now_iso()` (UTC, milliseconds, `Z`
   suffix) to match Claude Code's own format.
 - New plugins are auto-enabled on install only if `enabledPlugins` has no existing entry
@@ -219,9 +268,19 @@ that requires `git` on the user's machine.
 - `serde` derives use `rename_all = "camelCase"` so the Rust → TS boundary doesn't need
   manual translation.
 - App-state files (`config.properties`, `logging.properties`, `marketplaces.json`,
-  `pr_history.json`, `pending_prs.json`, `logs/`) sit under `<exe_dir>/`. Never write
+  `gitea.json`, `pr_history.json`, `pending_prs.json`, `skill_baselines.json`,
+  `skill_new.json`, `usage_index.json`, `logs/`) sit under `<exe_dir>/`. Never write
   to `%APPDATA%` directly — go through `config::app_settings_dir()` or
   `config::logs_dir()`.
+- TanStack Query runs with `refetchOnWindowFocus: false` globally (`main.tsx`).
+  Opt a query back in only when returning to the window genuinely should refetch
+  it, and pair that with a staleTime that matches what the call costs — the
+  default fired every stale query, including the multi-request `refresh_all`, on
+  each alt-tab.
+- Heavy dependency trees sit behind `React.lazy` boundaries (`SkillMarkdown`, the
+  Admin and Audit pages, the Settings dialog), with `markdown` and `diff` pinned
+  to their own Rollup chunks in `vite.config.ts`. Keep new heavyweight imports off
+  the entry chunk.
 - Backend events worth keeping in a log file use `tracing::info!`/`warn!`/`error!`.
   Frontend events use `createLogger("<target>")` from `lib/logger.ts`. Don't sprinkle
   `println!` or `console.log` in shipped code — they bypass the log file.

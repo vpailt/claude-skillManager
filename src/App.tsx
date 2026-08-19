@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Sidebar } from "@/components/Sidebar";
-import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationStack } from "@/components/NotificationStack";
 import { useRefresh } from "@/hooks/useRefresh";
 import { usePrPolling } from "@/hooks/usePrPolling";
@@ -16,9 +15,35 @@ import { createLogger, setFrontendLogLevel } from "@/lib/logger";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { OverviewPage } from "@/pages/Overview";
 import { SkillsPage } from "@/pages/Skills";
-import { AdminPage } from "@/pages/Admin";
-import { UsageAuditPage } from "@/pages/UsageAudit";
-import { SettingsDialog } from "@/components/SettingsDialog";
+
+// Split out of the entry chunk. Admin drags in the diff viewer, the audit page
+// its charts and export plumbing, and the Settings dialog the whole Gitea /
+// logging surface — none of which is needed to render the two default tabs.
+// Each is fetched the first time it is actually opened.
+const AdminPage = lazy(() =>
+  import("@/pages/Admin").then((m) => ({ default: m.AdminPage }))
+);
+const UsageAuditPage = lazy(() =>
+  import("@/pages/UsageAudit").then((m) => ({ default: m.UsageAuditPage }))
+);
+const SettingsDialog = lazy(() =>
+  import("@/components/SettingsDialog").then((m) => ({
+    default: m.SettingsDialog,
+  }))
+);
+const CommandPalette = lazy(() =>
+  import("@/components/CommandPalette").then((m) => ({
+    default: m.CommandPalette,
+  }))
+);
+
+function PageFallback() {
+  return (
+    <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
+      Chargement…
+    </div>
+  );
+}
 
 const appLog = createLogger("app");
 
@@ -125,19 +150,29 @@ export default function App() {
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       <Sidebar onOpenPalette={() => setPaletteOpen(true)} />
       <main className="flex min-w-0 flex-1 overflow-hidden">
-        <Routes>
-          <Route path="/" element={<OverviewPage />} />
-          <Route path="/skills" element={<SkillsPage />} />
-          {/* Anciens menus Plugins / Skills V2 fusionnés dans /skills */}
-          <Route path="/plugins" element={<Navigate to="/skills" replace />} />
-          <Route path="/skills-v2" element={<Navigate to="/skills" replace />} />
-          <Route path="/admin" element={<AdminPage />} />
-          <Route path="/audit" element={<UsageAuditPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={<PageFallback />}>
+          <Routes>
+            <Route path="/" element={<OverviewPage />} />
+            <Route path="/skills" element={<SkillsPage />} />
+            {/* Anciens menus Plugins / Skills V2 fusionnés dans /skills */}
+            <Route path="/plugins" element={<Navigate to="/skills" replace />} />
+            <Route
+              path="/skills-v2"
+              element={<Navigate to="/skills" replace />}
+            />
+            <Route path="/admin" element={<AdminPage />} />
+            <Route path="/audit" element={<UsageAuditPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </main>
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
-      <SettingsDialog />
+      {/* No fallback: both mount hidden and render nothing until opened. */}
+      <Suspense fallback={null}>
+        {paletteOpen && (
+          <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        )}
+        <SettingsDialog />
+      </Suspense>
       <NotificationStack />
     </div>
   );

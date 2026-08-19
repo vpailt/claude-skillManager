@@ -48,10 +48,17 @@ function relativeTime(ms: number): string {
   return `il y a ${Math.floor(diff / 86_400_000)} j`;
 }
 
+// Re-render on a timer so relative timestamps ("il y a 3 min") stay honest.
+// Skips the state update while the window is hidden: nobody can read a
+// timestamp that isn't on screen, and this used to re-render (and re-parse
+// 128 kB of log text) every minute for the lifetime of a tray session.
 function useTicker(periodMs: number) {
   const [, setTick] = useState(0);
   useEffect(() => {
-    const id = window.setInterval(() => setTick((t) => t + 1), periodMs);
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      setTick((t) => t + 1);
+    }, periodMs);
     return () => window.clearInterval(id);
   }, [periodMs]);
 }

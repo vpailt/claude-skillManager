@@ -109,6 +109,11 @@ export interface UiPrefs {
   sidebarCollapsed: boolean;
   startMinimized: boolean;
   closeToTray: boolean;
+  /**
+   * When hiding to tray, destroy the window instead of hiding it, freeing the
+   * WebView2 processes it owns. Re-showing rebuilds the UI (a second or two).
+   */
+  releaseUiOnTray: boolean;
   /** Master switch for Windows native toasts; AND-ed with the per-kind flags. */
   nativeNotificationsEnabled: boolean;
   /** Per-kind gating of native toasts. Each defaults to true. */
@@ -116,6 +121,15 @@ export interface UiPrefs {
   notifyInfo: boolean;
   notifyWarning: boolean;
   notifyError: boolean;
+}
+
+/** Payload of the backend `pr-status-changed` event (see `pr_poller.rs`). */
+export interface PrStatusChange {
+  repo: string;
+  number: number;
+  title: string;
+  /** `"merged"` or `"closed"` — transitions away from open only. */
+  status: string;
 }
 
 export interface LoggingConfig {

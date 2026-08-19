@@ -34,6 +34,14 @@
 //! re-parsed; deleted files are pruned. The cache is the full event set; date
 //! filtering and aggregation run over it in memory.
 //!
+//! Transcripts are **append-only**, and the one belonging to the session you're
+//! in right now changes on every message — under a whole-file re-parse that
+//! meant re-reading a multi-MB file on every audit. So each cache entry also
+//! records how far it parsed (`parsed_upto`) and a hash of the file's head; when
+//! the head still matches and the file only grew, just the new tail is parsed
+//! and its events appended. A rewritten or truncated file fails the head check
+//! and falls back to a full re-parse.
+//!
 //! The measure reflects *active* usage (explicit invocations). A plugin that
 //! only contributes injected context, with no skill/agent/command invocation,
 //! shows as little- or un-used — that is expected.
@@ -44,14 +52,23 @@ use crate::installer::{atomic_write_json, now_iso};
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
+use std::hash::{Hash, Hasher};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 // Bumped whenever the cached event shape changes (a mismatch drops the cache).
-// v2 added `project_path`; v3 added `project_key` (stable project identity).
-const INDEX_VERSION: u32 = 3;
+// v2 added `project_path`; v3 added `project_key` (stable project identity);
+// v4 added the incremental-parse bookkeeping (`parsed_upto` / head hash).
+const INDEX_VERSION: u32 = 4;
+
+/// How many bytes of a file's head are hashed to decide "appended to" vs
+/// "rewritten". Large enough that two different transcripts never collide,
+/// small enough to be a single cheap read.
+const HEAD_SAMPLE: u64 = 64 * 1024;
 
 // Serializes the index refresh+persist so two concurrent audits (dashboard,
 // audit page, export) never race on the shared `usage_index.json.tmp`.
@@ -96,6 +113,17 @@ struct UsageEvent {
 struct FileEntry {
     mtime: u64,
     size: u64,
+    /// Byte offset just past the last **complete** line parsed. A half-flushed
+    /// final line is deliberately left unconsumed so the next pass picks it up
+    /// whole.
+    #[serde(default)]
+    parsed_upto: u64,
+    /// Hash of the file's first `head_len` bytes at the time of the last parse.
+    #[serde(default)]
+    head_hash: u64,
+    /// How many bytes `head_hash` covers (`min(size, HEAD_SAMPLE)`).
+    #[serde(default)]
+    head_len: u64,
     events: Vec<UsageEvent>,
 }
 
@@ -387,15 +415,47 @@ fn command_in(text: &str) -> Option<String> {
     }
 }
 
-/// Parse one transcript file into its events. Malformed lines are skipped.
-fn parse_transcript(path: &Path, fallback_dir: &str) -> Vec<UsageEvent> {
-    let Ok(text) = fs::read_to_string(path) else {
-        return Vec::new();
+/// Could this line possibly hold an invocation? Cheap substring test run before
+/// the JSON parse.
+///
+/// Transcript lines are mostly tool results, file contents and prose — a single
+/// line can be hundreds of KB, and allocating a generic `serde_json::Value` for
+/// each one is where nearly all of the parse time went. Only a percent or so of
+/// lines carry a `Skill`/`Agent` tool_use or a `<command-name>` marker.
+///
+/// Matched on bare ASCII substrings (no quotes, no angle brackets) so JSON
+/// escaping of the delimiters can't cause a false negative — a serializer never
+/// escapes plain letters. False positives are harmless: they just get parsed.
+fn line_may_hold_event(line: &str) -> bool {
+    line.contains("Skill") || line.contains("Agent") || line.contains("command-name")
+}
+
+/// Parse a transcript from byte offset `start` up to the end of its last
+/// *complete* line. Returns the events found and the new "parsed up to" offset.
+/// Malformed lines are skipped.
+fn parse_transcript_from(path: &Path, fallback_dir: &str, start: u64) -> (Vec<UsageEvent>, u64) {
+    let Ok(mut f) = fs::File::open(path) else {
+        return (Vec::new(), start);
     };
+    if start > 0 && f.seek(SeekFrom::Start(start)).is_err() {
+        return (Vec::new(), start);
+    }
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        return (Vec::new(), start);
+    }
+    // Stop at the last newline: anything after it is a line the writer hasn't
+    // finished flushing, and consuming it would drop the event it will carry.
+    let Some(last_nl) = buf.iter().rposition(|b| *b == b'\n') else {
+        return (Vec::new(), start);
+    };
+    let end = last_nl + 1;
+    let text = String::from_utf8_lossy(&buf[..end]);
+
     let mut events = Vec::new();
     for line in text.lines() {
         let line = line.trim();
-        if line.is_empty() {
+        if line.is_empty() || !line_may_hold_event(line) {
             continue;
         }
         let Ok(d) = serde_json::from_str::<Value>(line) else {
@@ -472,7 +532,32 @@ fn parse_transcript(path: &Path, fallback_dir: &str) -> Vec<UsageEvent> {
             _ => {}
         }
     }
-    events
+    (events, start + end as u64)
+}
+
+/// Hash of exactly the first `n` bytes of `path`. `None` when the file is
+/// shorter than `n` (i.e. it was truncated — the cached tail offset is void).
+fn head_hash_of(path: &Path, n: u64) -> Option<u64> {
+    let mut f = fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; n as usize];
+    f.read_exact(&mut buf).ok()?;
+    let mut h = DefaultHasher::new();
+    buf.hash(&mut h);
+    Some(h.finish())
+}
+
+/// Parse a transcript from scratch into a fresh cache entry.
+fn full_entry(path: &Path, fallback_dir: &str, mtime: u64, size: u64) -> FileEntry {
+    let (events, parsed_upto) = parse_transcript_from(path, fallback_dir, 0);
+    let head_len = size.min(HEAD_SAMPLE);
+    FileEntry {
+        mtime,
+        size,
+        parsed_upto,
+        head_hash: head_hash_of(path, head_len).unwrap_or(0),
+        head_len,
+        events,
+    }
 }
 
 fn file_stamp(path: &Path) -> Option<(u64, u64)> {
@@ -496,6 +581,7 @@ fn refresh_events(mut index: UsageIndex) -> (Vec<UsageEvent>, UsageIndex) {
     let mut all: Vec<UsageEvent> = Vec::new();
     let mut reparsed = 0usize;
     let mut reused = 0usize;
+    let mut appended = 0usize;
 
     for entry in WalkDir::new(&root)
         .min_depth(2)
@@ -519,17 +605,38 @@ fn refresh_events(mut index: UsageIndex) -> (Vec<UsageEvent>, UsageIndex) {
         };
 
         let file_entry = match index.files.remove(&key) {
+            // Untouched since the last audit.
             Some(cached) if cached.mtime == mtime && cached.size == size => {
                 reused += 1;
                 cached
             }
-            _ => {
-                reparsed += 1;
+            // Grew, and its head is byte-identical to what we parsed before —
+            // an append. Parse only the tail and keep the events already known.
+            // This is the live session's transcript on every audit.
+            Some(cached)
+                if size >= cached.size
+                    && cached.parsed_upto <= size
+                    && cached.head_len > 0
+                    && head_hash_of(path, cached.head_len) == Some(cached.head_hash) =>
+            {
+                appended += 1;
+                let (mut fresh, upto) =
+                    parse_transcript_from(path, &fallback_dir, cached.parsed_upto);
+                let mut events = cached.events;
+                events.append(&mut fresh);
                 FileEntry {
                     mtime,
                     size,
-                    events: parse_transcript(path, &fallback_dir),
+                    parsed_upto: upto,
+                    head_hash: cached.head_hash,
+                    head_len: cached.head_len,
+                    events,
                 }
+            }
+            // New, rewritten or truncated.
+            _ => {
+                reparsed += 1;
+                full_entry(path, &fallback_dir, mtime, size)
             }
         };
         all.extend(file_entry.events.iter().cloned());
@@ -537,9 +644,10 @@ fn refresh_events(mut index: UsageIndex) -> (Vec<UsageEvent>, UsageIndex) {
     }
 
     tracing::info!(
-        "usage audit: {} transcripts ({} reparsed, {} cached), {} events",
+        "usage audit: {} transcripts ({} reparsed, {} tail-only, {} cached), {} events",
         fresh.len(),
         reparsed,
+        appended,
         reused,
         all.len()
     );
