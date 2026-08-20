@@ -109,6 +109,28 @@ if ($Package) {
     # involved - so every release needs it attached alongside the NSIS setup.
     # Zipped: same bytes, roughly a third of the download.
     $version = (Get-Content "package.json" -Raw | ConvertFrom-Json).version
+
+    # Sign the standalone exe here, explicitly. `tauri build` does sign it, but
+    # then RESTORES the pre-patch binary once bundling is done - so the signed
+    # copy only survives inside the NSIS installer, and what is left on disk
+    # (what we are about to zip) carries no signature at all. Verified: after a
+    # signed build, signtool reports "No signature found" on this very file.
+    $win = (Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json).bundle.windows
+    if ($win.certificateThumbprint) {
+        $kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+        $signtool = Get-ChildItem $kits -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'x64' } | Sort-Object FullName -Descending | Select-Object -First 1
+        if (-not $signtool) {
+            Write-Host "==> signtool introuvable : impossible de signer $exe" -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "==> Signing $exe" -ForegroundColor Cyan
+        & $signtool.FullName sign /sha1 $win.certificateThumbprint /fd $win.digestAlgorithm /td $win.digestAlgorithm /tr $win.timestampUrl $exe
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "==> Signature echouee - la session SimplySign est-elle ouverte ?" -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+    }
     $zip = "src-tauri\target\release\SkillManager_${version}_x64_portable.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Compress-Archive -Path $exe -DestinationPath $zip -CompressionLevel Optimal

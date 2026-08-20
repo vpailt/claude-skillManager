@@ -38,7 +38,10 @@
     "windows": {
       "webviewInstallMode": {
         "type": "embedBootstrapper"
-      }
+      },
+      "certificateThumbprint": "386E7BA205FBE9EC379DB12E8FF24505E6719FF6",
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://time.certum.pl"
     }
   },
   "plugins": {}
