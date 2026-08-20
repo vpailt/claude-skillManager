@@ -1,202 +1,147 @@
-# Signer SkillManager avec la CA interne AlmaviaCX (AD CS)
+# Signer SkillManager (Certum Open Source Code Signing + SimplySign)
 
-But : signer `skillmanager.exe` et son installeur NSIS pour supprimer l'alerte
-Windows « Éditeur inconnu » (UAC) sur les postes du domaine AlmaviaCX.
+But : que Windows affiche **Open Source Developer Valentin Pitel** au lieu de
+« Éditeur inconnu », sur n'importe quel poste — pas seulement ceux du domaine
+AlmaviaCX. Et, depuis la v2.5, que la mise à jour automatique refuse tout binaire
+qui ne porte pas cette signature.
 
-> Portée : cette signature n'est reconnue **que** sur les machines qui font
-> confiance à la racine AlmaviaCX (postes du domaine). Sur un poste hors domaine,
-> l'alerte reviendra — c'est là que **Azure Trusted Signing** prendrait le relais.
-
----
-
-## Ce que provoque l'alerte aujourd'hui
-
-L'`.exe` / l'installeur NSIS ne sont pas signés, donc Windows affiche :
-
-1. **SmartScreen** — écran bleu « Windows a protégé votre ordinateur / Éditeur inconnu ».
-2. **UAC** — bandeau jaune « Éditeur inconnu » à l'élévation de droits.
-
-Signer avec un certificat **de confiance** supprime le #2. Le #1 (SmartScreen) ne se
-déclenche en pratique que sur les fichiers marqués « venus d'Internet »
-(*Mark-of-the-Web*) — un exe copié depuis un partage réseau interne n'a souvent pas
-cette marque, donc SmartScreen ne bronche pas (voir la vérif plus bas).
+> Ce document remplace la procédure précédente, basée sur la CA interne AlmaviaCX
+> (AD CS). Elle reste techniquement valable mais n'a plus d'intérêt : sa portée
+> s'arrêtait aux machines qui font confiance à la racine interne.
 
 ---
 
-## Qui fait quoi
+## Le certificat
 
-| Étape | Toi | IT AlmaviaCX |
-|---|:---:|:---:|
-| Publier le modèle *Code Signing* + accorder le droit d'enrôlement | | ✅ |
-| Obtenir le certificat | ✅ | |
-| Signer l'exe / l'installeur | ✅ | |
-| Faire confiance à la racine sur les autres postes | | ✅ (souvent déjà auto) |
+| | |
+|---|---|
+| Produit | Certum *Open Source Code Signing in the cloud*, 365 jours |
+| Sujet (CN) | `Open Source Developer Valentin Pitel` |
+| Émetteur | `Certum Code Signing 2021 CA` → `Certum Trusted Network CA` (racine déjà de confiance dans Windows) |
+| Empreinte SHA-1 | `386E7BA205FBE9EC379DB12E8FF24505E6719FF6` |
+| Expiration | 20/08/2027 |
+| Clé privée | HSM cloud Certum — **elle ne sort jamais**, obligation de stockage matériel depuis juin 2023 |
 
----
-
-## Étape 0 — Vérifier que le terrain est favorable
-
-**1. Poste sur le domaine ?**
-```pwsh
-(Get-CimInstance Win32_ComputerSystem) | Select-Object Domain, PartOfDomain
-dsregcmd /status | Select-String "DomainJoined|AzureAdJoined"
-```
-`PartOfDomain : True` → OK.
-
-**2. Une CA d'entreprise (AD CS) est-elle déclarée dans l'AD ?**
-```pwsh
-$conf = ([ADSI]"LDAP://RootDSE").Get("configurationNamingContext")
-([ADSI]"LDAP://CN=Enrollment Services,CN=Public Key Services,CN=Services,$conf").Children |
-  ForEach-Object { "{0}   (serveur : {1})" -f $_.cn, $_.dNSHostName }
-```
-Si une ou plusieurs CA sont listées → l'infra existe.
-
-**3. La racine interne est-elle déjà de confiance sur ton poste ?**
-```pwsh
-Get-ChildItem Cert:\LocalMachine\Root, Cert:\LocalMachine\CA |
-  Where-Object Subject -match "almavia" |
-  Select-Object Subject, NotAfter, Thumbprint
-```
-Si la racine interne est présente → un exe signé par cette CA montrera « AlmaviaCX »
-au lieu de « Éditeur inconnu ».
-
-Si ces trois passent, tu es sur du terrain favorable.
+Les fichiers `.pem` / `.der` téléchargeables depuis l'espace Certum ne contiennent
+que la partie publique : ils ne servent pas à signer.
 
 ---
 
-## Étape 1 — Obtenir le certificat de signature de code
+## Prérequis à chaque build signé
 
-**Cas A — le modèle est publié et tu as le droit d'enrôlement (libre-service)**
+1. **SimplySign Mobile** (iOS/Android) — génère les codes OTP.
+2. **SimplySign Desktop** (Windows) — émule un lecteur de carte et une carte
+   cryptographique. Sans session ouverte, la clé est inaccessible et le build
+   échoue.
 
-1. `certmgr.msc` → **Personnel → Certificats** → clic droit →
-   *Toutes les tâches → Demander un nouveau certificat*.
-2. *Suivant* → **Stratégie d'inscription Active Directory** → *Suivant*.
-3. Coche **« Signature de code »** (Code Signing) → **Inscription**.
-4. Le certificat (avec sa clé privée) atterrit dans `Cert:\CurrentUser\My`.
-
-**Cas B — le modèle n'apparaît pas**
-
-À demander à l'IT :
-> Publier le modèle *Code Signing* sur la CA d'entreprise et m'accorder les droits
-> **Lecture + Inscription** sur ce modèle pour mon compte.
-
-Alternative : l'IT t'émet le cert et te livre un `.pfx`, que tu importes avec
-`Import-PfxCertificate -FilePath cert.pfx -CertStoreLocation Cert:\CurrentUser\My`.
-
----
-
-## Étape 2 — Récupérer le thumbprint
+Ouvrir une session avant de builder, puis vérifier que le certificat est visible :
 
 ```pwsh
 Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
   Select-Object Subject, Thumbprint, NotAfter
 ```
-Note le `Thumbprint` (hex majuscule, sans espaces) — clé pour la suite.
+
+Rien ne s'affiche → la session n'est pas ouverte. C'est la cause n°1 d'un build
+qui refuse de signer.
 
 ---
 
-## Étape 3 — Signer
+## Signer : c'est déjà câblé
 
-### Option recommandée — natif Tauri
-
-Signe le `.exe` **et** l'installeur NSIS en un seul build. Dans
 `src-tauri/tauri.conf.json`, section `bundle.windows` :
 
 ```json
-"windows": {
-  "webviewInstallMode": { "type": "embedBootstrapper" },
-  "certificateThumbprint": "TON_THUMBPRINT_SANS_ESPACES",
-  "digestAlgorithm": "sha256",
-  "timestampUrl": "http://timestamp.digicert.com"
-}
+"certificateThumbprint": "386E7BA205FBE9EC379DB12E8FF24505E6719FF6",
+"digestAlgorithm": "sha256",
+"timestampUrl": "http://time.certum.pl"
 ```
 
-Puis `.\build.ps1` signe automatiquement.
+Un `.\build.ps1 -Package` produit donc trois artefacts signés :
 
-> ⚠️ Exige `signtool` (Windows SDK) accessible — vérifie avec `Get-Command signtool`.
-> Comme `build.ps1` charge déjà l'environnement VS2022, il est souvent sur le PATH.
+| Artefact | Signé par |
+|---|---|
+| `target\release\skillmanager.exe` | l'étape `-Package` de `build.ps1` (voir le piège ci-dessous) |
+| `target\release\bundle\nsis\SkillManager_<v>_x64-setup.exe` | `tauri build` |
+| `SkillManager_<v>_x64_portable.zip` | contient l'exe signé ci-dessus |
 
-### Option de repli — PowerShell pur (si `signtool` absent)
+### Le piège : Tauri restaure le binaire non signé
 
-À ajouter en fin de `build.ps1` :
+`tauri build` signe bien `skillmanager.exe` — le log l'affiche — puis **restaure la
+version d'avant patch une fois le bundling terminé**. La copie signée ne survit
+donc qu'à l'intérieur de l'installeur NSIS ; celle qui reste sur le disque n'a plus
+aucune signature. Constaté en vrai : `signtool verify` répondait *No signature
+found* sur un exe que le build venait d'annoncer comme signé.
 
-```pwsh
-$cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Select-Object -First 1
-Set-AuthenticodeSignature -FilePath ".\src-tauri\target\release\skillmanager.exe" `
-  -Certificate $cert -HashAlgorithm SHA256 `
-  -TimestampServer "http://timestamp.digicert.com"
-```
+Comme le zip portable est précisément ce que la mise à jour en place télécharge,
+`build.ps1 -Package` **re-signe l'exe explicitement** avant de le zipper, en
+relisant l'empreinte et l'horodateur depuis `tauri.conf.json`. Ne pas supprimer ce
+bloc en croyant qu'il fait doublon.
 
-Inconvénient : il faut aussi signer l'installeur NSIS produit
-(`...\target\release\bundle\nsis\*.exe`) avec la même commande.
+### L'horodatage n'est pas cosmétique
 
-> **Horodatage** : le serveur (DigiCert) est **public** et indépendant de la CA interne ;
-> il faut juste un accès Internet au moment du build. Sans lui, la signature devient
-> invalide à l'expiration du certificat.
+Sans horodatage RFC 3161, toutes les signatures deviennent invalides à l'expiration
+du certificat, en août 2027 — y compris sur les binaires déjà distribués. Avec, une
+signature reste valable indéfiniment : l'horodateur atteste que la signature a été
+apposée pendant la période de validité.
 
 ---
 
-## Étape 4 — Confiance sur les autres postes
+## Vérifier
 
-C'est ce qui fait disparaître « éditeur inconnu » **partout**, pas juste chez toi.
+```pwsh
+Get-AuthenticodeSignature .\src-tauri\target\release\skillmanager.exe |
+  Format-List Status, SignerCertificate, TimeStamperCertificate
+```
+`Status : Valid` **et** un `TimeStamperCertificate` non vide = signé et horodaté.
 
-Une **CA d'entreprise (Enterprise AD CS)** publie automatiquement sa racine dans le
-magasin *Autorités racines de confiance* de **tous** les postes du domaine (via l'AD).
-Donc si l'étape 0.3 a trouvé la racine déjà présente, il n'y a rien de plus à faire :
-tout poste du domaine affichera « AlmaviaCX ».
+Chaîne complète, avec le détail des autorités :
+```pwsh
+& "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe" verify /pa /v <fichier>
+```
 
-En cas de doute, demander à l'IT de confirmer que la racine est bien distribuée par GPO.
+Pour contrôler ce que reçoivent réellement les utilisateurs, vérifier l'exe **extrait
+du zip téléchargé depuis GitHub**, pas seulement celui du dossier de build.
 
 ---
 
-## Étape 5 — Vérifier le résultat
+## Le garde-fou côté mise à jour
 
-```pwsh
-Get-AuthenticodeSignature ".\src-tauri\target\release\skillmanager.exe" |
-  Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
-```
-`Status : Valid` + un `TimeStamperCertificate` non vide = signé et horodaté.
+`src-tauri/src/authenticode.rs` interroge `WinVerifyTrust` avant que la mise à jour
+n'échange le binaire, et compare le CN du signataire à `EXPECTED_SIGNER`. Un binaire
+non signé, altéré, ou signé par quelqu'un d'autre est supprimé et l'échange n'a pas
+lieu ; l'utilisateur se voit alors proposer une mise à jour manuelle.
 
-Puis lance l'installeur en élévation : l'UAC doit afficher l'éditeur au lieu de
-« Éditeur inconnu ».
+Vérifier la chaîne ne suffirait pas : n'importe quel certificat de signature de code
+reconnu par Windows la satisferait, et ça s'achète. C'est l'identité du signataire
+qui porte la garantie.
 
-**Vérif SmartScreen (Mark-of-the-Web)** — sur une copie « distribuée » :
+**Au renouvellement du certificat**, en août 2027, deux valeurs à mettre à jour
+ensemble :
+
+| Fichier | Valeur |
+|---|---|
+| `src-tauri/tauri.conf.json` | `certificateThumbprint` — change à chaque émission |
+| `src-tauri/src/authenticode.rs` | `EXPECTED_SIGNER` — ne change que si le sujet change |
+
+Si le sujet change et que `EXPECTED_SIGNER` est oublié, les mises à jour automatiques
+s'arrêtent proprement (le bandeau propose la mise à jour manuelle) plutôt que
+d'accepter un binaire inattendu. C'est le bon sens de l'échec.
+
+---
+
+## Ce que la signature ne fait pas
+
+L'alerte UAC « Éditeur inconnu » disparaît dès la première signature. **SmartScreen**,
+lui, peut continuer à avertir quelque temps sur les exécutables fraîchement
+téléchargés : sa réputation se construit au fil des téléchargements, et seul un
+certificat EV donne une réputation immédiate.
+
+SmartScreen ne se déclenche que sur les fichiers marqués « venus d'Internet ». Pour
+le vérifier sur une copie distribuée :
 ```pwsh
 Get-Item .\skillmanager.exe -Stream Zone.Identifier -ErrorAction SilentlyContinue
 ```
-Si ça ne renvoie **rien** → pas de Mark-of-the-Web → SmartScreen ne se déclenchera pas.
-
----
-
-## Prouver le mécanisme sans l'IT (dry-run auto-signé)
-
-Pour valider toute la chaîne (signer → faire confiance → l'UAC affiche l'éditeur)
-avant même d'avoir le vrai certificat interne :
-
-```pwsh
-# 1. Créer un cert code-signing bidon
-$cert = New-SelfSignedCertificate -Type CodeSigningCert `
-          -Subject "CN=Valentin Pitel (test)" -CertStoreLocation Cert:\CurrentUser\My
-
-# 2. Signer une COPIE de l'exe (pas l'original)
-Copy-Item .\src-tauri\target\release\skillmanager.exe .\test.exe
-Set-AuthenticodeSignature -FilePath .\test.exe -Certificate $cert -HashAlgorithm SHA256
-
-# 3. À ce stade, test.exe en élévation → UAC dit encore "Éditeur inconnu"
-
-# 4. Rendre le cert de confiance (admin) — SUR TON POSTE DE TEST UNIQUEMENT
-Export-Certificate -Cert $cert -FilePath $env:TEMP\test.cer
-Import-Certificate -FilePath $env:TEMP\test.cer -CertStoreLocation Cert:\LocalMachine\Root
-
-# 5. Relancer test.exe → UAC affiche "Valentin Pitel (test)" ✓
-```
-
-**⚠️ Nettoyage obligatoire** — ne pas laisser une racine auto-signée de confiance :
-```pwsh
-Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -match "Valentin Pitel \(test\)" | Remove-Item
-Get-ChildItem Cert:\CurrentUser\My   | Where-Object Subject -match "Valentin Pitel \(test\)" | Remove-Item
-Remove-Item .\test.exe, $env:TEMP\test.cer
-```
+Aucune sortie → pas de *Mark-of-the-Web* → SmartScreen ne dira rien.
 
 ---
 
@@ -204,10 +149,8 @@ Remove-Item .\test.exe, $env:TEMP\test.cer
 
 | Besoin | Commande |
 |---|---|
-| Poste sur le domaine ? | `(Get-CimInstance Win32_ComputerSystem).PartOfDomain` |
-| Lister les CA d'entreprise | requête ADSI `Enrollment Services` (étape 0.2) |
-| Racine interne de confiance ? | `Get-ChildItem Cert:\LocalMachine\Root \| ? Subject -match "almavia"` |
-| Demander un cert (GUI) | `certmgr.msc` → Personnel → Demander un nouveau certificat |
-| Thumbprint | `Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert` |
-| Signer (PowerShell) | `Set-AuthenticodeSignature -FilePath … -Certificate … -TimestampServer …` |
-| Vérifier la signature | `Get-AuthenticodeSignature … \| Format-List Status, …` |
+| Le certificat est-il accessible ? | `Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert` |
+| Build signé + assets de release | `.\build.ps1 -Package` |
+| Vérifier un fichier | `Get-AuthenticodeSignature <f> \| Format-List Status, TimeStamperCertificate` |
+| Vérifier la chaîne | `signtool verify /pa /v <f>` |
+| Signer un fichier à la main | `signtool sign /sha1 <empreinte> /fd sha256 /td sha256 /tr http://time.certum.pl <f>` |

@@ -16,7 +16,9 @@
 //!
 //! 1. download the release's portable asset (raw `.exe`, or a `.zip` holding
 //!    one) into `<exe_dir>/update/`;
-//! 2. sanity-check it (asset size, `MZ` header, plausible length);
+//! 2. check it (asset size, `MZ` header, plausible length) and, decisively,
+//!    verify its Authenticode signature against our own publisher — see
+//!    `authenticode`;
 //! 3. rename the running `skillmanager.exe` into `update/…old.exe`;
 //! 4. rename the downloaded binary onto `skillmanager.exe` (rolling back the
 //!    previous rename if that fails);
@@ -34,6 +36,7 @@
 //! asset, we fall back to the NSIS installer — spawned silently (`/S`) so it
 //! still doesn't put a wizard in the user's face.
 
+use crate::authenticode;
 use crate::config;
 use crate::error::{Error, Result};
 use parking_lot::Mutex;
@@ -489,6 +492,15 @@ pub fn apply_update(info: &AppUpdateInfo) -> Result<StagedUpdate> {
         fs::write(&fresh, &bytes)?;
     }
     verify_exe(&fresh)?;
+    // The real gate. Everything above only proves we downloaded *something* of
+    // the right shape; this proves Windows trusts its signature and that the
+    // signer is us. It runs before the swap, so a binary that fails it is
+    // simply deleted and the install is never touched.
+    let signer = authenticode::verify_signed_by(&fresh, authenticode::EXPECTED_SIGNER)
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&fresh);
+        })?;
+    tracing::info!("app_updater: downloaded binary signed by \"{}\"", signer);
 
     // Park the running image. Windows refuses to delete or overwrite it, but a
     // rename is fine — the loader opened it with FILE_SHARE_DELETE. The stamp
@@ -691,10 +703,17 @@ pub fn download_installer(asset_url: &str, asset_name: &str) -> Result<PathBuf> 
 
     let bytes = download(asset_url, 0)?;
     fs::write(&target, &bytes)?;
+    // Same gate as the in-place path: this installer is about to be run, with
+    // elevation if the install location needs it.
+    let signer = authenticode::verify_signed_by(&target, authenticode::EXPECTED_SIGNER)
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&target);
+        })?;
     tracing::info!(
-        "app_updater: installer saved to {} ({} bytes)",
+        "app_updater: installer saved to {} ({} bytes), signed by \"{}\"",
         target.display(),
-        bytes.len()
+        bytes.len(),
+        signer
     );
     Ok(target)
 }

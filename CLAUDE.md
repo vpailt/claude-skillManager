@@ -38,6 +38,13 @@ last time"), run this exact cycle:
 5. **Push** `origin main` — only with a fresh, explicit user go-ahead for *this* round
    (the auto-mode classifier blocks an unprompted push to the default branch).
 
+Builds are **Authenticode-signed**: open a SimplySign Desktop session *before*
+building or `-Package` stops with an explicit error (the key lives in Certum's cloud
+HSM). Note that `tauri build` signs `skillmanager.exe` and then restores the
+pre-patch, unsigned binary once bundling ends — only the copy inside the NSIS
+installer keeps its signature — so `-Package` re-signs the standalone exe before
+zipping it. See `docs/signature-code-windows.md`.
+
 When the round ends in a **published GitHub release**, build with `.uild.ps1 -Package`
 and attach **both** assets: the NSIS `…-setup.exe` *and*
 `SkillManager_<version>_x64_portable.zip`. The zip is what the in-place self-update
@@ -233,6 +240,12 @@ that requires `git` on the user's machine.
   no-op in debug builds so it never swaps a binary into `target/debug`. Emits
   `app-update-ready` (swapped, restart when you like) or `app-update-available`
   (needs the user), raising the native toast itself when no window was visible.
+- `authenticode.rs` — `WinVerifyTrust` wrapper gating the update path: the
+  downloaded binary must carry a valid signature issued to `EXPECTED_SIGNER`, or
+  it is deleted and the swap never happens. Chain validity alone would not do —
+  any trusted code-signing certificate satisfies it, and those are purchasable.
+  Renewing the certificate means updating `EXPECTED_SIGNER` here *and*
+  `certificateThumbprint` in `tauri.conf.json`.
 - `skill_watch.rs` — hashes each watched folder's *metadata* (path + size +
   mtime), never its contents, and re-hashes only the roots a filesystem event
   actually touched. Both matter: the old content hash read ~3 MB per event, under

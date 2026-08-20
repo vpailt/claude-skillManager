@@ -7,6 +7,7 @@ pub mod admin;
 pub mod admin_drafts;
 pub mod app_uninstaller;
 pub mod app_updater;
+pub mod authenticode;
 pub mod commands;
 pub mod config;
 pub mod error;
