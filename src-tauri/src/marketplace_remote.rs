@@ -76,9 +76,16 @@ pub fn merge_local_remote(
     for (_, mut l) in by_name {
         // Plugins the remote fetch didn't return.
         if l.installed_version.is_some() {
-            // Still installed on this machine → genuine LocalOnly (it's on disk
-            // even if the catalogue no longer lists it).
-            l.install_state = InstallState::LocalOnly;
+            if remote_ok {
+                // The catalogue WAS read and doesn't list it, yet it's on disk
+                // → genuine LocalOnly.
+                l.install_state = InstallState::LocalOnly;
+            }
+            // Remote read failed: keep the state the local scan computed
+            // (Installed / Outdated). A registry we couldn't reach is not
+            // evidence the plugin left the catalogue — flipping every installed
+            // plugin to "local uniquement" on a transient failure (VPN-gated
+            // Gitea, timeout, rate limit) is exactly the flicker this avoids.
             merged.push(l);
             continue;
         }
