@@ -24,6 +24,46 @@ impl Default for InstallState {
     }
 }
 
+/// Where a local skill folder stands relative to its plugin's remote repo.
+///
+/// Replaces the old boolean "dirty" flag, which could only ever say "the bytes
+/// under this folder moved since I first saw it" — and therefore could not tell
+/// an addition from an edit, said nothing about deletions, and silently read
+/// "clean" for a folder it had never seen before (a fresh install, a wiped
+/// baseline, a skill created outside the app).
+///
+/// Computed by [`crate::skill_watch`], which owns the state; the refresh
+/// pipeline feeds it what the remote holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillSync {
+    /// Byte-for-byte identical to the remote (git blob SHAs match).
+    Synced,
+    /// The remote has this skill, the local copy differs.
+    Modified,
+    /// The remote does not have this skill — a local addition to push.
+    New,
+    /// The remote has this skill, the local folder is gone.
+    Deleted,
+    /// Not decidable: the remote listing failed and no baseline settles it.
+    /// Deliberately distinct from `Synced` — claiming "nothing to do" when we
+    /// simply could not look is the failure mode this whole type exists to end.
+    Unknown,
+}
+
+impl Default for SkillSync {
+    fn default() -> Self {
+        SkillSync::Unknown
+    }
+}
+
+impl SkillSync {
+    /// Whether this state is something the user may want to push upstream.
+    pub fn is_actionable(self) -> bool {
+        matches!(self, SkillSync::Modified | SkillSync::New | SkillSync::Deleted)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Skill {
@@ -32,6 +72,15 @@ pub struct Skill {
     pub description: String,
     #[serde(default)]
     pub folder: Option<PathBuf>,
+    /// The path [`crate::skill_watch`] keys this skill's sync status on.
+    ///
+    /// Same as `folder` for an installed skill. It also gets filled in for a
+    /// skill the remote has but the disk does not — where `folder` is `None`
+    /// precisely because nothing is installed — so a locally deleted skill can
+    /// still carry a status. Keeping it separate leaves `folder`'s meaning
+    /// ("there is a directory here") intact for every other caller.
+    #[serde(default)]
+    pub watch_folder: Option<PathBuf>,
     #[serde(default, rename = "skillMdPath")]
     pub skill_md_path: Option<PathBuf>,
     #[serde(default)]
@@ -78,6 +127,19 @@ pub struct Plugin {
     pub skills: Vec<Skill>,
     #[serde(default)]
     pub remote_present: bool,
+    /// Whether the plugin repo's skill listing was actually read this refresh.
+    /// `false` means "we could not look" — a VPN-gated Gitea, a rate limit — and
+    /// every `remote_present: false` on the skills below is then meaningless.
+    /// Without this flag a failed listing is indistinguishable from an empty one,
+    /// which would flag every installed skill as a local addition.
+    #[serde(default)]
+    pub skills_remote_known: bool,
+    /// The plugin repo's HEAD moved since this version was installed, without the
+    /// manifest version changing. Kept apart from [`InstallState`] on purpose:
+    /// "outdated" means a new *version* was published, this means the tracked ref
+    /// simply holds different bytes.
+    #[serde(default)]
+    pub remote_content_changed: bool,
     #[serde(default)]
     pub install_state: InstallState,
     #[serde(default)]

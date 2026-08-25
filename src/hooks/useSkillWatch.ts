@@ -1,57 +1,43 @@
-// Bridges the backend skill-change watcher to the frontend dirty store.
+// Bridges the backend skill sync watcher to the frontend store.
 //
-// - Derives the set of folders worth watching: installed skills under *editable*
-//   marketplaces (the ones "Pousser la modification" can target). Re-arms the
-//   backend watcher whenever that set changes and seeds the badge map from the
-//   returned dirty state (which also reflects edits made while the app was shut).
-// - Listens to the `skill-dirty` event for real-time flips while the app runs.
+// This hook used to *derive* the watched folder set (installed skills under
+// editable marketplaces) and push it to Rust on every change. Two problems with
+// that: the set was gated on `m.editable`, which is `can_push` on the forge, so
+// it collapsed to empty the moment the VPN dropped — detection stopped exactly
+// when local edits pile up unnoticed; and it made the frontend responsible for
+// something that has to keep working with no frontend at all.
 //
-// Mounted once at the app root so detection stays live across tab switches.
-import { useEffect, useMemo, useRef } from "react";
+// The refresh sweep in Rust now owns the watched set and settles every status
+// (`commands::feed_skill_watch`). What is left here is genuinely a view concern:
+// seed the store after a refresh, and follow the live event.
+import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/api";
 import { useApp } from "@/stores/app";
-import { useSkillDirty } from "@/stores/skillDirty";
+import { useSkillSync } from "@/stores/skillSync";
 import { createLogger } from "@/lib/logger";
-import type { SkillDirtyState } from "@/lib/types";
+import type { SkillSyncState } from "@/lib/types";
 
 const log = createLogger("skill-watch");
 
 export function useSkillWatch() {
   const marketplaces = useApp((s) => s.marketplaces);
-  const setMany = useSkillDirty((s) => s.setMany);
-  const setOne = useSkillDirty((s) => s.setOne);
+  const setMany = useSkillSync((s) => s.setMany);
+  const setOne = useSkillSync((s) => s.setOne);
 
-  const folders = useMemo(() => {
-    const out: string[] = [];
-    for (const m of marketplaces) {
-      if (!m.editable) continue;
-      for (const p of m.plugins) {
-        for (const s of p.skills) {
-          if (s.folder) out.push(s.folder);
-        }
-      }
-    }
-    return Array.from(new Set(out)).sort();
-  }, [marketplaces]);
-
-  // Re-arm only when the watched set actually changes (refresh re-creates the
-  // marketplaces array every 30 min, but the folder list is usually stable).
-  const lastKey = useRef<string | null>(null);
+  // Re-seed whenever a refresh lands: the sweep just recomputed every status.
   useEffect(() => {
-    const key = folders.join("\n");
-    if (key === lastKey.current) return;
-    lastKey.current = key;
     api
-      .skillWatchSet(folders)
+      .skillSyncList()
       .then(setMany)
-      .catch((e) => log.error("skillWatchSet failed:", e));
-  }, [folders, setMany]);
+      .catch((e) => log.error("skillSyncList failed:", e));
+  }, [marketplaces, setMany]);
 
-  // Live updates from the filesystem watcher.
+  // Live updates from the filesystem watcher (optimistic — the next sweep
+  // confirms or corrects them).
   useEffect(() => {
-    const un = listen<SkillDirtyState>("skill-dirty", (e) => {
-      setOne(e.payload.folder, e.payload.dirty);
+    const un = listen<SkillSyncState>("skill-sync-changed", (e) => {
+      setOne(e.payload.folder, e.payload.status);
     });
     return () => {
       un.then((fn) => fn());

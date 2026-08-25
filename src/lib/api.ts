@@ -22,7 +22,7 @@ import type {
   RemoteSkillInfo,
   Settings,
   SettingsPaths,
-  SkillDirtyState,
+  SkillSyncState,
   StagedUpdate,
   TrackedPr,
   UiPrefs,
@@ -274,11 +274,11 @@ export const api = {
   appUninstall: () => invoke<void>("app_uninstall"),
 
   // --- skill change detection (filesystem watcher) ---
-  skillWatchSet: (folders: string[]) =>
-    invoke<SkillDirtyState[]>("skill_watch_set", { folders }),
   skillMarkSynced: (folder: string) =>
     invoke<void>("skill_mark_synced", { folder }),
-  skillDirtyList: () => invoke<SkillDirtyState[]>("skill_dirty_list"),
+  /** Re-seed the sync map from the watcher's in-memory state. The statuses are
+   *  settled by the refresh sweep in Rust, not by this call. */
+  skillSyncList: () => invoke<SkillSyncState[]>("skill_sync_list"),
   addSkillToPlugin: (args: AddSkillArgs) =>
     invoke<string>("add_skill_to_plugin", { args }),
 

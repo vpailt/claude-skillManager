@@ -83,6 +83,8 @@ const DEFAULT_UI: UiPrefs = {
   notifyError: true,
   autoUpdateEnabled: true,
   autoUpdateIntervalHours: 6,
+  catalogPollEnabled: true,
+  catalogPollIntervalMinutes: 30,
 };
 
 const LEVELS: LogLevel[] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
@@ -160,6 +162,7 @@ export function SettingsDialog() {
   const [token, setToken] = useState("");
   const [ui, setUi] = useState<UiPrefs>(DEFAULT_UI);
   const [pollingIntervalDraft, setPollingIntervalDraft] = useState("60");
+  const [catalogIntervalDraft, setCatalogIntervalDraft] = useState("30");
   const [logCfg, setLogCfg] = useState<LoggingConfig>({
     enabled: true,
     level: "INFO",
@@ -182,6 +185,7 @@ export function SettingsDialog() {
       const merged = { ...DEFAULT_UI, ...(settingsQuery.data.ui ?? {}) };
       setUi(merged);
       setPollingIntervalDraft(String(merged.prPollingIntervalSeconds));
+      setCatalogIntervalDraft(String(merged.catalogPollIntervalMinutes));
     }
   }, [settingsQuery.data]);
 
@@ -498,6 +502,15 @@ export function SettingsDialog() {
     updateUi({ prPollingIntervalSeconds: parsed });
   };
 
+  const commitCatalogInterval = () => {
+    const parsed = parseInt(catalogIntervalDraft, 10);
+    if (Number.isNaN(parsed) || parsed < 5) {
+      setCatalogIntervalDraft(String(ui.catalogPollIntervalMinutes));
+      return;
+    }
+    updateUi({ catalogPollIntervalMinutes: parsed });
+  };
+
   const paths = pathsQuery.data;
 
   const renderSection = () => {
@@ -620,6 +633,48 @@ export function SettingsDialog() {
                   />
                   <span className="text-xs text-muted-foreground">
                     secondes (min 15, par défaut 60)
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Surveillance des marketplaces et plugins</CardTitle>
+                <CardDescription>
+                  Balaie les dépôts en tâche de fond pour détecter les nouvelles
+                  versions, les compétences ajoutées en amont et vos
+                  modifications locales à pousser. Tourne côté Rust, donc
+                  <strong> même quand la fenêtre est fermée</strong> — c'est le
+                  seul mécanisme qui détecte encore quelque chose en mode
+                  barre des tâches. Compte dans votre limite de taux.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <label className="flex cursor-pointer items-center gap-3">
+                  <Switch
+                    checked={ui.catalogPollEnabled}
+                    onCheckedChange={(v) => updateUi({ catalogPollEnabled: v })}
+                  />
+                  <span>Activer la surveillance en tâche de fond</span>
+                </label>
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="w-28 text-muted-foreground">Intervalle</span>
+                  <Input
+                    type="number"
+                    min={5}
+                    step={5}
+                    className="w-32"
+                    value={catalogIntervalDraft}
+                    onChange={(e) => setCatalogIntervalDraft(e.target.value)}
+                    onBlur={commitCatalogInterval}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitCatalogInterval();
+                    }}
+                    disabled={!ui.catalogPollEnabled}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    minutes (min 5, par défaut 30)
                   </span>
                 </div>
               </CardContent>

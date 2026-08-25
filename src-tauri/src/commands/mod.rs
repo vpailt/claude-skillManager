@@ -24,11 +24,11 @@ use crate::pending_prs::{self, PendingPR};
 use crate::plugin_state;
 use crate::pr_history::{self, PRRecord};
 use crate::token_store;
-use crate::skill_watch::{DirtyState, SkillWatch};
+use crate::skill_watch::{MissingLocal, SkillInput, SkillState, SkillWatch};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 fn gh() -> Result<GitHubClient> {
     let token = config::load_settings().github_token;
@@ -142,6 +142,25 @@ pub async fn save_app_settings(settings: Settings) -> Result<()> {
 
 #[tauri::command]
 pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
+    sweep_remote(&app)
+}
+
+/// The full remote sweep: auto-update marketplaces, rebuild the local view,
+/// merge each registry and each plugin's skills, reconcile open PRs, and settle
+/// every skill folder's sync status.
+///
+/// Extracted from the `refresh_all` command so `catalog_poller` can run exactly
+/// the same pass on a timer — the UI is destroyed in tray mode, so anything that
+/// only ran from a frontend query effectively stopped running at all.
+pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
+    // One sweep at a time. Two callers now reach this — the frontend command and
+    // `catalog_poller` — and step 1 re-extracts marketplace directories in place
+    // (`rmtree_robust` then unzip). A concurrent sweep reading that directory
+    // mid-rewrite would see a half-empty marketplace and report every plugin in
+    // it as gone. Serializing costs nothing: the loser simply runs right after.
+    static SWEEP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
+
     tracing::info!("refresh_all started");
     let settings = config::load_settings();
 
@@ -186,6 +205,14 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
 
     // 2) Build local marketplace list.
     let mut marketplaces = local_scanner::build_marketplaces_from_settings(&settings.marketplaces);
+
+    // Per-plugin remote skill details (blob SHAs), kept aside for step 5. They
+    // are what the sync status is decided against and would be noise on the wire
+    // if they travelled to the frontend inside `Skill`.
+    let mut remote_by_plugin: std::collections::HashMap<
+        String,
+        Vec<marketplace_remote::RemoteSkill>,
+    > = std::collections::HashMap::new();
 
     // 3) For each marketplace with a github source, fetch the registry and merge.
     //
@@ -270,19 +297,35 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
             if plugin.installed_version.is_none() {
                 continue;
             }
-            match marketplace_remote::fetch_plugin_skills(&gh, &src, &plugin.name, &mp.name) {
-                Ok(remote_skills) => {
-                    let local = std::mem::take(&mut plugin.skills);
-                    plugin.skills = marketplace_remote::merge_skills(local, remote_skills);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "fetch_plugin_skills failed for {}@{}: {}",
+
+            let remote =
+                marketplace_remote::fetch_plugin_skills(&gh, &src, &plugin.name, &mp.name);
+
+            // Has the tracked ref moved since we installed this version? The
+            // manifest version is the *declared* truth, but nothing forces a bump
+            // on every push — so a plugin whose repo changed without one used to
+            // look perfectly up to date. The commit comes back with the tree
+            // above, so this costs no extra request.
+            if let (Some(installed), Some(head)) =
+                (plugin.git_commit_sha.as_deref(), remote.head_sha.as_deref())
+            {
+                if !installed.is_empty() && head != installed {
+                    plugin.remote_content_changed = true;
+                    tracing::debug!(
+                        "remote content moved for {}@{}: {} → {}",
                         plugin.name,
                         mp.name,
-                        e
+                        installed,
+                        head
                     );
                 }
+            }
+
+            plugin.skills_remote_known = remote.known;
+            if remote.known {
+                let local = std::mem::take(&mut plugin.skills);
+                plugin.skills = marketplace_remote::merge_skills(local, remote.models);
+                remote_by_plugin.insert(plugin_key(&mp.name, &plugin.name), remote.details);
             }
         }
     }
@@ -294,6 +337,12 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
 
     let local_only = local_scanner::build_local_only_marketplace();
 
+    // 5) Settle every skill folder's sync status. This is the only point where
+    // both halves are in hand — what is on disk and what the remote holds — so
+    // it is the only place that can tell an edit from an addition from a
+    // deletion. The filesystem watcher keeps it live until the next sweep.
+    feed_skill_watch(app, &mut marketplaces, &remote_by_plugin);
+
     tracing::info!(
         "refresh_all done: {} marketplace(s), {} local-only skill(s)",
         marketplaces.len(),
@@ -303,6 +352,109 @@ pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
         marketplaces,
         local_only,
     })
+}
+
+fn plugin_key(marketplace: &str, plugin: &str) -> String {
+    format!("{plugin}@{marketplace}")
+}
+
+/// Hand the watcher what the sweep learned: one [`SkillInput`] per installed
+/// skill folder, the remote skills that have no local folder (candidate
+/// deletions), and the plugin directories to watch recursively.
+///
+/// Watching plugin *roots* rather than individual skill folders is what makes a
+/// newly created skill visible: `<plugin>/skills/<new>/` is an event in
+/// `<plugin>/skills/`, which nothing was listening to before.
+///
+/// Note there is no `editable` filter here. Detection is local and free; whether
+/// the user may *push* the result is a separate question, answered in the UI by
+/// the marketplace's push rights. Gating detection on it meant the watch set
+/// collapsed to empty whenever the forge was unreachable — precisely when local
+/// edits pile up unnoticed.
+fn feed_skill_watch(
+    app: &AppHandle,
+    marketplaces: &mut [Marketplace],
+    remote_by_plugin: &std::collections::HashMap<String, Vec<marketplace_remote::RemoteSkill>>,
+) {
+    let mut inputs: Vec<SkillInput> = Vec::new();
+    let mut missing: Vec<MissingLocal> = Vec::new();
+    let mut plugin_roots: Vec<String> = Vec::new();
+
+    for mp in marketplaces.iter_mut() {
+        for plugin in mp.plugins.iter_mut() {
+            let Some(install_path) = plugin.install_path.clone() else {
+                continue;
+            };
+            let root = local_scanner::resolve_plugin_root(&install_path);
+            plugin_roots.push(root.to_string_lossy().into_owned());
+
+            let remote = remote_by_plugin.get(&plugin_key(&mp.name, &plugin.name));
+            let blobs_by_key: std::collections::HashMap<&str, &Vec<(String, String)>> = remote
+                .map(|rs| rs.iter().map(|r| (r.key.as_str(), &r.blobs)).collect())
+                .unwrap_or_default();
+
+            let remote_known = plugin.skills_remote_known;
+            let mut local_keys: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for skill in plugin.skills.iter_mut() {
+                let Some(folder) = skill.folder.clone() else {
+                    continue;
+                };
+                let key = marketplace_remote::skill_key(&skill.relative_path);
+                local_keys.insert(key.clone());
+                skill.watch_folder = Some(folder.clone());
+                inputs.push(SkillInput {
+                    folder: folder.to_string_lossy().into_owned(),
+                    remote_known,
+                    remote_present: skill.remote_present,
+                    remote_blobs: blobs_by_key.get(key.as_str()).map(|b| (*b).clone()),
+                });
+            }
+
+            // Remote skills with nothing on disk. Whether that means "deleted" or
+            // "never installed here" is the watcher's call — it holds the only
+            // evidence that settles it, a baseline for that exact folder. Either
+            // way the entry needs a `watch_folder`, since `folder` is `None` by
+            // definition and the UI has to key the badge on something.
+            if let Some(rs) = remote {
+                for r in rs {
+                    if local_keys.contains(&r.key) {
+                        continue;
+                    }
+                    let folder =
+                        root.join(r.relative_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+                    let as_str = folder.to_string_lossy().into_owned();
+                    for skill in plugin.skills.iter_mut() {
+                        if skill.folder.is_none()
+                            && marketplace_remote::skill_key(&skill.relative_path) == r.key
+                        {
+                            skill.watch_folder = Some(folder.clone());
+                        }
+                    }
+                    missing.push(MissingLocal { folder: as_str });
+                }
+            }
+        }
+    }
+
+    // The user's standalone skills carry no upstream, so they get no sync status
+    // — but the directory is still watched so creating one refreshes the tree.
+    let user_skills = config::claude_user_skills_dir();
+    if user_skills.is_dir() {
+        plugin_roots.push(user_skills.to_string_lossy().into_owned());
+    }
+
+    let watch = app.state::<SkillWatch>();
+    let states = watch.sync(app, inputs, missing, plugin_roots);
+    let actionable = states
+        .iter()
+        .filter(|s| s.status.is_actionable())
+        .count();
+    tracing::info!(
+        "skill sync: {} folder(s), {} needing action",
+        states.len(),
+        actionable
+    );
 }
 
 #[tauri::command]
@@ -1750,23 +1902,8 @@ pub async fn app_uninstall(app: AppHandle) -> Result<()> {
 // Skill change detection (filesystem watcher)
 // ============================================================
 
-/// (Re)arm the skill watcher to `folders` and return each folder's dirty state.
-/// Called after every refresh with the folders of installed skills under
-/// editable marketplaces — the ones the "Pousser la modification" affordance
-/// targets. New folders capture a baseline (so first sight is never dirty);
-/// edits made while the app was closed surface here on the next refresh.
-#[tauri::command]
-pub async fn skill_watch_set(
-    app: AppHandle,
-    state: State<'_, SkillWatch>,
-    folders: Vec<String>,
-) -> Result<Vec<DirtyState>> {
-    Ok(state.set_watched(&app, folders))
-}
-
-/// Capture a skill folder's current content as its new baseline and clear its
-/// dirty flag. Called once a PR has been opened for that skill so the badge
-/// stops nudging.
+/// Accept a skill folder's current contents as the synced reference. Called once
+/// a PR has been opened for that skill so the badge stops nudging.
 #[tauri::command]
 pub async fn skill_mark_synced(state: State<'_, SkillWatch>, folder: String) -> Result<()> {
     state.mark_synced(&folder);
@@ -1834,10 +1971,11 @@ pub async fn add_skill_to_plugin(
     Ok(dest)
 }
 
-/// Re-seed the UI's dirty map from the watcher's in-memory state (no rescan).
+/// Re-seed the UI's sync map from the watcher's in-memory state (no rescan).
+/// The statuses themselves are settled by the refresh sweep, not here.
 #[tauri::command]
-pub async fn skill_dirty_list(state: State<'_, SkillWatch>) -> Result<Vec<DirtyState>> {
-    Ok(state.dirty_list())
+pub async fn skill_sync_list(state: State<'_, SkillWatch>) -> Result<Vec<SkillState>> {
+    Ok(state.states())
 }
 
 // ---------- Usage audit ----------

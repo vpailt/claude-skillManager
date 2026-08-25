@@ -8,6 +8,7 @@ import { usePrPolling } from "@/hooks/usePrPolling";
 import { useTrayEvents } from "@/hooks/useTrayEvents";
 import { useTaskbarBadge } from "@/hooks/useTaskbarBadge";
 import { useSkillWatch } from "@/hooks/useSkillWatch";
+import { useBackendEvents } from "@/hooks/useBackendEvents";
 import { useAppUpdateEvents } from "@/hooks/useAppUpdateEvents";
 import { useUi } from "@/stores/ui";
 import { useNotifications } from "@/stores/notifications";
@@ -58,8 +59,10 @@ export default function App() {
   useTrayEvents();
   // Taskbar overlay badge: number of "actions à traiter".
   useTaskbarBadge();
-  // Watch editable skill folders for local edits → "Pousser la modification".
+  // Reflect the backend's skill sync statuses (the Rust sweep settles them).
   useSkillWatch();
+  // Backend noticed something moved (disk, ~/.claude, catalogue) → re-refresh.
+  useBackendEvents();
   // Self-update: reflect what the Rust updater did (or couldn't do) in the UI.
   useAppUpdateEvents();
 

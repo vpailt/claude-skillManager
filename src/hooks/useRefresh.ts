@@ -20,15 +20,15 @@ export function useRefresh() {
     // app. Ten minutes keeps the view current without turning window focus into
     // a network event.
     staleTime: 10 * 60_000,
-    // The one query worth refetching on focus: coming back to the app after
-    // installing something from the CLI should show it.
+    // Still worth refetching on focus, though `claude_watch` now usually beats
+    // the user to it: a CLI install fires `claude-state-changed` within a second.
     refetchOnWindowFocus: true,
-    // Periodic full refresh so derived state (notably the "plugins obsolètes"
-    // count behind the taskbar badge) updates on its own. Kept slow — refresh_all
-    // hits the GitHub API and is quota-limited, so we don't run it on the fast PR
-    // poll tick. Paused while the window is hidden (default
-    // refetchIntervalInBackground: false) since the badge isn't visible then and
-    // a focus refetch covers re-show.
+    // A safety net, no longer the mechanism. Upstream detection lives in
+    // `catalog_poller` on the Rust side, because this interval is paused while
+    // the window is hidden (`refetchIntervalInBackground` defaults to false) —
+    // and in tray mode the window is *destroyed*, so the query stops existing
+    // rather than merely slowing down. Kept slow: refresh_all is quota-limited,
+    // and the poller is doing the real work.
     refetchInterval: 30 * 60_000,
   });
 

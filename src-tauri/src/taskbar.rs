@@ -153,6 +153,11 @@ mod imp {
 
 /// Set (or clear, when `count == 0`) the taskbar badge showing the number of
 /// pending actions. No-op on non-Windows platforms.
+///
+/// Frontend-driven on purpose: the overlay decorates the taskbar *button*, which
+/// is destroyed along with the window in tray mode, so a background worker has
+/// nothing to draw on. `useTaskbarBadge` owns the count and re-applies it when
+/// the window comes back.
 #[tauri::command]
 pub fn set_taskbar_badge(app: tauri::AppHandle, count: u32) {
     tracing::debug!("set_taskbar_badge: {}", count);

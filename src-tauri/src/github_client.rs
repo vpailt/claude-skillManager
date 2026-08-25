@@ -171,6 +171,20 @@ pub struct RemoteFile {
     pub download_url: String,
 }
 
+/// One entry of a recursive git tree listing (see [`GitHubClient::list_tree`]).
+/// `sha` on a `blob` is the git object id — `sha1("blob <len>\0" + bytes)` — so
+/// it can be recomputed locally and compared without fetching the file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreeEntry {
+    #[serde(default)]
+    pub path: String,
+    /// "blob" | "tree" | "commit" (submodule)
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub sha: String,
+}
+
 #[derive(Clone)]
 pub struct GitHubClient {
     provider: Provider,
@@ -477,6 +491,68 @@ impl GitHubClient {
         Ok(out)
     }
 
+    /// The repo's **entire** file list at `r#ref`, in one request, with each
+    /// blob's git SHA — `/repos/{repo}/git/trees/{commit}?recursive=true`.
+    ///
+    /// This is what makes an exact local-vs-remote comparison affordable: a git
+    /// blob SHA is `sha1("blob <len>\0" + bytes)`, computable locally, so a whole
+    /// skill folder can be diffed against the remote without downloading a single
+    /// file. Walking the Contents API instead costs one request per directory.
+    ///
+    /// Routed through [`get_json_cached`], so repeated calls on an unchanged repo
+    /// come back as `304`s.
+    ///
+    /// Returns the resolved commit SHA alongside the entries. Callers that also
+    /// need to know where the ref points — "did this repo move since we
+    /// installed it?" — take it from here instead of resolving the ref a second
+    /// time, which saves a request per plugin and guarantees both answers
+    /// describe the same commit.
+    ///
+    /// Errors with [`Error::GitHub`] when the forge reports the tree `truncated`:
+    /// a partial listing would read as "these files do not exist remotely", which
+    /// is exactly the wrong answer. Callers fall back to the Contents API.
+    pub fn list_tree(&self, repo: &str, r#ref: &str) -> Result<(String, Vec<TreeEntry>)> {
+        let commit = self.get_latest_commit(repo, r#ref)?;
+        let commit_sha = commit
+            .get("sha")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::GitHub(format!("no commit sha for {repo}@{r}", r = r#ref)))?;
+        let url = format!("/repos/{repo}/git/trees/{commit_sha}");
+        let tree: Value = self.get_json_cached(&url, &[("recursive", "true")])?;
+        if tree
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return Err(Error::GitHub(format!(
+                "git tree for {repo}@{r} is truncated — repo too large",
+                r = r#ref
+            )));
+        }
+        let mut out = Vec::new();
+        for e in tree.get("tree").and_then(|v| v.as_array()).into_iter().flatten() {
+            let Some(o) = e.as_object() else { continue };
+            out.push(TreeEntry {
+                path: o
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                kind: o
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                sha: o
+                    .get("sha")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        }
+        Ok((commit_sha.to_string(), out))
+    }
+
     pub fn get_file(&self, repo: &str, path: &str, r#ref: &str) -> Result<(String, String)> {
         // Proxy-blocked dot-paths on Gitea: read via Trees+Blobs (dot-free URL).
         // See [`path_has_dot_segment`].
@@ -522,49 +598,16 @@ impl GitHubClient {
     /// [`path_has_dot_segment`]). Returns `(text, blob_sha)` like [`get_file`],
     /// so the blob sha can be reused as the `existing_sha` for a later update.
     fn gitea_blob_get(&self, repo: &str, path: &str, r#ref: &str) -> Result<(String, String)> {
-        // Resolve ref (branch/tag/empty→default) to a commit sha via the
-        // commits endpoint (ref goes in the `sha` query param, not the path).
-        let commit = self.get_latest_commit(repo, r#ref)?;
-        let commit_sha = commit
-            .get("sha")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::GitHub(format!("no commit sha for {repo}@{r}", r = r#ref)))?;
-        let tree_url = format!("/repos/{repo}/git/trees/{commit_sha}");
-        let resp = Self::check(
-            self.request(reqwest::Method::GET, &tree_url)
-                .query(&[("recursive", "true")])
-                .send()?,
-            "GET",
-            &tree_url,
-        )?;
-        let tree: Value = resp.json()?;
-        let blob_sha = tree.get("tree").and_then(|v| v.as_array()).and_then(|arr| {
-            arr.iter().find_map(|e| {
-                let o = e.as_object()?;
-                if o.get("path").and_then(|v| v.as_str())? == path
-                    && o.get("type").and_then(|v| v.as_str()).unwrap_or("") == "blob"
-                {
-                    o.get("sha").and_then(|v| v.as_str()).map(String::from)
-                } else {
-                    None
-                }
-            })
-        });
-        let blob_sha = match blob_sha {
-            Some(s) => s,
-            None => {
-                if tree.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    return Err(Error::GitHub(format!(
-                        "{path} not found in {repo}@{r} (git tree truncated — repo too large)",
-                        r = r#ref
-                    )));
-                }
-                return Err(Error::NotFound(format!(
-                    "{path} not found in {repo}@{r}",
-                    r = r#ref
-                )));
-            }
-        };
+        // A truncated tree surfaces as `Error::GitHub` from `list_tree`, which is
+        // right here too: we cannot claim the file is absent from a listing we
+        // know is incomplete.
+        let blob_sha = self
+            .list_tree(repo, r#ref)?
+            .1
+            .into_iter()
+            .find(|e| e.kind == "blob" && e.path == path)
+            .map(|e| e.sha)
+            .ok_or_else(|| Error::NotFound(format!("{path} not found in {repo}@{r}", r = r#ref)))?;
         let blob_url = format!("/repos/{repo}/git/blobs/{blob_sha}");
         let resp = Self::check(
             self.request(reqwest::Method::GET, &blob_url).send()?,

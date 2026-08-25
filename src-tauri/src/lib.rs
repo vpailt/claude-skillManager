@@ -8,6 +8,8 @@ pub mod admin_drafts;
 pub mod app_uninstaller;
 pub mod app_updater;
 pub mod authenticode;
+pub mod catalog_poller;
+pub mod claude_watch;
 pub mod commands;
 pub mod config;
 pub mod error;
@@ -116,8 +118,8 @@ pub fn run() {
 
             tray::setup_tray(app.handle())?;
 
-            // Skill change-detection watcher state (lazily arms its fs watcher
-            // the first time the frontend calls `skill_watch_set`).
+            // Skill sync state (lazily arms its fs watcher the first time the
+            // refresh sweep feeds it).
             app.manage(skill_watch::SkillWatch::new());
 
             // PR status polling lives in Rust so it keeps running (and keeps
@@ -127,6 +129,15 @@ pub fn run() {
             // Same reasoning for the self-updater: it swaps the binary in place
             // in the background, so it must survive the window being released.
             update_poller::start(app.handle().clone());
+
+            // And for the catalogue sweep: in tray mode the webview is destroyed,
+            // so the frontend's periodic refresh does not merely slow down — it
+            // stops existing. Upstream detection has to live here.
+            catalog_poller::start(app.handle().clone());
+
+            // Notice plugin installs / enable toggles made outside this app
+            // (Claude Code's own `/plugin` commands write to `~/.claude`).
+            claude_watch::start(app.handle().clone());
 
             // Honor `start_minimized`: send the main window straight to tray.
             let prefs = config::load_settings().ui;
@@ -216,9 +227,8 @@ pub fn run() {
             archive_user_skill,
             list_archived_skills,
             restore_archived_skill,
-            skill_watch_set,
             skill_mark_synced,
-            skill_dirty_list,
+            skill_sync_list,
             add_skill_to_plugin,
             usage_audit,
             usage_export_xlsx,

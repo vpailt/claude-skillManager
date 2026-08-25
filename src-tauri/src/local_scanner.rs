@@ -64,6 +64,7 @@ fn scan_skill_folder(
             .unwrap_or_else(|| folder.file_name().unwrap_or_default().to_string_lossy().into()),
         description: fm.get("description").cloned().unwrap_or_default(),
         folder: Some(folder.to_path_buf()),
+        watch_folder: Some(folder.to_path_buf()),
         skill_md_path: Some(skill_md),
         relative_path: rel_posix,
         plugin_name: Some(plugin_name.to_string()),
@@ -124,7 +125,7 @@ fn scan_skills_in_folder(
 /// `RevenueCat/rc-claude-code-plugin` puts everything under `revenuecat/`
 /// without declaring a `source.path`). Walk one level deep looking for the
 /// canonical `.claude-plugin/plugin.json` (or `manifest.json`) marker.
-fn resolve_plugin_root(install_path: &Path) -> PathBuf {
+pub fn resolve_plugin_root(install_path: &Path) -> PathBuf {
     let is_root = |p: &Path| -> bool {
         p.join(".claude-plugin").join("plugin.json").exists()
             || p.join("manifest.json").exists()
@@ -910,6 +911,7 @@ pub fn build_local_only_marketplace() -> Marketplace {
             name: s.name.clone(),
             description: s.description.clone(),
             folder: Some(s.folder.clone()),
+            watch_folder: Some(s.folder.clone()),
             skill_md_path: if skill_md.exists() { Some(skill_md) } else { None },
             relative_path: String::new(),
             plugin_name: Some(s.name.clone()),

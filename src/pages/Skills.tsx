@@ -77,7 +77,12 @@ import { AddMarketplaceDialog } from "@/components/AddMarketplaceDialog";
 import { AddSkillDialog, WizardHost, type WizardKind } from "@/components/AdminWizards";
 import { BulkPushDialog, type BulkCandidate } from "@/components/BulkPushDialog";
 import { useInstallMarketplace } from "@/hooks/useInstallMarketplace";
-import { useIsSkillDirty, useSkillDirty } from "@/stores/skillDirty";
+import {
+  isActionable,
+  SYNC_BADGE,
+  useSkillStatus,
+  useSkillSync,
+} from "@/stores/skillSync";
 import type {
   ArchivedSkill,
   DuplicateSkill,
@@ -86,6 +91,7 @@ import type {
   MarketplaceConfig,
   Plugin,
   Skill,
+  SkillSyncStatus,
 } from "@/lib/types";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -324,7 +330,10 @@ function SkillTreeRow({
 
   const hasFolder = !!entry.folder;
   const localBadge = isLocal(entry, localName);
-  const dirty = useIsSkillDirty(entry.folder);
+  // `watchFolder`, not `folder`: a skill deleted locally has no folder, and it
+  // is exactly the one whose status the user most needs to see.
+  const syncStatus = useSkillStatus(entry.watchFolder ?? entry.folder);
+  const syncBadge = SYNC_BADGE[syncStatus];
 
   return (
     <div className="group">
@@ -359,14 +368,14 @@ function SkillTreeRow({
           >
             {entry.name}
           </span>
-          {dirty && (
+          {syncBadge && (
             <span
-              className="h-2 w-2 shrink-0 rounded-full bg-amber-500"
-              title="Modifié localement — non poussé"
-              aria-label="Modifié localement"
+              className={`h-2 w-2 shrink-0 rounded-full ${syncBadge.dot}`}
+              title={syncBadge.title}
+              aria-label={syncBadge.title}
             />
           )}
-          {!entry.folder && entry.remotePresent && (
+          {!entry.folder && entry.remotePresent && syncStatus !== "deleted" && (
             <Badge variant="outline" className="shrink-0 text-xs">
               non installé
             </Badge>
@@ -478,6 +487,14 @@ function PluginNode({
         <Badge variant={stateVariant(plugin.installState)} className="shrink-0">
           {STATE_LABEL[plugin.installState]}
         </Badge>
+        {plugin.remoteContentChanged &&
+          plugin.installState !== "outdated" && (
+            <span
+              className="h-2 w-2 shrink-0 rounded-full bg-sky-500"
+              title="Le dépôt distant a changé depuis l'installation, sans changement de version"
+              aria-label="Contenu distant modifié"
+            />
+          )}
         <span className="min-w-0 flex-1 truncate font-medium">{plugin.name}</span>
         <span className="shrink-0 text-xs text-muted-foreground">
           {plugin.installedVersion || plugin.latestVersion || ""}
@@ -1055,6 +1072,14 @@ function PluginDetail({
             <Badge variant={stateVariant(plugin.installState)}>
               {STATE_LABEL[plugin.installState]}
             </Badge>
+            {plugin.remoteContentChanged && (
+              <Badge
+                variant="outline"
+                title="Le dépôt distant a changé depuis l'installation, sans que la version du manifeste soit incrémentée"
+              >
+                contenu distant modifié
+              </Badge>
+            )}
             {readiness(plugin) && (
               <Badge variant={readiness(plugin)!.variant}>
                 {readiness(plugin)!.label}
@@ -1158,6 +1183,29 @@ function PluginDetail({
   );
 }
 
+// Wording per sync status for the detail banner. A deletion is not a
+// modification and must not be described as one — the PR it opens removes the
+// skill from the repo, which is worth saying before the user clicks.
+const DETAIL_BANNER: Partial<
+  Record<SkillSyncStatus, { title: string; body: string; action: string }>
+> = {
+  modified: {
+    title: "Modifications locales détectées",
+    body: "Ce dossier a changé depuis sa dernière synchro. Poussez-le pour ouvrir une PR — sinon ces modifs seront écrasées à la prochaine mise à jour du plugin.",
+    action: "Pousser la modification",
+  },
+  new: {
+    title: "Compétence absente du dépôt distant",
+    body: "Ce dossier n'existe que chez vous. Poussez-le pour l'ajouter au plugin — sinon il disparaîtra à la prochaine mise à jour du plugin.",
+    action: "Pousser la compétence",
+  },
+  deleted: {
+    title: "Compétence supprimée localement",
+    body: "Le dépôt distant contient toujours cette compétence. Ouvrez une PR pour l'y supprimer — sinon la prochaine mise à jour du plugin la réinstallera.",
+    action: "Pousser la suppression",
+  },
+};
+
 // ---------- Detail: skill + file (mirrors the Skills tab) ----------
 
 interface SkillDetailProps {
@@ -1166,7 +1214,7 @@ interface SkillDetailProps {
   showDescription: boolean;
   onToggleDescription: () => void;
   localName: string;
-  dirty: boolean;
+  status: SkillSyncStatus;
   canPush: boolean;
   onPush: () => void;
 }
@@ -1177,7 +1225,7 @@ function SkillDetailView({
   showDescription,
   onToggleDescription,
   localName,
-  dirty,
+  status,
   canPush,
   onPush,
 }: SkillDetailProps) {
@@ -1218,22 +1266,24 @@ function SkillDetailView({
         )}
       </header>
 
-      {dirty && canPush && (
+      {isActionable(status) && canPush && (
         <div className="flex flex-wrap items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-6 py-3">
-          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+          <span
+            className={`h-2 w-2 shrink-0 rounded-full ${
+              SYNC_BADGE[status]?.dot ?? "bg-amber-500"
+            }`}
+          />
           <div className="min-w-0 flex-1 text-sm">
             <span className="font-medium text-amber-700 dark:text-amber-300">
-              Modifications locales détectées
+              {DETAIL_BANNER[status]?.title}
             </span>
             <p className="text-xs text-muted-foreground">
-              Ce dossier a changé depuis sa dernière synchro. Poussez-le pour
-              ouvrir une PR — sinon ces modifs seront écrasées à la prochaine
-              mise à jour du plugin.
+              {DETAIL_BANNER[status]?.body}
             </p>
           </div>
           <Button size="sm" className="shrink-0 gap-1.5" onClick={onPush}>
             <UploadCloud className="h-4 w-4" />
-            Pousser la modification
+            {DETAIL_BANNER[status]?.action}
           </Button>
         </div>
       )}
@@ -1390,7 +1440,7 @@ function DetailPanel({
   onToggleDescription: () => void;
   onArchived: () => void;
   onRestored: () => void;
-  onPushSkill: (entry: SkillEntry) => void;
+  onPushSkill: (entry: SkillEntry, status: SkillSyncStatus) => void;
   onAddSkill: (p: Plugin) => void;
 }) {
   const findPlugin = useApp((s) => s.findPlugin);
@@ -1405,12 +1455,16 @@ function DetailPanel({
 
   // "Pousser la modification" is offered only for installed skills under an
   // editable marketplace (a repo the current token can push to).
-  const skillDirty = useIsSkillDirty(selectedSkill?.folder);
+  const skillStatus = useSkillStatus(
+    selectedSkill?.watchFolder ?? selectedSkill?.folder
+  );
   const skillMarketplace = selectedSkill
     ? findMarketplace(selectedSkill.marketplaceNameSafe)
     : undefined;
+  // A deletion has no local folder to push *from*, but is still pushable — the
+  // draft it opens removes the skill from the repo.
   const canPushSkill =
-    !!selectedSkill?.folder &&
+    !!(selectedSkill?.folder ?? selectedSkill?.watchFolder) &&
     !!skillMarketplace?.editable &&
     !!skillMarketplace?.sourceRepo;
 
@@ -1481,9 +1535,9 @@ function DetailPanel({
         showDescription={showDescription}
         onToggleDescription={onToggleDescription}
         localName={localName}
-        dirty={skillDirty}
+        status={skillStatus}
         canPush={canPushSkill}
-        onPush={() => onPushSkill(selection.entry)}
+        onPush={() => onPushSkill(selection.entry, skillStatus)}
       />
     );
   }
@@ -1523,26 +1577,37 @@ export function SkillsPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   // Folder being pushed, so we can mark it synced once the PR is opened.
   const pushFolderRef = useRef<string | null>(null);
-  const setDirtyOne = useSkillDirty((s) => s.setOne);
-  const dirtyMap = useSkillDirty((s) => s.dirty);
+  const setSyncOne = useSkillSync((s) => s.setOne);
+  const syncMap = useSkillSync((s) => s.status);
 
   const localName = localOnly?.name ?? "(local skills)";
 
-  // Launch the upload-skill wizard pre-filled from the selected skill. The repo
-  // path uses the folder's basename (not the frontmatter `name`) so it matches
-  // `skills/<folder>` on the remote.
-  const pushSkill = (entry: SkillEntry) => {
+  // Open the right draft for the selected skill's sync status. The repo path
+  // uses the folder's basename (not the frontmatter `name`) so it matches
+  // `skills/<folder>` on the remote — the two diverge often enough that keying
+  // on the name would target the wrong path.
+  const pushSkill = (entry: SkillEntry, status: SkillSyncStatus) => {
     const plugin = findPlugin(entry.marketplaceNameSafe, entry.pluginNameSafe);
-    if (!plugin || !entry.folder) return;
-    const folder = entry.folder as string;
+    const target = entry.folder ?? entry.watchFolder;
+    if (!plugin || !target) return;
     const basename =
-      folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || entry.name;
-    pushFolderRef.current = folder;
+      target.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || entry.name;
+    pushFolderRef.current = target;
+    if (status === "deleted") {
+      // Nothing to upload — this PR removes the skill from the repo.
+      setWizard({
+        kind: "deleteSkill",
+        marketplace: entry.marketplaceNameSafe,
+        plugin,
+        skillName: basename,
+      });
+      return;
+    }
     setWizard({
       kind: "uploadSkill",
       marketplace: entry.marketplaceNameSafe,
       plugin,
-      initialLocalFolder: folder,
+      initialLocalFolder: target,
       initialTargetName: basename,
     });
   };
@@ -1550,9 +1615,12 @@ export function SkillsPage() {
   const onWizardSubmitted = () => {
     const folder = pushFolderRef.current;
     if (!folder) return;
-    // The local folder now matches what we just pushed → clear the nudge.
+    // What is on disk now matches what we just pushed → stop nudging. For a
+    // deletion the backend drops the reference entirely (there is no folder to
+    // take one of), so the skill stops reading `deleted` too.
     api.skillMarkSynced(folder).catch(() => {});
-    setDirtyOne(folder, false);
+    setSyncOne(folder, "synced");
+    pushFolderRef.current = null;
   };
 
   // Deep-links from the dashboard / command palette set the shared `useApp`
@@ -1597,16 +1665,22 @@ export function SkillsPage() {
     return out;
   }, [marketplaces, localOnly]);
 
-  // Dirty & pushable skills = installed skills under an editable marketplace with
-  // a source repo (same gate as the single-skill "Pousser"). Drives the bulk
-  // push button + dialog. Includes freshly-added skills (they read dirty too).
+  // Pushable skills = installed skills under an editable marketplace with a
+  // source repo (same gate as the single-skill "Pousser"). Drives the bulk push
+  // button + dialog.
+  //
+  // `modified` and `new` only: the bulk flow uploads a folder, and a `deleted`
+  // skill has no folder to upload — removing it upstream goes through the
+  // delete-skill draft instead, one at a time and on purpose.
   const bulkCandidates = useMemo<BulkCandidate[]>(() => {
     const out: BulkCandidate[] = [];
     for (const m of marketplaces) {
       if (!m.editable || !m.sourceRepo) continue;
       for (const p of m.plugins) {
         for (const s of p.skills) {
-          if (!s.folder || !dirtyMap[s.folder]) continue;
+          if (!s.folder) continue;
+          const st = syncMap[s.folder];
+          if (st !== "modified" && st !== "new") continue;
           const folder = s.folder;
           const basename =
             folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || s.name;
@@ -1621,7 +1695,7 @@ export function SkillsPage() {
       }
     }
     return out;
-  }, [marketplaces, dirtyMap]);
+  }, [marketplaces, syncMap]);
 
   const filtersActive = query.trim() !== "" || stateFilter !== "all";
 
@@ -1701,7 +1775,7 @@ export function SkillsPage() {
         <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2">
           <UploadCloud className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
           <span className="min-w-0 flex-1 text-xs font-medium text-amber-700 dark:text-amber-300">
-            {bulkCandidates.length} compétences modifiées
+            {bulkCandidates.length} compétences à pousser
           </span>
           <Button
             size="sm"
@@ -1842,10 +1916,10 @@ export function SkillsPage() {
           plugin={addSkillFor}
           onOpenChange={(v) => !v && setAddSkillFor(null)}
           onCreated={(folder) => {
-            // Backend already flags it dirty (skill-dirty event) and a refresh is
-            // invalidated by the dialog; keep the plugin selected so the new skill
-            // shows up under it once the tree refreshes.
-            setDirtyOne(folder, true);
+            // The backend already flagged it `new` (skill-sync-changed) and the
+            // dialog invalidated the refresh; keep the plugin selected so the new
+            // skill shows up under it once the tree refreshes.
+            setSyncOne(folder, "new");
             setSelection({
               kind: "plugin",
               marketplace: addSkillFor.marketplaceName,
@@ -1859,7 +1933,7 @@ export function SkillsPage() {
         onOpenChange={setBulkOpen}
         candidates={bulkCandidates}
         onPushed={(folders) => {
-          for (const f of folders) setDirtyOne(f, false);
+          for (const f of folders) setSyncOne(f, "synced");
         }}
       />
     </div>

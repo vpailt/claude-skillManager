@@ -148,7 +148,18 @@ pub fn build_manifest_bump(existing_manifest: &Value, new_version: &str) -> Vec<
 }
 
 const DEFAULT_MAX_BYTES: u64 = 5_000_000;
-pub const DEFAULT_SKIP: &[&str] = &[".git", "__pycache__", ".DS_Store"];
+/// Path segments never uploaded, and never counted as skill content.
+///
+/// `.sf` is the Salesforce CLI's local state directory. It writes org-scoped
+/// caches (`.sf/orgs/<orgId>/…`) into whatever directory it is run from, which
+/// on this user's machine means inside skill folders — machine-local data,
+/// keyed by an org id, that must not travel in a PR and must not make a skill
+/// read as locally modified.
+///
+/// [`crate::skill_watch::SKIP`] mirrors this list: what counts as content for
+/// the sync comparison and what gets uploaded have to agree, or a skill would
+/// be flagged modified over a file the push would never send.
+pub const DEFAULT_SKIP: &[&str] = &[".git", "__pycache__", ".DS_Store", ".sf"];
 
 pub fn collect_skill_folder_changes(
     local_folder: &Path,

@@ -19,6 +19,8 @@ export const DEFAULT_UI: UiPrefs = {
   notifyError: true,
   autoUpdateEnabled: true,
   autoUpdateIntervalHours: 6,
+  catalogPollEnabled: true,
+  catalogPollIntervalMinutes: 30,
 };
 
 interface UiState {

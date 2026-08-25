@@ -12,6 +12,11 @@ export interface Skill {
   name: string;
   description: string;
   folder?: string | null;
+  /** The path the sync watcher keys this skill's status on. Same as `folder`
+   *  when installed; also set for a skill the remote has but the disk does not,
+   *  so a locally deleted skill can still carry a status. Key badges on
+   *  `watchFolder ?? folder`, never on `folder` alone. */
+  watchFolder?: string | null;
   skillMdPath?: string | null;
   relativePath: string;
   pluginName?: string | null;
@@ -37,6 +42,14 @@ export interface Plugin {
   description: string;
   skills: Skill[];
   remotePresent: boolean;
+  /** Whether the plugin repo's skill listing was actually read this refresh.
+   *  `false` means we could not look, so every `remotePresent: false` below is
+   *  meaningless — don't read absence as "this skill is a local addition". */
+  skillsRemoteKnown: boolean;
+  /** The tracked ref moved since this version was installed, with no version
+   *  bump. Distinct from `installState: "outdated"`, which means a new version
+   *  was published. */
+  remoteContentChanged: boolean;
   installState: InstallState;
   manifest?: Record<string, unknown> | null;
   source?: PluginSource | null;
@@ -125,6 +138,12 @@ export interface UiPrefs {
   autoUpdateEnabled: boolean;
   /** Hours between background update checks (floored at 1 by the backend). */
   autoUpdateIntervalHours: number;
+  /** Sweep marketplaces and plugin repos from the Rust poller. Without it
+   *  nothing detects an upstream change once the window is closed — in tray
+   *  mode the webview is destroyed, so this query stops existing. */
+  catalogPollEnabled: boolean;
+  /** Minutes between catalogue sweeps (floored at 5 by the backend). */
+  catalogPollIntervalMinutes: number;
 }
 
 /** Payload of the backend `pr-status-changed` event (see `pr_poller.rs`). */
@@ -359,11 +378,34 @@ export interface RemoteSkillInfo {
   localMatch: LocalSkill | null;
 }
 
-/** One skill folder's "modified locally since last sync" state, from the
- *  backend filesystem watcher (`skill_watch_set` / the `skill-dirty` event). */
-export interface SkillDirtyState {
+/** Where a local skill folder stands relative to its plugin's remote repo.
+ *  Mirror of `models.rs::SkillSync`.
+ *
+ *  - `synced`   contents identical to the remote (git blob SHAs match)
+ *  - `modified` the remote has it, the local copy differs
+ *  - `new`      the remote does not have it — a local addition to push
+ *  - `deleted`  the remote has it, the local folder is gone
+ *  - `unknown`  the remote could not be read and no reference settles it */
+export type SkillSyncStatus =
+  | "synced"
+  | "modified"
+  | "new"
+  | "deleted"
+  | "unknown";
+
+/** One skill folder's sync state, from the backend watcher
+ *  (`skill_sync_list` / the `skill-sync-changed` event). */
+export interface SkillSyncState {
   folder: string;
-  dirty: boolean;
+  status: SkillSyncStatus;
+}
+
+/** Counts carried by the `catalog-changed` event from the Rust catalogue
+ *  poller. Mirror of `catalog_poller.rs::CatalogCounts`. */
+export interface CatalogCounts {
+  outdated: number;
+  contentChanged: number;
+  skillsToPush: number;
 }
 
 export interface BumpSuggestion {

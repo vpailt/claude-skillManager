@@ -1,6 +1,6 @@
 [package]
 name = "skillmanager"
-version = "3.0.1"
+version = "3.1.0"
 description = "GUI for managing Claude Code plugins, marketplaces and skills"
 authors = ["Valentin Pitel"]
 license = "MIT"
@@ -42,6 +42,10 @@ tracing-appender = "0.2"
 parking_lot = "0.12"
 walkdir = "2"
 notify = "6"
+# Git blob SHAs, to compare a local skill folder against the remote tree without
+# downloading it. RustCrypto, pure Rust; `digest`/`block-buffer` are already in
+# the graph via `sha2`, so this costs almost nothing in the size-tuned profile.
+sha1 = "0.10"
 rust_xlsxwriter = { version = "0.92.0", default-features = false }
 
 [target.'cfg(windows)'.dependencies]

@@ -1,7 +1,6 @@
 //! Fetch a marketplace registry from a GitHub repo and merge with local install
 //! state — port of src/marketplace_remote.py.
 
-use crate::error::Result;
 use crate::github_client::GitHubClient;
 use crate::models::{InstallState, Plugin, PluginSource, Skill};
 use crate::registry::parse_marketplace_json;
@@ -246,50 +245,190 @@ fn norm(v: &str) -> Vec<i64> {
     out
 }
 
+/// One skill as it exists on the plugin's remote repo.
+pub struct RemoteSkill {
+    /// Identity key: the folder path under `skills/`, posix, lowercased.
+    pub key: String,
+    /// Folder basename — the name the upload/delete operations address.
+    pub name: String,
+    /// Path relative to the plugin root, e.g. `skills/foo`.
+    pub relative_path: String,
+    /// Every file under the skill folder: path relative to the *skill folder*
+    /// (posix) → git blob SHA. Lets a local folder be compared byte-exactly
+    /// without downloading anything.
+    pub blobs: Vec<(String, String)>,
+}
+
+/// List a plugin repo's skills from a single recursive git-tree read.
+///
+/// Returns `(skills, remote_known)`. `remote_known` is `false` **only** when the
+/// listing genuinely failed; a repo with no `skills/` directory returns
+/// `(vec![], true)`. That distinction is the whole point: this function used to
+/// swallow every error into an empty vector, so "the VPN is down" and "this
+/// plugin ships no skills" were the same answer — and downstream, every locally
+/// installed skill then looked like an unpushed local addition.
+///
+/// Three things the old Contents-API walk got wrong, fixed here by construction:
+/// skills nested one level deeper (`skills/<group>/<skill>/`) were invisible;
+/// `source.path` (a plugin living in a subdirectory of its repo) was ignored, so
+/// the listing looked at the wrong `skills/`; and identity was the folder
+/// basename, which does not survive being compared against a local frontmatter
+/// `name:`.
+/// What one plugin repo's skill listing yielded.
+#[derive(Default)]
+pub struct RemoteSkills {
+    /// Skills as domain models, for merging into the plugin's skill list.
+    pub models: Vec<Skill>,
+    /// The same skills with their blob SHAs, for the sync comparison.
+    pub details: Vec<RemoteSkill>,
+    /// `true` only when the listing actually succeeded — never for a failure.
+    pub known: bool,
+    /// The commit the tracked ref points at. Saves the caller resolving the ref
+    /// again to answer "did the repo move since we installed it?", and keeps
+    /// both answers describing the same commit.
+    pub head_sha: Option<String>,
+}
+
 pub fn fetch_plugin_skills(
     gh: &GitHubClient,
     source: &PluginSource,
     plugin_name: &str,
     marketplace_name: &str,
-) -> Result<Vec<Skill>> {
+) -> RemoteSkills {
     if source.repo.is_empty() {
-        return Ok(Vec::new());
+        return RemoteSkills::default();
     }
-    let entries = match gh.list_dir(&source.repo, "skills", &source.r#ref) {
-        Ok(v) => v,
-        Err(_) => return Ok(Vec::new()),
+    let (head_sha, tree) = match gh.list_tree(&source.repo, &source.r#ref) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(
+                "fetch_plugin_skills: git tree read failed for {}@{}: {e}",
+                source.repo,
+                if source.r#ref.is_empty() { "default" } else { &source.r#ref }
+            );
+            return RemoteSkills::default();
+        }
     };
-    let mut out = Vec::new();
-    for entry in entries {
-        if entry.r#type != "dir" {
+
+    // Everything lives under `<source.path>/skills/` — `source.path` is the
+    // plugin's own root inside its repo (empty for the usual case).
+    let prefix = {
+        let p = source.path.trim_matches('/');
+        if p.is_empty() {
+            "skills/".to_string()
+        } else {
+            format!("{p}/skills/")
+        }
+    };
+
+    // A skill folder is any directory directly holding a SKILL.md, at any depth.
+    // Collect those first, then attribute every blob to the deepest one that
+    // contains it, so a group folder never swallows its children's files.
+    let mut roots: Vec<String> = Vec::new();
+    for e in &tree {
+        if e.kind != "blob" {
             continue;
         }
-        let name = entry.path.rsplit('/').next().unwrap_or(&entry.path).to_string();
-        out.push(Skill {
-            name,
-            relative_path: entry.path,
+        let Some(rest) = e.path.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Some((dir, file)) = rest.rsplit_once('/') else {
+            continue;
+        };
+        if file.eq_ignore_ascii_case("SKILL.md") && !dir.is_empty() {
+            roots.push(dir.to_string());
+        }
+    }
+    // Deepest first so the attribution below picks the most specific owner.
+    // Deduped because a folder holding both `SKILL.md` and `skill.md` would
+    // otherwise become two roots — the second collecting no blobs (attribution
+    // stops at the first match) and surfacing as a phantom empty skill.
+    roots.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    roots.dedup();
+
+    let mut skills: Vec<RemoteSkill> = roots
+        .iter()
+        .map(|dir| RemoteSkill {
+            key: dir.to_lowercase(),
+            name: dir.rsplit('/').next().unwrap_or(dir).to_string(),
+            relative_path: format!("skills/{dir}"),
+            blobs: Vec::new(),
+        })
+        .collect();
+
+    for e in &tree {
+        if e.kind != "blob" {
+            continue;
+        }
+        let Some(rest) = e.path.strip_prefix(&prefix) else {
+            continue;
+        };
+        if let Some(idx) = roots
+            .iter()
+            .position(|r| rest.len() > r.len() + 1 && rest.starts_with(r) && rest.as_bytes()[r.len()] == b'/')
+        {
+            let within = &rest[roots[idx].len() + 1..];
+            // Same exclusions the local walk applies, or the two signatures
+            // could never match for a repo that commits one of those files.
+            if crate::skill_watch::is_skipped(within) {
+                continue;
+            }
+            skills[idx].blobs.push((within.to_string(), e.sha.clone()));
+        }
+    }
+    for s in skills.iter_mut() {
+        s.blobs.sort();
+    }
+    skills.sort_by(|a, b| a.key.cmp(&b.key));
+
+    let models = skills
+        .iter()
+        .map(|s| Skill {
+            name: s.name.clone(),
+            relative_path: s.relative_path.clone(),
             plugin_name: Some(plugin_name.to_string()),
             marketplace_name: Some(marketplace_name.to_string()),
             remote_present: true,
             ..Default::default()
-        });
+        })
+        .collect();
+    RemoteSkills {
+        models,
+        details: skills,
+        known: true,
+        head_sha: Some(head_sha),
     }
-    Ok(out)
+}
+
+/// The identity a local and a remote skill are matched on: the folder path under
+/// the plugin's `skills/` directory, posix, lowercased.
+///
+/// Matching used to be on [`Skill::name`], which is the frontmatter `name:`
+/// locally and the folder basename remotely. Whenever those two differ — a
+/// namespaced `name:`, a rename, a case difference — the same skill appeared
+/// twice: once as a local copy "missing from the remote", once as a remote-only
+/// phantom. Any "is this a local addition?" signal built on that is noise.
+pub fn skill_key(relative_path: &str) -> String {
+    relative_path
+        .replace('\\', "/")
+        .trim_start_matches('/')
+        .strip_prefix("skills/")
+        .unwrap_or(relative_path)
+        .trim_matches('/')
+        .to_lowercase()
 }
 
 pub fn merge_skills(local_skills: Vec<Skill>, remote_skills: Vec<Skill>) -> Vec<Skill> {
     let mut merged = local_skills;
-    let names: std::collections::HashSet<String> =
-        merged.iter().map(|s| s.name.clone()).collect();
+    let mut local_keys: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for (i, s) in merged.iter().enumerate() {
+        local_keys.insert(skill_key(&s.relative_path), i);
+    }
     for r in remote_skills {
-        if names.contains(&r.name) {
-            for s in merged.iter_mut() {
-                if s.name == r.name {
-                    s.remote_present = true;
-                }
-            }
-        } else {
-            merged.push(r);
+        match local_keys.get(&skill_key(&r.relative_path)) {
+            Some(&i) => merged[i].remote_present = true,
+            None => merged.push(r),
         }
     }
     merged

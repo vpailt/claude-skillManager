@@ -262,10 +262,24 @@ pub struct UiPrefs {
     /// Hours between background update checks. Floored at 1 by the poller.
     #[serde(default = "default_update_interval_hours")]
     pub auto_update_interval_hours: u32,
+    /// Sweep marketplaces and plugin repos in the background (`catalog_poller`).
+    /// Without it nothing detects an upstream change once the window is closed —
+    /// in tray mode the webview is destroyed, so the frontend's periodic refresh
+    /// stops existing rather than merely slowing down.
+    #[serde(default = "default_true")]
+    pub catalog_poll_enabled: bool,
+    /// Minutes between catalogue sweeps. Floored at 5 by the poller — the sweep
+    /// is an N+1 across the forge and is quota-limited.
+    #[serde(default = "default_catalog_interval_minutes")]
+    pub catalog_poll_interval_minutes: u32,
 }
 
 fn default_update_interval_hours() -> u32 {
     6
+}
+
+fn default_catalog_interval_minutes() -> u32 {
+    30
 }
 
 fn default_close_to_tray() -> bool {
@@ -294,6 +308,8 @@ impl Default for UiPrefs {
             notify_error: true,
             auto_update_enabled: true,
             auto_update_interval_hours: default_update_interval_hours(),
+            catalog_poll_enabled: true,
+            catalog_poll_interval_minutes: default_catalog_interval_minutes(),
         }
     }
 }
@@ -371,9 +387,12 @@ const PROP_UI_NOTIFY_WARNING: &str = "ui.notifications.native.warning";
 const PROP_UI_NOTIFY_ERROR: &str = "ui.notifications.native.error";
 const PROP_UPDATE_AUTO: &str = "update.auto.enabled";
 const PROP_UPDATE_INTERVAL: &str = "update.auto.interval.hours";
+const PROP_CATALOG_POLL: &str = "catalog.poll.enabled";
+const PROP_CATALOG_INTERVAL: &str = "catalog.poll.interval.minutes";
 
 const PROPS_SECTIONS: &[(&str, &[&str])] = &[
     ("PR status polling", &["polling."]),
+    ("Marketplace / plugin polling", &["catalog."]),
     ("UI preferences", &["ui."]),
     ("Application updates", &["update."]),
 ];
@@ -406,6 +425,9 @@ fn settings_from_properties_and_marketplaces(
             auto_update_enabled: props.get_bool(PROP_UPDATE_AUTO, true),
             auto_update_interval_hours: props
                 .get_u32(PROP_UPDATE_INTERVAL, default_update_interval_hours()),
+            catalog_poll_enabled: props.get_bool(PROP_CATALOG_POLL, true),
+            catalog_poll_interval_minutes: props
+                .get_u32(PROP_CATALOG_INTERVAL, default_catalog_interval_minutes()),
         },
     }
 }
@@ -427,6 +449,8 @@ fn settings_to_properties(s: &Settings) -> Properties {
     p.set_bool(PROP_UI_NOTIFY_ERROR, s.ui.notify_error);
     p.set_bool(PROP_UPDATE_AUTO, s.ui.auto_update_enabled);
     p.set_u32(PROP_UPDATE_INTERVAL, s.ui.auto_update_interval_hours);
+    p.set_bool(PROP_CATALOG_POLL, s.ui.catalog_poll_enabled);
+    p.set_u32(PROP_CATALOG_INTERVAL, s.ui.catalog_poll_interval_minutes);
     p
 }
 

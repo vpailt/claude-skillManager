@@ -105,7 +105,7 @@ SkillManager/
 │   ├── gitea.json             ← registered Gitea instances (tokens stay in the vault)
 │   ├── pr_history.json        ← rolling list of admin-opened PRs
 │   ├── pending_prs.json       ← PR drafts awaiting merge
-│   ├── skill_baselines.json   ← per-skill-folder hash baselines (`skill_watch.rs`)
+│   ├── skill_baselines.json   ← per-skill-folder sync references (`skill_watch.rs`)
 │   ├── skill_new.json         ← skills created locally, not yet pushed
 │   └── usage_index.json       ← parsed-transcript cache (`usage_audit.rs`)
 └── logs/
@@ -165,13 +165,19 @@ rebuilds the window from the same `tauri.conf.json` entry, keeping the label
 
 The consequence for new code: **nothing user-visible may depend on the frontend
 being alive.** Background work belongs in Rust — that is why PR polling moved to
-`pr_poller.rs`. Before adding a `setInterval` in the frontend, ask whether it
+`pr_poller.rs`, and why marketplace/plugin detection moved to `catalog_poller.rs`.
+Note the trap the latter fell into: a TanStack `refetchInterval` does not merely
+slow down when the window goes away, it *stops existing* along with the query.
+Before adding a `setInterval` in the frontend, ask whether it
 needs to keep running once the window is gone; if it does, it goes in Rust and
 reaches the UI through a Tauri event.
 
-### Refresh flow (the heart of the UI)
+### Refresh flow (the heart of the app)
 
-The frontend calls a `refresh` Tauri command that:
+`commands::sweep_remote` is the single pass. It has **two callers** — the `refresh_all`
+command and `catalog_poller` — and a process-wide mutex keeps them from overlapping
+(step 1 re-extracts marketplace directories in place). It:
+
 1. For each marketplace flagged `auto_update` and installed → re-pull only if remote SHA
    differs (`marketplace_installer::auto_update_if_changed`).
 2. `local_scanner::build_marketplaces_from_settings(...)` → builds `Marketplace` objects
@@ -179,12 +185,28 @@ The frontend calls a `refresh` Tauri command that:
 3. For each marketplace with a `source_repo` → fetch its registry
    (`marketplace_remote::fetch_marketplace_plugins`) and merge with local install state
    via `merge_local_remote` (sets `latest_version`, `source`, recomputes `InstallState`).
-4. For each installed plugin with a GitHub source → fetch its remote skills list and
-   merge so the tree shows remote-only skills too.
+4. For each installed plugin with a source → **one** recursive git-tree read
+   (`github_client::list_tree`) yields the whole repo file list *with every blob's git
+   SHA*, plus the commit the ref points at. That single call answers three questions:
+   which skills the remote has, what each of them contains, and whether the repo moved
+   since install (`Plugin::remote_content_changed`).
+5. `feed_skill_watch` hands `skill_watch` both halves — what is on disk, what the remote
+   holds — and it settles every folder's `SkillSync` status.
 
-Network work happens in async Tauri command handlers — the React UI stays responsive via
-TanStack Query (`src/hooks/useRefresh.ts`). New network work belongs in the Rust command
-layer, not on the UI thread.
+Two invariants worth keeping:
+
+- **A failed remote read is never an empty one.** `fetch_marketplace_plugins` and
+  `fetch_plugin_skills` both report whether they actually read anything
+  (`remote_ok` / `RemoteSkills::known`). Conflating the two makes every installed
+  plugin look removed upstream and every installed skill look like a local addition.
+- **Local and remote are matched on `marketplace_remote::skill_key`** — the folder path
+  under `skills/`, lowercased — never on `Skill::name`, which is the frontmatter `name:`
+  locally and the folder basename remotely. When those diverge the same skill appears
+  twice.
+
+Network work happens in the Rust command layer, never on the UI thread. The React side
+consumes it via TanStack Query (`src/hooks/useRefresh.ts`), whose interval is now only a
+safety net — see `catalog_poller`.
 
 ### Admin upload (no git binary)
 
@@ -246,11 +268,32 @@ that requires `git` on the user's machine.
   any trusted code-signing certificate satisfies it, and those are purchasable.
   Renewing the certificate means updating `EXPECTED_SIGNER` here *and*
   `certificateThumbprint` in `tauri.conf.json`.
-- `skill_watch.rs` — hashes each watched folder's *metadata* (path + size +
-  mtime), never its contents, and re-hashes only the roots a filesystem event
-  actually touched. Both matter: the old content hash read ~3 MB per event, under
-  the shared mutex. Changing what `hash_folder` means requires bumping
-  `BASELINE_VERSION`.
+- `skill_watch.rs` — owns each skill folder's `SkillSync` status (`synced` /
+  `modified` / `new` / `deleted` / `unknown`). **The watcher triggers, the refresh
+  decides**: a filesystem event only re-hashes *metadata* (path + size + mtime) and
+  moves the folder to `modified` optimistically — no bytes, no network; the sweep
+  then settles it exactly by comparing `content_sig` (relative path → git blob SHA)
+  against the remote tree. `content_sig` does read bytes, so it is gated behind the
+  metadata hash — an unchanged `meta` reuses the cached `sig`, and a steady-state
+  sweep reads nothing. `synced_sig` (the last signature confirmed equal to the
+  remote) is what keeps the verdict meaningful while the forge is unreachable.
+  Changing what any of the three hashes means requires bumping `BASELINE_VERSION`.
+  It watches **plugin roots**, not individual skill folders: `<plugin>/skills/<new>/`
+  is an event in `<plugin>/skills/`, and watching only the leaves meant additions
+  were invisible. A baseline is pruned when its folder leaves the watched set, never
+  merely because the directory vanished — that record is the only evidence
+  distinguishing "you deleted this" from "never installed here".
+- `catalog_poller.rs` — background thread running `sweep_remote` on a timer
+  (`catalog.poll.enabled`, `catalog.poll.interval.minutes`). It exists because the
+  frontend's `refetchInterval` is paused while the window is hidden, and in tray mode
+  the window is *destroyed* — so upstream detection did not slow down, it stopped.
+  Emits `catalog-changed`; raises the native toast itself when no window was visible.
+  It deliberately does **not** write the taskbar badge (see `taskbar.rs`).
+- `claude_watch.rs` — watches `~/.claude/plugins/` and `~/.claude/` (non-recursively)
+  so a `/plugin install` run from a terminal shows up in ~1 s instead of waiting for
+  a window focus. Emits `claude-state-changed` and interprets nothing; the sweep does
+  that. Keep it non-recursive: `plugins/marketplaces/` is rewritten by our own
+  auto-update, and watching it recursively would make the app wake itself.
 - `usage_audit.rs` — transcripts are append-only, so a cache entry records how far
   it parsed plus a hash of the file head; a file that only grew is parsed from
   that offset instead of whole. `line_may_hold_event` skips the JSON parse for the
@@ -280,6 +323,14 @@ that requires `git` on the user's machine.
 - `hooks/useRefresh.ts` — TanStack Query bridge for the refresh pipeline; UI components
   consume the resulting query state, not the raw command.
 - `hooks/usePrPolling.ts` — gated by `ui.prPollingEnabled` in settings; min interval 15s.
+- `hooks/useBackendEvents.ts` — debounced bridge from the backend's three "something
+  moved" events (`skills-tree-changed`, `claude-state-changed`, `catalog-changed`) to a
+  refresh invalidation. The backend detects, the frontend only re-asks.
+- `stores/skillSync.ts` + `hooks/useSkillWatch.ts` — mirror of `skill_watch`'s statuses,
+  seeded from `skill_sync_list` after each refresh and kept live by `skill-sync-changed`.
+  The hook no longer *derives* the watched set: it used to filter on `marketplace.editable`
+  (i.e. forge push rights), so detection went dark whenever the VPN dropped. Push rights
+  gate the push button, never the detection.
 - `hooks/useAppUpdateEvents.ts` + `stores/appUpdate.ts` — mirror of the Rust
   self-updater: the update happens without the UI, this only reflects it
   (sidebar pill, toast, Settings card) and exposes `restartNow()`.
