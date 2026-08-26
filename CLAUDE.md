@@ -34,7 +34,8 @@ last time"), run this exact cycle:
    working dir sometimes drifts). Frontend-only changes still need this (it rebundles
    into the exe); a quick `npx tsc -b` / `cargo check` is a faster pre-flight.
 4. **Commit on `main`** (this is a solo repo; history is linear, no PR). French message
-   `vX.Y.Z: <résumé>` + a body, ending with the `Co-Authored-By:` trailer.
+   `vX.Y.Z: <résumé>` + a body. **No `Co-Authored-By:` trailer and no tool
+   attribution** — the repo owner asked for commit messages that carry neither.
 5. **Push** `origin main` — only with a fresh, explicit user go-ahead for *this* round
    (the auto-mode classifier blocks an unprompted push to the default branch).
 

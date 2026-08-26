@@ -10,6 +10,7 @@ src-tauri/gen/
 
 # IDE / editor
 .vscode/
+.sf/
 .idea/
 *.swp
 *.local
