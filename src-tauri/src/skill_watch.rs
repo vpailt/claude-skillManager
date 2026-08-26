@@ -268,7 +268,9 @@ impl SkillWatch {
             // overwritten by the next plugin update. Say which files back it up,
             // so "it stays modified after I reverted my edit" is answerable
             // without a debugger.
-            if status == SkillSync::Modified && tracing::enabled!(tracing::Level::DEBUG) {
+            if matches!(status, SkillSync::Modified | SkillSync::Outdated)
+                && tracing::enabled!(tracing::Level::DEBUG)
+            {
                 if let Some(remote) = input.remote_blobs.as_ref() {
                     tracing::debug!(
                         "skill_watch: {} differs from remote — {}",
@@ -661,7 +663,19 @@ fn resolve(input: &SkillInput, sig: u64, baseline: &Baseline, pending_new: bool)
     }
     match input.remote_blobs.as_ref().map(|b| sig_of(b)) {
         Some(remote) if remote == sig => SkillSync::Synced,
-        Some(_) => SkillSync::Modified,
+        // Local and remote differ — but "differ" has two causes, and calling
+        // both `Modified` blamed the user for the remote moving.
+        //
+        // The remote tree is read at the plugin's tracked ref (branch HEAD),
+        // the local copy is the version actually installed. So every upstream
+        // release made every skill in the plugin read as a local edit.
+        // `synced_sig` settles it: it is the signature we last confirmed equal
+        // to the remote, so a folder still hashing to it has not been touched
+        // here, and the difference can only be upstream's.
+        Some(_) => match baseline.synced_sig {
+            Some(s) if s == sig => SkillSync::Outdated,
+            _ => SkillSync::Modified,
+        },
         // The listing succeeded and holds this skill, but carried no signature
         // (a truncated tree fell back to a plain listing). Presence is all we
         // know; lean on the local reference rather than inventing a verdict.
@@ -727,6 +741,10 @@ fn rescan(shared: &Arc<Mutex<Shared>>, touched: &[PathBuf]) -> (Vec<SkillState>,
         status: SkillSync,
         meta: u64,
         reference: Option<u64>,
+        /// Last signature confirmed equal to the remote. Kept alongside
+        /// `reference` (which prefers the remote's own signature) because it is
+        /// what tells a local edit from the remote having moved on.
+        synced: Option<u64>,
     }
     let (snapshot, plugin_roots) = {
         let sh = shared.lock();
@@ -740,6 +758,7 @@ fn rescan(shared: &Arc<Mutex<Shared>>, touched: &[PathBuf]) -> (Vec<SkillState>,
                     status: sh.status.get(folder).copied().unwrap_or(SkillSync::Unknown),
                     meta: b.meta,
                     reference: sh.remote_sig.get(folder).copied().or(b.synced_sig),
+                    synced: b.synced_sig,
                 })
             })
             .collect();
@@ -802,6 +821,11 @@ fn rescan(shared: &Arc<Mutex<Shared>>, touched: &[PathBuf]) -> (Vec<SkillState>,
             let sig = content_sig(path);
             let next = match s.reference {
                 Some(r) if r == sig => SkillSync::Synced,
+                // Differs from the reference. If the folder still hashes to the
+                // last signature confirmed against the remote, nothing changed
+                // here — this is a folder the remote moved past, and a stray
+                // filesystem event must not relabel it as the user's edit.
+                Some(_) if s.synced == Some(sig) => SkillSync::Outdated,
                 Some(_) => SkillSync::Modified,
                 // Nothing to compare against — a sweep has never settled this
                 // folder. Say it moved and let the next sweep name it properly.

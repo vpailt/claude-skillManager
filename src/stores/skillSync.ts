@@ -59,6 +59,12 @@ export const SYNC_BADGE: Record<
     dot: "bg-amber-500",
     title: "Modifié localement — non poussé",
   },
+  outdated: {
+    label: "en retard",
+    dot: "bg-sky-500",
+    title:
+      "Une version plus récente existe en amont — mettez le plugin à jour (rien à pousser)",
+  },
   new: {
     label: "nouveau",
     dot: "bg-emerald-500",

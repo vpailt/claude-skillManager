@@ -39,8 +39,22 @@ impl Default for InstallState {
 pub enum SkillSync {
     /// Byte-for-byte identical to the remote (git blob SHAs match).
     Synced,
-    /// The remote has this skill, the local copy differs.
+    /// The remote has this skill, the local copy differs, and the difference is
+    /// *yours* — the folder no longer hashes to what we last confirmed against
+    /// the remote.
     Modified,
+    /// The remote has this skill and holds something else, but the local folder
+    /// is untouched since the last confirmed sync — so the difference is
+    /// upstream's: a newer plugin version exists and has not been installed
+    /// here yet.
+    ///
+    /// Deliberately **not** [`Self::Modified`]. The remote tree is read at the
+    /// plugin's tracked ref (branch HEAD), while the local copy is the version
+    /// actually installed, so every upstream release used to turn every skill
+    /// in the plugin amber — and `is_actionable` then offered them all up in
+    /// the Changes tab, one click away from pushing the *older* content back
+    /// over the release that superseded it.
+    Outdated,
     /// The remote does not have this skill — a local addition to push.
     New,
     /// The remote has this skill, the local folder is gone.
@@ -59,6 +73,10 @@ impl Default for SkillSync {
 
 impl SkillSync {
     /// Whether this state is something the user may want to push upstream.
+    ///
+    /// [`Self::Outdated`] is excluded on purpose: pushing it would send the
+    /// installed (older) content back over the newer release upstream. What it
+    /// wants is a plugin upgrade, which is a different button.
     pub fn is_actionable(self) -> bool {
         matches!(self, SkillSync::Modified | SkillSync::New | SkillSync::Deleted)
     }

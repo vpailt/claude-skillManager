@@ -385,13 +385,19 @@ export interface RemoteSkillInfo {
  *  Mirror of `models.rs::SkillSync`.
  *
  *  - `synced`   contents identical to the remote (git blob SHAs match)
- *  - `modified` the remote has it, the local copy differs
+ *  - `modified` the remote has it and the local copy differs *because you
+ *               changed it* — the folder no longer hashes to the last
+ *               confirmed sync
+ *  - `outdated` the local copy differs because *upstream moved on*: the folder
+ *               is untouched, a newer plugin version exists. Not pushable —
+ *               pushing would send the older content back over the release
  *  - `new`      the remote does not have it — a local addition to push
  *  - `deleted`  the remote has it, the local folder is gone
  *  - `unknown`  the remote could not be read and no reference settles it */
 export type SkillSyncStatus =
   | "synced"
   | "modified"
+  | "outdated"
   | "new"
   | "deleted"
   | "unknown";

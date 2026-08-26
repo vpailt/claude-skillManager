@@ -327,8 +327,19 @@ and `prepare_delete_skill` remains for the one-off delete path.
   Renewing the certificate means updating `EXPECTED_SIGNER` here *and*
   `certificateThumbprint` in `tauri.conf.json`.
 - `skill_watch.rs` — owns each skill folder's `SkillSync` status (`synced` /
-  `modified` / `new` / `deleted` / `unknown`). **The watcher triggers, the refresh
-  decides**: a filesystem event only re-hashes *metadata* (path + size + mtime) and
+  `modified` / `outdated` / `new` / `deleted` / `unknown`).
+  **`modified` and `outdated` are the same difference with opposite causes**, and
+  conflating them was a real bug: the remote tree is read at the plugin's tracked
+  ref (branch HEAD) while the local copy is the version actually *installed*, so
+  every upstream release turned every skill in the plugin amber — and
+  `is_actionable` then offered them all up in the Changes tab, one click from
+  pushing the older content back over the release that superseded it.
+  `synced_sig` is the discriminator: a folder still hashing to the last
+  signature confirmed against the remote was not touched here, so the difference
+  is upstream's (`outdated`, not pushable, wants a plugin upgrade). Anything else
+  is a real local edit (`modified`). Apply the same test in `rescan`, or a stray
+  filesystem event relabels an `outdated` folder as the user's work.
+  **The watcher triggers, the refresh decides**: a filesystem event only re-hashes *metadata* (path + size + mtime) and
   moves the folder to `modified` optimistically — no bytes, no network; the sweep
   then settles it exactly by comparing `content_sig` (relative path → git blob SHA)
   against the remote tree. `content_sig` does read bytes, so it is gated behind the
