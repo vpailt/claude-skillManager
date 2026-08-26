@@ -7,6 +7,7 @@ use crate::pr_history::{self, PRRecord};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -68,9 +69,46 @@ pub fn submit_changes(
     gh.create_branch(repo, &new_branch, base_branch)?;
     tracing::info!("created branch {} on {}", new_branch, repo);
 
+    // One recursive tree read instead of one request per file.
+    //
+    // The loop below only ever needed each blob's git sha, but
+    // `get_file_sha_or_none` goes through `get_file`, which downloads the whole
+    // file to derive it — so a 91-file PR pulled ~1.4 MB down before pushing
+    // anything, in 91 round trips. `list_tree` answers for the entire repo in
+    // one call, and its ETag-cached key is the immutable commit sha, so it
+    // cannot serve a stale answer.
+    //
+    // Best-effort: a forge that reports the tree `truncated` (or any read
+    // failure) falls back to the per-file lookups rather than guessing.
+    let mut sha_map: Option<HashMap<String, String>> = match gh.list_tree(repo, &new_branch) {
+        Ok((_, entries)) => {
+            let map: HashMap<String, String> = entries
+                .into_iter()
+                .filter(|e| e.kind == "blob")
+                .map(|e| (e.path, e.sha))
+                .collect();
+            tracing::debug!(
+                "submit_changes: tree read gave {} blob sha(s) for {}",
+                map.len(),
+                repo
+            );
+            Some(map)
+        }
+        Err(e) => {
+            tracing::warn!(
+                "submit_changes: tree read failed on {repo}@{new_branch} ({e}), \
+                 falling back to per-file sha lookups"
+            );
+            None
+        }
+    };
+
     for change in changes {
-        let existing = gh.get_file_sha_or_none(repo, &change.path, &new_branch);
-        gh.put_file(
+        let existing = match &sha_map {
+            Some(m) => m.get(&change.path).cloned(),
+            None => gh.get_file_sha_or_none(repo, &change.path, &new_branch),
+        };
+        let written = gh.put_file(
             repo,
             &new_branch,
             &change.path,
@@ -78,10 +116,33 @@ pub fn submit_changes(
             &format!("{pr_title}: update {}", change.path),
             existing.as_deref(),
         )?;
+        // Keep the map honest: the branch moved, and a path listed twice in the
+        // same batch would otherwise be written with the sha it had before the
+        // first write, which the forge rejects as a conflict.
+        if let Some(m) = sha_map.as_mut() {
+            match written
+                .get("content")
+                .and_then(|c| c.get("sha"))
+                .and_then(|s| s.as_str())
+            {
+                Some(sha) => {
+                    m.insert(change.path.clone(), sha.to_string());
+                }
+                // Response shape we don't recognise: drop the entry so the next
+                // write of this path re-reads it instead of trusting a stale sha.
+                None => {
+                    m.remove(&change.path);
+                }
+            }
+        }
     }
 
     for path in deletions {
-        let sha = match gh.get_file_sha_or_none(repo, path, &new_branch) {
+        let known = match &sha_map {
+            Some(m) => m.get(path).cloned(),
+            None => gh.get_file_sha_or_none(repo, path, &new_branch),
+        };
+        let sha = match known {
             Some(s) => s,
             None => continue,
         };
@@ -92,6 +153,9 @@ pub fn submit_changes(
             &format!("{pr_title}: delete {path}"),
             &sha,
         )?;
+        if let Some(m) = sha_map.as_mut() {
+            m.remove(path);
+        }
     }
 
     let pr = gh.open_pull_request(repo, &new_branch, base_branch, pr_title, pr_body)?;
