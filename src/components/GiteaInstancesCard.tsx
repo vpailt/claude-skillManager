@@ -159,7 +159,7 @@ export function GiteaInstancesCard() {
               accessible via le VPN GlobalProtect. Le token est stocké dans le
               coffre d'identifiants Windows (clé par hôte), jamais sur disque.
               Les marketplaces Gitea peuvent ensuite être ajoutées depuis
-              l'onglet Administration.
+              l'onglet Skills.
             </CardDescription>
           </div>
           <Button

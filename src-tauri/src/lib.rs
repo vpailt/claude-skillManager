@@ -225,6 +225,7 @@ pub fn run() {
             admin_suggest_bumps,
             list_duplicate_skills,
             archive_user_skill,
+            delete_skill_local,
             list_archived_skills,
             restore_archived_skill,
             skill_mark_synced,

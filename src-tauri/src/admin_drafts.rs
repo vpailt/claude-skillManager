@@ -646,6 +646,11 @@ pub struct BulkUploadArgs {
     pub marketplace: String,
     pub plugin_name: String,
     pub items: Vec<BulkSkillItem>,
+    /// Skills to remove from the plugin repo entirely (folder names under
+    /// `skills/`), carried in the SAME PR as the uploads. Splitting them out
+    /// would open a second PR bumping the same manifest — a guaranteed conflict.
+    #[serde(default)]
+    pub removals: Vec<String>,
     #[serde(default)]
     pub bump_level: String,
     #[serde(default)]
@@ -663,6 +668,7 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
             target_name: args.target_name.clone(),
             new_version: args.new_version.clone(),
         }],
+        removals: Vec::new(),
         bump_level: args.bump_level.clone(),
         version_description: args.version_description.clone(),
     };
@@ -682,7 +688,7 @@ struct SkillSummary {
 /// bumps the plugin manifest once. One skill → identical title/body/behaviour to
 /// the old single-skill flow; several skills → a grouped title + per-skill body.
 pub fn prepare_upload_skills(gh: &GitHubClient, args: &BulkUploadArgs) -> Result<AdminDraft> {
-    if args.items.is_empty() {
+    if args.items.is_empty() && args.removals.is_empty() {
         return Err(Error::Invalid("No skills selected for upload.".into()));
     }
     let bump_level = normalize_bump_level(&args.bump_level);
@@ -836,6 +842,47 @@ pub fn prepare_upload_skills(gh: &GitHubClient, args: &BulkUploadArgs) -> Result
         changes.extend(skill_changes);
     }
 
+    // Whole skills removed locally. They ride in the same PR as the uploads on
+    // purpose: a separate delete PR would bump the same plugin manifest, so the
+    // two would collide on `detect_conflicts` and one of them would have to be
+    // rebased by hand.
+    let mut removed: Vec<String> = Vec::new();
+    // Counted apart from `deletions` so the PR body can tell a whole-skill
+    // removal from a file pruned inside a skill that is being updated.
+    let mut removed_files = 0usize;
+    for raw in &args.removals {
+        let name = raw.trim().trim_matches('/');
+        if name.is_empty() {
+            continue;
+        }
+        let subpath = format!("skills/{name}");
+        // Propagate a listing failure rather than skipping: the user explicitly
+        // asked for this removal, and silently dropping it would open a PR that
+        // does less than what was previewed.
+        let files = gh.list_dir_recursive(&target_repo, &subpath, &base_branch)?;
+        if files.is_empty() {
+            problems.push(format!(
+                "Nothing to delete under {subpath} on {target_repo}@{base_branch} — already absent."
+            ));
+            continue;
+        }
+        for f in files {
+            deletions.push(f.path);
+            removed_files += 1;
+        }
+        removed.push(name.to_string());
+        pending_metas.push(PendingMeta {
+            marketplace_name: args.marketplace.clone(),
+            plugin_name: args.plugin_name.clone(),
+            action: "delete-skill".to_string(),
+            // Filled with the plugin manifest version after the bump below.
+            new_version: String::new(),
+            plugin_source_repo: plugin_repo.clone(),
+            skill_name: name.to_string(),
+            skill_version: String::new(),
+        });
+    }
+
     // Build per-file diff entries (bounded to 10 fetched + summary tail) BEFORE
     // the manifest bump, so the cap covers skill files, then manifests are added.
     let mut entries: Vec<DiffEntry> = Vec::new();
@@ -924,7 +971,9 @@ pub fn prepare_upload_skills(gh: &GitHubClient, args: &BulkUploadArgs) -> Result
     conflict_paths.extend(deletions.iter().cloned());
     let conflicts = detect_conflicts(gh, &target_repo, &conflict_paths, &base_branch);
 
-    let branch_prefix = if any_update {
+    let branch_prefix = if summaries.is_empty() {
+        "skillmanager/delete-skill"
+    } else if any_update {
         "skillmanager/update-skill"
     } else {
         "skillmanager/add-skill"
@@ -933,7 +982,40 @@ pub fn prepare_upload_skills(gh: &GitHubClient, args: &BulkUploadArgs) -> Result
     let version_description = args.version_description.trim();
 
     // One skill → keep the original title/body verbatim. Several → grouped form.
-    let (pr_title, mut pr_body, branch_hint) = if summaries.len() == 1 {
+    let (pr_title, mut pr_body, branch_hint) = if summaries.is_empty() {
+        // Removals only — never phrase this as an "Add 0 skills" PR.
+        let title = if removed.len() == 1 {
+            format!(
+                "Delete skill: {} (plugin v{new_plugin_version})",
+                removed[0]
+            )
+        } else {
+            format!(
+                "Delete {} skills: {} (plugin v{new_plugin_version})",
+                removed.len(),
+                removed.join(", ")
+            )
+        };
+        let body = format!(
+            "Version: {new_plugin_version}\n\nRemoves {} skill(s) from plugin `{}` ({} file(s)) and bumps v{} → v{} ({} bump):\n\n{}",
+            removed.len(),
+            args.plugin_name,
+            removed_files,
+            if current_plugin_version.is_empty() { "?" } else { &current_plugin_version },
+            new_plugin_version,
+            bump_level,
+            removed
+                .iter()
+                .map(|r| format!("- `{r}`\n"))
+                .collect::<String>()
+        );
+        let hint = if removed.len() == 1 {
+            removed[0].clone()
+        } else {
+            format!("{}-skills", removed.len())
+        };
+        (title, body, hint)
+    } else if summaries.len() == 1 {
         let s = &summaries[0];
         let aw = if s.is_update { "Update" } else { "Add" };
         let title = format!(
@@ -980,11 +1062,19 @@ pub fn prepare_upload_skills(gh: &GitHubClient, args: &BulkUploadArgs) -> Result
         );
         (title, body, format!("{}-skills", summaries.len()))
     };
-    if !deletions.is_empty() {
+    if !removed.is_empty() && !summaries.is_empty() {
         pr_body.push_str(&format!(
-            "\n\nPrunes {} file(s) removed locally.",
-            deletions.len()
+            "\n\nAlso removes skill(s): {}.",
+            removed
+                .iter()
+                .map(|r| format!("`{r}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
+    }
+    let pruned = deletions.len().saturating_sub(removed_files);
+    if pruned > 0 {
+        pr_body.push_str(&format!("\n\nPrunes {pruned} file(s) removed locally."));
     }
     if !version_description.is_empty() {
         pr_body.push_str(&format!("\n\n---\n{version_description}"));

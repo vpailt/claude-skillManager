@@ -107,6 +107,7 @@ SkillManager/
 │   ├── pending_prs.json       ← PR drafts awaiting merge
 │   ├── skill_baselines.json   ← per-skill-folder sync references (`skill_watch.rs`)
 │   ├── skill_new.json         ← skills created locally, not yet pushed
+│   ├── skill_deleted.json     ← skills deleted locally, removal not yet pushed
 │   └── usage_index.json       ← parsed-transcript cache (`usage_audit.rs`)
 └── logs/
     └── skillmanager.YYYY-MM-DD.log
@@ -216,6 +217,13 @@ so create and update share one path) → `POST /repos/{owner}/{repo}/pulls`. If 
 admin operations, follow the same Contents-API + PR pattern; never introduce a code path
 that requires `git` on the user's machine.
 
+`admin_drafts::prepare_upload_skills` is the one entry point for skill changes on a
+plugin: adds, updates **and whole-skill removals** (`BulkUploadArgs::removals`) in a
+single draft, with **one** manifest bump for the batch. Keep it that way — two PRs on
+the same plugin repo would both bump the manifest and `detect_conflicts` would flag
+them against each other. `prepare_upload_skill` (singular) is a thin wrapper over it,
+and `prepare_delete_skill` remains for the one-off delete path.
+
 ## Module map (only the non-obvious bits)
 
 ### Rust backend (`src-tauri/src/`)
@@ -283,6 +291,14 @@ that requires `git` on the user's machine.
   were invisible. A baseline is pruned when its folder leaves the watched set, never
   merely because the directory vanished — that record is the only evidence
   distinguishing "you deleted this" from "never installed here".
+  A deletion the app performs itself (`delete_skill_local`) goes through
+  `mark_deleted`, which sets the status *and* records the folder in the persisted
+  `pending_deleted` set. Both halves are needed: the watcher alone would report a
+  vanished folder as `modified` (it hashes an empty tree), and a sweep that could
+  not reach the forge produces no `MissingLocal`, so the folder would leave the
+  watched set and its baseline would be pruned — losing the deletion for good.
+  `mark_synced` (a PR was opened) and `forget_under` (the plugin was removed) are
+  the only two things that clear it.
 - `catalog_poller.rs` — background thread running `sweep_remote` on a timer
   (`catalog.poll.enabled`, `catalog.poll.interval.minutes`). It exists because the
   frontend's `refetchInterval` is paused while the window is hidden, and in tray mode
@@ -343,7 +359,39 @@ that requires `git` on the user's machine.
   `stores/theme.ts` is a thin re-export alias kept for legacy imports.
 - `stores/notifications.ts` — in-app toast queue. The polling hook and Settings page
   push success/error toasts here; `NotificationStack` renders them.
-- `pages/` — one file per top-level tab (Overview, Plugins, Skills, Admin, Settings).
+- `pages/` — one file per top-level tab (Overview, Skills, Changes, Suivi
+  marketplace, Audit; Settings is a dialog). `pages/Admin.tsx` is the "Suivi
+  marketplace" tab, on route `/tracking` (`/admin` redirects to it); it holds
+  nothing but the PR tracking view. Every PR on a plugin is built from the Changes
+  tab, so `AdminWizards.tsx` is down to `AddSkillDialog`.
+- `stores/treeSelection.ts` + the `RowCheckbox` in `pages/Skills.tsx` — multi-selection
+  in the tree, feeding `components/BulkActionBar.tsx`. Keys are `mp:`/`pl:`/`sk:`
+  prefixed, and a **skill is keyed on its folder, the same key the sync watcher
+  uses** — so a locally deleted skill stays selectable. The marketplace box covers
+  itself plus its *visible* plugins (filters are respected); a plugin box covers the
+  plugin alone, never its skills, since the two take different actions. The page
+  owns the ordered visible-row list (`setOrdered`) for shift-click, and prunes the
+  selection against *every* key so a filter change never silently drops ticks.
+- `delete_skill_local` (`commands/mod.rs` → `local_scanner::delete_skill_folder`) —
+  removes a skill folder from disk. `classify_skill_folder` is the guard: the path
+  comes from the frontend, and `starts_with(cache_root)` alone would also accept a
+  version directory or the cache itself. It returns whether the removal is
+  pushable — a plugin skill stays listed as `deleted`, a standalone user skill has
+  no upstream and simply goes.
+- `hooks/useBulkRunner.ts` — sequential, failure-tolerant runner behind every bulk
+  action. Sequential is not incidental: `installPlugin` / `setPluginEnabled` rewrite
+  the same JSON files, so concurrent invokes race. It never aborts on the first
+  failure and invalidates queries **once**, at the end.
+- `pages/Changes.tsx` + `lib/changes.ts` — the pending-changes tab. `lib/changes.ts`
+  holds the grouping (one group per marketplace+plugin = one PR) so `Sidebar` can
+  badge the count without pulling the diff viewer into the entry chunk. Groups whose
+  marketplace has no push rights are listed **read-only, never hidden** — push rights
+  gate the button, never the detection. Ticks are seeded once per navigation, not on
+  every refresh, and are frozen once drafts are prepared so the PR always matches the
+  preview.
+- `components/FileDiff.tsx` — per-file diff + the split/unified toggle, used by the
+  Changes tab. It is the only diff renderer left: the single-draft preview dialog
+  went with the Admin "Proposer une amélioration" section.
 - `components/ResizableSplit.tsx` — wraps `react-resizable-panels` with persistent
   layout via `autoSaveId`. Use it for any two-pane page; never grid `[fixed_px]_1fr`
   again — that broke responsiveness on small windows.
@@ -364,7 +412,8 @@ that requires `git` on the user's machine.
   manual translation.
 - App-state files (`config.properties`, `logging.properties`, `marketplaces.json`,
   `gitea.json`, `pr_history.json`, `pending_prs.json`, `skill_baselines.json`,
-  `skill_new.json`, `usage_index.json`, `logs/`) sit under `<exe_dir>/`. Never write
+  `skill_new.json`, `skill_deleted.json`, `usage_index.json`, `logs/`) sit under
+  `<exe_dir>/`. Never write
   to `%APPDATA%` directly — go through `config::app_settings_dir()` or
   `config::logs_dir()`.
 - TanStack Query runs with `refetchOnWindowFocus: false` globally (`main.tsx`).

@@ -19,7 +19,7 @@ use crate::installer;
 use crate::local_scanner;
 use crate::marketplace_installer;
 use crate::marketplace_remote;
-use crate::models::{Marketplace, Plugin, Skill};
+use crate::models::{Marketplace, Plugin, Skill, SkillSync};
 use crate::pending_prs::{self, PendingPR};
 use crate::plugin_state;
 use crate::pr_history::{self, PRRecord};
@@ -379,14 +379,18 @@ fn feed_skill_watch(
     let mut inputs: Vec<SkillInput> = Vec::new();
     let mut missing: Vec<MissingLocal> = Vec::new();
     let mut plugin_roots: Vec<String> = Vec::new();
+    // (plugin root, marketplace index, plugin index) — lets the pass below find
+    // which plugin a deleted folder belongs to without walking the tree again.
+    let mut roots_by_plugin: Vec<(PathBuf, usize, usize)> = Vec::new();
 
-    for mp in marketplaces.iter_mut() {
-        for plugin in mp.plugins.iter_mut() {
+    for (mp_idx, mp) in marketplaces.iter_mut().enumerate() {
+        for (pl_idx, plugin) in mp.plugins.iter_mut().enumerate() {
             let Some(install_path) = plugin.install_path.clone() else {
                 continue;
             };
             let root = local_scanner::resolve_plugin_root(&install_path);
             plugin_roots.push(root.to_string_lossy().into_owned());
+            roots_by_plugin.push((root.clone(), mp_idx, pl_idx));
 
             let remote = remote_by_plugin.get(&plugin_key(&mp.name, &plugin.name));
             let blobs_by_key: std::collections::HashMap<&str, &Vec<(String, String)>> = remote
@@ -446,6 +450,56 @@ fn feed_skill_watch(
 
     let watch = app.state::<SkillWatch>();
     let states = watch.sync(app, inputs, missing, plugin_roots);
+
+    // Re-attach deletions the forge could not confirm. `merge_skills` only runs
+    // when the plugin's listing was read, so with the forge unreachable nothing
+    // in `plugin.skills` represents a folder the user deleted — no tree row, no
+    // entry in the Changes tab, no sidebar badge — even though the watcher still
+    // holds the pending removal. Rebuild the row from the watcher's verdict.
+    for st in states.iter() {
+        if st.status != SkillSync::Deleted {
+            continue;
+        }
+        let folder = PathBuf::from(&st.folder);
+        // Longest matching root wins: plugin directories never nest today, but
+        // picking by first match would be a silent mis-assignment if they did.
+        let owner = roots_by_plugin
+            .iter()
+            .filter(|(root, _, _)| folder.starts_with(root))
+            .max_by_key(|(root, _, _)| root.components().count());
+        let Some((root, mp_idx, pl_idx)) = owner else {
+            continue;
+        };
+        let plugin = &mut marketplaces[*mp_idx].plugins[*pl_idx];
+        if plugin
+            .skills
+            .iter()
+            .any(|s| s.watch_folder.as_deref() == Some(folder.as_path()))
+        {
+            continue;
+        }
+        let rel = folder
+            .strip_prefix(root)
+            .unwrap_or(&folder)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let name = folder
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| rel.clone());
+        plugin.skills.push(Skill {
+            name,
+            folder: None,
+            watch_folder: Some(folder),
+            relative_path: rel,
+            plugin_name: Some(plugin.name.clone()),
+            marketplace_name: Some(marketplaces[*mp_idx].name.clone()),
+            // The removal is pushable, which is the whole reason to show it.
+            remote_present: true,
+            ..Default::default()
+        });
+    }
+
     let actionable = states
         .iter()
         .filter(|s| s.status.is_actionable())
@@ -1789,6 +1843,38 @@ pub async fn list_duplicate_skills() -> Vec<local_scanner::DuplicateSkill> {
 pub async fn archive_user_skill(folder: PathBuf) -> Result<PathBuf> {
     tracing::info!("archive_user_skill: {}", folder.display());
     local_scanner::archive_user_skill_folder(&folder)
+}
+
+/// Delete a skill folder from disk.
+///
+/// Returns `true` when the removal is something to push: a plugin skill still
+/// exists on the remote, so it lands as `Deleted` and the user opens a PR for
+/// it. A standalone user skill has no upstream — it is simply gone, which is why
+/// the reversible `archive_user_skill` stays the gentler option there.
+///
+/// The baseline is captured *before* the bytes go: it is the only evidence that
+/// turns "the remote has it, the disk does not" into a deletion rather than a
+/// skill this install never had.
+#[tauri::command]
+pub async fn delete_skill_local(
+    app: AppHandle,
+    watch: State<'_, SkillWatch>,
+    folder: String,
+) -> Result<bool> {
+    tracing::info!("delete_skill_local: {folder}");
+    let path = PathBuf::from(&folder);
+    let kind = local_scanner::classify_skill_folder(&path)?;
+    let tracked = kind == local_scanner::SkillFolderKind::Plugin;
+    if tracked {
+        watch.ensure_baseline(&folder);
+    }
+    local_scanner::delete_skill_folder(&path)?;
+    if tracked {
+        // Key on the string the caller passed, never a canonicalized form: the
+        // baseline map is keyed on exactly what the sweep handed us.
+        watch.mark_deleted(&app, &folder);
+    }
+    Ok(tracked)
 }
 
 #[tauri::command]

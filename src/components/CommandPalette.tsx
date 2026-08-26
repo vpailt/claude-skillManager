@@ -50,7 +50,8 @@ type Item =
 const PAGES: Item[] = [
   { kind: "page", label: "Dashboard", path: "/" },
   { kind: "page", label: "Skills", path: "/skills" },
-  { kind: "page", label: "Administration", path: "/admin" },
+  { kind: "page", label: "Changements", path: "/changes" },
+  { kind: "page", label: "Suivi marketplace", path: "/tracking" },
   { kind: "page", label: "Audit d'utilisation", path: "/audit" },
   { kind: "settings", label: "Paramètres" },
 ];

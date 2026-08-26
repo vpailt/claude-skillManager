@@ -754,6 +754,86 @@ fn parse_archive_dirname(name: &str) -> Option<(String, String)> {
     Some((original, iso))
 }
 
+/// What kind of skill folder a path points at — the two behave differently once
+/// deleted, and the caller has to know which it got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillFolderKind {
+    /// `<plugins cache>/<mp>/<plugin>/<version>/skills/<name>` — the remote
+    /// still holds it, so its removal is something to push.
+    Plugin,
+    /// `~/.claude/skills/<name>` — no upstream, so deleting it is final.
+    User,
+}
+
+/// Validate that `folder` really is a skill folder we are allowed to remove.
+///
+/// The path arrives from the frontend, so `starts_with(cache_root)` alone would
+/// not do: it would also accept a version directory, a whole plugin, or the
+/// cache root itself. A plugin skill must sit directly under a `skills/`
+/// directory inside a version directory, and a user skill must be a direct child
+/// of `~/.claude/skills/`. Both must actually contain a `SKILL.md`.
+pub fn classify_skill_folder(folder: &Path) -> crate::error::Result<SkillFolderKind> {
+    use crate::error::Error;
+    let canon = fs::canonicalize(folder)
+        .map_err(|e| Error::NotFound(format!("folder not accessible: {e}")))?;
+    if !canon.is_dir() {
+        return Err(Error::Invalid(format!(
+            "'{}' is not a directory",
+            canon.display()
+        )));
+    }
+    if !(canon.join("SKILL.md").is_file() || canon.join("skill.md").is_file()) {
+        return Err(Error::Invalid(format!(
+            "Refusing to delete '{}' — no SKILL.md, so this is not a skill folder",
+            canon.display()
+        )));
+    }
+
+    if let Ok(user_root) = fs::canonicalize(config::claude_user_skills_dir()) {
+        if canon.parent() == Some(user_root.as_path()) {
+            return Ok(SkillFolderKind::User);
+        }
+    }
+
+    if let Ok(cache_root) = fs::canonicalize(config::plugins_cache_dir()) {
+        // `skills/<group>/<name>` is a supported layout (`scan_skills_in_folder`
+        // looks one level deeper), so `skills` may be a grandparent rather than
+        // the direct parent. `skip(1)` keeps the folder itself out, and the
+        // walk stops at the cache root so nothing outside it can match.
+        let under_skills = canon
+            .ancestors()
+            .skip(1)
+            .take_while(|p| p.starts_with(&cache_root))
+            .any(|p| {
+                p.file_name()
+                    .map(|n| n.eq_ignore_ascii_case("skills"))
+                    .unwrap_or(false)
+            });
+        // <cache>/<marketplace>/<plugin>/<version>/skills/<name> — deep enough
+        // rules out the version directory, the plugin, and the cache root.
+        let deep_enough = canon.components().count() >= cache_root.components().count() + 5;
+        if canon.starts_with(&cache_root) && under_skills && deep_enough {
+            return Ok(SkillFolderKind::Plugin);
+        }
+    }
+
+    Err(Error::Invalid(format!(
+        "Refusing to delete '{}' — not a skill folder under ~/.claude/skills or a plugin's skills/ directory",
+        canon.display()
+    )))
+}
+
+/// Delete a skill folder from disk. Returns what kind it was, so the caller can
+/// decide whether the removal is something to push upstream.
+///
+/// Uses [`installer::rmtree_robust`] rather than `fs::remove_dir_all`: read-only
+/// files and paths past MAX_PATH are exactly what it exists for.
+pub fn delete_skill_folder(folder: &Path) -> crate::error::Result<SkillFolderKind> {
+    let kind = classify_skill_folder(folder)?;
+    crate::installer::rmtree_robust(folder)?;
+    Ok(kind)
+}
+
 /// Moves a local user skill folder into `~/.claude/skills_archive/`. Returns the
 /// new path. Refuses anything that isn't a direct child of `~/.claude/skills/`.
 pub fn archive_user_skill_folder(folder: &Path) -> crate::error::Result<PathBuf> {

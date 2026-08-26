@@ -12,7 +12,8 @@ import {
   HardDrive,
   Keyboard,
   LayoutDashboard,
-  ShieldCheck,
+  Radar,
+  UploadCloud,
   Sparkles,
   Github,
   FolderOpen,
@@ -65,7 +66,7 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
             </section>
 
             <section className="space-y-2">
-              <h3 className="text-base font-semibold">Les trois onglets</h3>
+              <h3 className="text-base font-semibold">Les onglets</h3>
               <ul className="space-y-3">
                 <li className="flex gap-3">
                   <LayoutDashboard className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
@@ -99,17 +100,32 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
                   </div>
                 </li>
                 <li className="flex gap-3">
-                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <UploadCloud className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                   <div>
-                    <div className="font-medium">Administration</div>
+                    <div className="font-medium">Changements</div>
                     <div className="text-xs text-muted-foreground">
-                      <strong>Proposer une amélioration</strong> — pousser des
-                      changements de registre (ajouter un plugin, incrémenter une
-                      version, envoyer ou supprimer un skill) via des Pull
-                      Requests. <strong>Suivi Marketplace</strong> — suivre les PR
-                      ouvertes sur les marketplaces que vous surveillez et leurs
-                      plugins. (La gestion locale des marketplaces et plugins se
-                      fait dans l'onglet <strong>Skills</strong>.)
+                      Tout ce que vous avez modifié, ajouté ou supprimé
+                      localement dans un plugin installé, groupé par plugin :
+                      <strong> un groupe = une Pull Request</strong>, avec son
+                      propre niveau de version et ses notes. Les suppressions
+                      voyagent dans la même PR que les modifications du même
+                      plugin. Le diff est consultable avant publication, et la
+                      publication rend compte groupe par groupe.
+                    </div>
+                  </div>
+                </li>
+                <li className="flex gap-3">
+                  <Radar className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <div>
+                    <div className="font-medium">Suivi marketplace</div>
+                    <div className="text-xs text-muted-foreground">
+                      Les Pull Requests ouvertes sur les marketplaces que vous
+                      surveillez et sur leurs plugins, séparées en{" "}
+                      <em>mes demandes</em> et <em>demandes à valider</em>. Pour
+                      proposer un changement, passez par l'onglet{" "}
+                      <strong>Changements</strong> ; la gestion locale des
+                      marketplaces et plugins se fait dans l'onglet{" "}
+                      <strong>Skills</strong>.
                     </div>
                   </div>
                 </li>
@@ -123,8 +139,9 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
               </h3>
               <div className="text-muted-foreground">
                 Un <strong>token GitHub</strong> est requis pour installer des
-                plugins depuis des repos privés et pour <em>Proposer une
-                amélioration</em>. Un PAT classique avec le scope <code>repo</code>{" "}
+                plugins depuis des repos privés et pour publier vos changements
+                depuis l'onglet <strong>Changements</strong>. Un PAT classique
+                avec le scope <code>repo</code>{" "}
                 fonctionne, tout comme un token fine-grained avec{" "}
                 <code>Contents: write</code> + <code>Pull requests: write</code>{" "}
                 sur les repos cibles. Pour la marketplace interne AlmaviaCX,

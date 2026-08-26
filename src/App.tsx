@@ -29,6 +29,9 @@ const AdminPage = lazy(() =>
 const UsageAuditPage = lazy(() =>
   import("@/pages/UsageAudit").then((m) => ({ default: m.UsageAuditPage }))
 );
+const ChangesPage = lazy(() =>
+  import("@/pages/Changes").then((m) => ({ default: m.ChangesPage }))
+);
 const SettingsDialog = lazy(() =>
   import("@/components/SettingsDialog").then((m) => ({
     default: m.SettingsDialog,
@@ -172,7 +175,10 @@ export default function App() {
                 path="/skills-v2"
                 element={<Navigate to="/skills" replace />}
               />
-              <Route path="/admin" element={<AdminPage />} />
+              <Route path="/changes" element={<ChangesPage />} />
+              <Route path="/tracking" element={<AdminPage />} />
+              {/* Ancien onglet Administration, réduit au suivi des PR */}
+              <Route path="/admin" element={<Navigate to="/tracking" replace />} />
               <Route path="/audit" element={<UsageAuditPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

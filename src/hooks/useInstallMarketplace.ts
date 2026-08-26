@@ -15,29 +15,33 @@ import type { Marketplace } from "@/lib/types";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** The install itself, without any toast — so a bulk run can drive it N times
+ *  and report once instead of raising N notifications. */
+export async function installMarketplaceOnce(mp: Marketplace): Promise<string> {
+  // Prefer the saved config (carries provider/baseUrl/autoUpdate), fall back
+  // to whatever the scanned marketplace object exposes.
+  const cfg = await api
+    .loadAppSettings()
+    .then((s) => s.marketplaces.find((m) => m.name === mp.name));
+  const repo = cfg?.githubRepo || mp.sourceRepo;
+  const branch = cfg?.defaultBranch || "main";
+  const auto = cfg?.autoUpdate ?? null;
+  if (!repo) throw new Error("Aucun repo configuré pour ce marketplace");
+  return api.installMarketplace(
+    mp.name,
+    repo,
+    branch,
+    auto,
+    cfg?.provider ?? "github",
+    cfg?.baseUrl ?? ""
+  );
+}
+
 export function useInstallMarketplace() {
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
   return useMutation({
-    mutationFn: async (mp: Marketplace) => {
-      // Prefer the saved config (carries provider/baseUrl/autoUpdate), fall back
-      // to whatever the scanned marketplace object exposes.
-      const cfg = await api
-        .loadAppSettings()
-        .then((s) => s.marketplaces.find((m) => m.name === mp.name));
-      const repo = cfg?.githubRepo || mp.sourceRepo;
-      const branch = cfg?.defaultBranch || "main";
-      const auto = cfg?.autoUpdate ?? null;
-      if (!repo) throw new Error("Aucun repo configuré pour ce marketplace");
-      return api.installMarketplace(
-        mp.name,
-        repo,
-        branch,
-        auto,
-        cfg?.provider ?? "github",
-        cfg?.baseUrl ?? ""
-      );
-    },
+    mutationFn: installMarketplaceOnce,
     onSuccess: (_, mp) => {
       qc.invalidateQueries({ queryKey: ["refresh"] });
       notify({ kind: "success", title: "Marketplace installé", body: mp.name });

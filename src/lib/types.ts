@@ -350,6 +350,9 @@ export interface BulkUploadArgs {
   marketplace: string;
   pluginName: string;
   items: BulkSkillItem[];
+  /** Skill folder names to delete from the repo, in the SAME PR as the uploads
+   *  (a separate delete PR would bump the same manifest and conflict). */
+  removals?: string[];
   bumpLevel?: BumpLevel;
   versionDescription?: string;
 }

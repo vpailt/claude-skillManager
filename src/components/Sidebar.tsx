@@ -2,8 +2,9 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   Sparkles,
-  ShieldCheck,
+  Radar,
   BarChart3,
+  UploadCloud,
   Settings,
   Sun,
   Moon,
@@ -27,6 +28,7 @@ import { useHelpDialog } from "@/stores/helpDialog";
 import { useSettingsDialog } from "@/stores/settingsDialog";
 import { useTrackingView } from "@/stores/trackingView";
 import { useAppUpdate } from "@/stores/appUpdate";
+import { usePendingChangesCount } from "@/lib/changes";
 import { restartNow } from "@/hooks/useAppUpdateEvents";
 
 interface NavItem {
@@ -53,11 +55,18 @@ const NAV: NavItem[] = [
     icon: Sparkles,
   },
   {
-    to: "/admin",
-    label: "Administration",
-    subtitle: "PR vers les marketplaces",
-    tooltip: "Administration — proposer des changements aux marketplaces via des pull requests GitHub",
-    icon: ShieldCheck,
+    to: "/changes",
+    label: "Changements",
+    subtitle: "Compétences à publier",
+    tooltip: "Changements — compétences modifiées, ajoutées ou supprimées localement, groupées par plugin : une PR par plugin, diff à l'appui",
+    icon: UploadCloud,
+  },
+  {
+    to: "/tracking",
+    label: "Suivi marketplace",
+    subtitle: "PR ouvertes à suivre",
+    tooltip: "Suivi marketplace — les Pull Requests ouvertes sur les marketplaces que vous suivez et sur leurs plugins",
+    icon: Radar,
   },
   {
     to: "/audit",
@@ -77,6 +86,7 @@ const THEME_TOOLTIP: Record<(typeof THEME_CYCLE)[number], string> = {
 };
 
 export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
+  const pendingChanges = usePendingChangesCount();
   const qc = useQueryClient();
   const collapsed = useUi((s) => s.ui.sidebarCollapsed);
   const theme = useUi((s) => s.ui.theme);
@@ -194,33 +204,50 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
         </div>
       )}
       <nav className={cn("flex-1 space-y-0.5 py-2", collapsed ? "px-2" : "px-2")}>
-        {NAV.map(({ to, label, subtitle, tooltip, icon: Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === "/"}
-            title={collapsed ? tooltip : tooltip}
-            className={({ isActive }) =>
-              cn(
-                "flex items-start gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                collapsed && "items-center justify-center px-0 py-2",
-                isActive
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              )
-            }
-          >
-            <Icon className="h-4 w-4 shrink-0 self-center" />
-            {!collapsed && (
-              <div className="min-w-0 flex-1 leading-tight">
-                <div className="truncate font-medium">{label}</div>
-                <div className="truncate text-xs text-muted-foreground/80">
-                  {subtitle}
-                </div>
+        {NAV.map(({ to, label, subtitle, tooltip, icon: Icon }) => {
+          // Only the Changes tab carries a count today; keep the lookup local
+          // so adding a second badge later is a map entry, not a new branch.
+          const badge = to === "/changes" ? pendingChanges : 0;
+          return (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === "/"}
+              title={collapsed ? tooltip : tooltip}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-start gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                  collapsed && "items-center justify-center px-0 py-2",
+                  isActive
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                )
+              }
+            >
+              <div className="relative shrink-0 self-center">
+                <Icon className="h-4 w-4" />
+                {badge > 0 && collapsed && (
+                  <span className="absolute -right-1.5 -top-1.5 h-2 w-2 rounded-full bg-amber-500" />
+                )}
               </div>
-            )}
-          </NavLink>
-        ))}
+              {!collapsed && (
+                <div className="min-w-0 flex-1 leading-tight">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate font-medium">{label}</span>
+                    {badge > 0 && (
+                      <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                        {badge}
+                      </span>
+                    )}
+                  </div>
+                  <div className="truncate text-xs text-muted-foreground/80">
+                    {subtitle}
+                  </div>
+                </div>
+              )}
+            </NavLink>
+          );
+        })}
       </nav>
 
       {/* Forge connection status (only when expanded) */}

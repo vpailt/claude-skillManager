@@ -669,11 +669,11 @@ function MarketplaceTrackingSection() {
       <Card
         role="button"
         tabIndex={0}
-        onClick={() => navigate("/admin", { state: { tab: "tracking" } })}
+        onClick={() => navigate("/tracking")}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            navigate("/admin", { state: { tab: "tracking" } });
+            navigate("/tracking");
           }
         }}
         className="flex flex-1 flex-col cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

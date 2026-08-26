@@ -84,6 +84,8 @@ const BASELINE_FILE: &str = "skill_baselines.json";
 const BASELINE_VERSION: u32 = 3;
 /// Folders explicitly flagged "new, not yet pushed" (persisted set).
 const PENDING_NEW_FILE: &str = "skill_new.json";
+/// Folders the app deleted on purpose, whose removal is not pushed yet.
+const PENDING_DELETED_FILE: &str = "skill_deleted.json";
 /// Emitted when a folder's sync status changes.
 const EVENT: &str = "skill-sync-changed";
 /// Emitted when the *set* of skill folders changed on disk (a folder appeared or
@@ -166,6 +168,14 @@ struct Shared {
     /// skill `New`, and this set stops mattering. Persisted so the nudge survives
     /// a restart while offline.
     pending_new: HashSet<String>,
+    /// Folders this app deleted locally, whose removal has not been pushed yet.
+    ///
+    /// Not an optimisation: it is the only thing that keeps such a deletion
+    /// alive across a sweep that could not reach the forge. With no remote
+    /// listing there is no `MissingLocal`, the folder leaves `roots`, and the
+    /// prune in `sync` drops the baseline that proves we ever had it — turning
+    /// "you deleted this" into "never installed here", permanently.
+    pending_deleted: HashSet<String>,
 }
 
 /// Managed Tauri state: the live watcher plus the shared bookkeeping.
@@ -188,6 +198,7 @@ impl SkillWatch {
             shared: Arc::new(Mutex::new(Shared {
                 baselines: load_baselines(),
                 pending_new: load_pending_new(),
+                pending_deleted: load_pending_deleted(),
                 ..Default::default()
             })),
             watcher: Mutex::new(None),
@@ -214,9 +225,13 @@ impl SkillWatch {
 
         // Snapshot what we need to resolve statuses, then do all folder IO
         // outside the lock — hashing must never block a command touching state.
-        let (known_baselines, pending_new) = {
+        let (known_baselines, pending_new, pending_deleted) = {
             let sh = self.shared.lock();
-            (sh.baselines.clone(), sh.pending_new.clone())
+            (
+                sh.baselines.clone(),
+                sh.pending_new.clone(),
+                sh.pending_deleted.clone(),
+            )
         };
 
         let mut seen: HashSet<String> = HashSet::new();
@@ -283,6 +298,18 @@ impl SkillWatch {
                 deleted.push(m.folder);
             }
         }
+        // Deletions this app performed itself. They are folded in even when the
+        // remote listing failed — that is the whole point of the set: an
+        // unreachable forge produces no `MissingLocal`, and the folder would
+        // otherwise leave `roots` and lose its baseline for good.
+        for folder in &pending_deleted {
+            if seen.contains(folder) || Path::new(folder).is_dir() {
+                continue;
+            }
+            if !deleted.iter().any(|d| d == folder) {
+                deleted.push(folder.clone());
+            }
+        }
 
         let mut out = Vec::with_capacity(resolved.len() + deleted.len());
         let mut new_canon: HashSet<PathBuf> = HashSet::new();
@@ -310,6 +337,9 @@ impl SkillWatch {
                 if remote_known {
                     sh.pending_new.remove(&folder);
                 }
+                // The folder exists again — restored by hand, or re-installed
+                // by a plugin update — so nothing is pending on it any more.
+                sh.pending_deleted.remove(&folder);
                 out.push(SkillState {
                     folder: folder.clone(),
                     status,
@@ -353,6 +383,7 @@ impl SkillWatch {
 
             save_baselines(&sh.baselines);
             save_pending_new(&sh.pending_new);
+            save_pending_deleted(&sh.pending_deleted);
         }
 
         self.rearm(new_canon);
@@ -376,6 +407,10 @@ impl SkillWatch {
             if sh.pending_new.remove(folder) {
                 save_pending_new(&sh.pending_new);
             }
+            // The deletion has been pushed: stop keeping it alive.
+            if sh.pending_deleted.remove(folder) {
+                save_pending_deleted(&sh.pending_deleted);
+            }
             save_baselines(&sh.baselines);
             return;
         }
@@ -393,6 +428,9 @@ impl SkillWatch {
         sh.status.insert(folder.to_string(), SkillSync::Synced);
         sh.pending_new.remove(folder);
         save_pending_new(&sh.pending_new);
+        if sh.pending_deleted.remove(folder) {
+            save_pending_deleted(&sh.pending_deleted);
+        }
         save_baselines(&sh.baselines);
     }
 
@@ -432,6 +470,65 @@ impl SkillWatch {
         );
     }
 
+    /// Capture a baseline for `folder` if we do not hold one yet.
+    ///
+    /// Must run *before* the bytes are removed: the baseline is what later turns
+    /// "the remote has it, the disk does not" into `Deleted` rather than "never
+    /// installed here", and it cannot be computed from a folder that is gone.
+    pub fn ensure_baseline(&self, folder: &str) {
+        let path = Path::new(folder);
+        if !path.is_dir() {
+            return;
+        }
+        {
+            let sh = self.shared.lock();
+            if sh.baselines.contains_key(folder) {
+                return;
+            }
+        }
+        let meta = hash_folder_meta(path);
+        let sig = content_sig(path);
+        let mut sh = self.shared.lock();
+        sh.baselines.entry(folder.to_string()).or_insert(Baseline {
+            meta,
+            sig,
+            synced_sig: None,
+        });
+        save_baselines(&sh.baselines);
+    }
+
+    /// Flag a folder the app just deleted as "deleted, not yet pushed" and emit
+    /// the event so the badge turns red now.
+    ///
+    /// The filesystem watcher cannot do this on its own: a vanished folder
+    /// hashes as an empty tree, which reads `Modified` (amber). The status set
+    /// here survives that, because `rescan` leaves `New` and `Deleted` alone.
+    pub fn mark_deleted(&self, app: &AppHandle, folder: &str) {
+        self.ensure_started(app);
+        {
+            let mut sh = self.shared.lock();
+            sh.pending_deleted.insert(folder.to_string());
+            sh.status.insert(folder.to_string(), SkillSync::Deleted);
+            // `states()` reads `roots`, so an entry missing from it would vanish
+            // from the UI on the next re-seed.
+            if !sh.roots.iter().any(|r| r == folder) {
+                sh.roots.push(folder.to_string());
+            }
+            save_pending_deleted(&sh.pending_deleted);
+        }
+        emit_state(
+            app,
+            &SkillState {
+                folder: folder.to_string(),
+                status: SkillSync::Deleted,
+            },
+        );
+        // The set of skill folders changed, and the watcher will not say so
+        // (the removed path is a known skill root, so `tree_changed` stays
+        // false) — tell the frontend to re-run the sweep itself.
+        let _ = app.emit(EVENT_TREE, ());
+    }
+
     /// Drop every baseline and status at or under `root`. Called right after an
     /// install overwrites a plugin's folder or an uninstall removes it: the
     /// on-disk content is then the new truth, so a stale reference from a
@@ -453,6 +550,11 @@ impl SkillWatch {
         sh.status.retain(|k, _| !under(k));
         let pending_before = sh.pending_new.len();
         sh.pending_new.retain(|k| !under(k));
+        let deleted_before = sh.pending_deleted.len();
+        sh.pending_deleted.retain(|k| !under(k));
+        if sh.pending_deleted.len() != deleted_before {
+            save_pending_deleted(&sh.pending_deleted);
+        }
         let dropped = before - sh.baselines.len();
         if dropped > 0 {
             save_baselines(&sh.baselines);
@@ -998,6 +1100,26 @@ fn save_pending_new(set: &HashSet<String>) {
     let arr: Vec<Value> = set.iter().cloned().map(Value::String).collect();
     if let Err(e) = installer::atomic_write_json(&pending_new_path(), &Value::Array(arr)) {
         tracing::warn!("skill_watch: could not persist pending-new set: {e}");
+    }
+}
+
+fn pending_deleted_path() -> PathBuf {
+    config::app_settings_dir().join(PENDING_DELETED_FILE)
+}
+
+fn load_pending_deleted() -> HashSet<String> {
+    let Ok(text) = std::fs::read_to_string(pending_deleted_path()) else {
+        return HashSet::new();
+    };
+    serde_json::from_str::<Vec<String>>(&text)
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_default()
+}
+
+fn save_pending_deleted(set: &HashSet<String>) {
+    let arr: Vec<Value> = set.iter().cloned().map(Value::String).collect();
+    if let Err(e) = installer::atomic_write_json(&pending_deleted_path(), &Value::Array(arr)) {
+        tracing::warn!("skill_watch: could not persist pending-deleted set: {e}");
     }
 }
 

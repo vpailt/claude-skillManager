@@ -282,6 +282,12 @@ export const api = {
   addSkillToPlugin: (args: AddSkillArgs) =>
     invoke<string>("add_skill_to_plugin", { args }),
 
+  /** Delete a skill folder from disk. Resolves to `true` when the removal is
+   *  something to push (a plugin skill the remote still holds), `false` for a
+   *  standalone user skill, which has no upstream and is simply gone. */
+  deleteSkillLocal: (folder: string) =>
+    invoke<boolean>("delete_skill_local", { folder }),
+
   // --- duplicate skills ---
   listDuplicateSkills: () =>
     invoke<DuplicateSkill[]>("list_duplicate_skills"),

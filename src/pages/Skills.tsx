@@ -7,7 +7,7 @@
 //    fichiers et le détail SKILL.md ;
 //  - panneaux doublons & archivés ;
 //  - filtre des skills par état d'installation (installé / non installé).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
   ChevronDown,
@@ -31,6 +31,7 @@ import {
   Trash2,
   UploadCloud,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -74,9 +75,18 @@ import {
 } from "@/components/DuplicateSkillsPanel";
 import { ArchivedSkillsPanel } from "@/components/ArchivedSkillsPanel";
 import { AddMarketplaceDialog } from "@/components/AddMarketplaceDialog";
-import { AddSkillDialog, WizardHost, type WizardKind } from "@/components/AdminWizards";
-import { BulkPushDialog, type BulkCandidate } from "@/components/BulkPushDialog";
+import { AddSkillDialog } from "@/components/AdminWizards";
+import { BulkActionBar } from "@/components/BulkActionBar";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useInstallMarketplace } from "@/hooks/useInstallMarketplace";
+import {
+  mpKey,
+  plKey,
+  skKey,
+  useGroupState,
+  useIsSelected,
+  useTreeSelection,
+} from "@/stores/treeSelection";
 import {
   isActionable,
   SYNC_BADGE,
@@ -172,6 +182,57 @@ function skillInstalled(s: Skill) {
 
 function isLocal(s: SkillEntry, localName: string) {
   return s.marketplaceNameSafe === localName;
+}
+
+// ---------- Multi-selection ----------
+
+/** Row checkbox. Stays out of the way until the user hovers a row or has
+ *  started a selection, so the tree reads the same as before when unused.
+ *  Shift-click extends from the last ticked row, like a file explorer. */
+function RowCheckbox({
+  keys,
+  state,
+  label,
+  className,
+}: {
+  /** Every key this row owns. A leaf owns one; a marketplace owns itself plus
+   *  each of its visible plugins. */
+  keys: string[];
+  state: "none" | "some" | "all";
+  label: string;
+  className?: string;
+}) {
+  const toggle = useTreeSelection((s) => s.toggle);
+  const setMany = useTreeSelection((s) => s.setMany);
+  const selectRange = useTreeSelection((s) => s.selectRange);
+  const anySelected = useTreeSelection((s) => s.selected.size > 0);
+
+  return (
+    <Checkbox
+      checked={state === "all"}
+      indeterminate={state === "some"}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "transition-opacity",
+        anySelected
+          ? "opacity-100"
+          : "opacity-0 group-hover:opacity-100 focus:opacity-100",
+        className
+      )}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (e.shiftKey && keys.length === 1) {
+          e.preventDefault();
+          selectRange(keys[0]);
+        }
+      }}
+      onChange={() => {
+        if (keys.length === 1) toggle(keys[0]);
+        else setMany(keys, state !== "all");
+      }}
+    />
+  );
 }
 
 // ---------- File-tree helpers (mirrors the Skills tab) ----------
@@ -334,6 +395,9 @@ function SkillTreeRow({
   // is exactly the one whose status the user most needs to see.
   const syncStatus = useSkillStatus(entry.watchFolder ?? entry.folder);
   const syncBadge = SYNC_BADGE[syncStatus];
+  // Same key as the sync watcher, so a locally deleted skill stays selectable.
+  const selFolder = entry.watchFolder ?? entry.folder ?? null;
+  const ticked = useIsSelected(selFolder ? skKey(selFolder) : "");
 
   return (
     <div className="group">
@@ -342,6 +406,15 @@ function SkillTreeRow({
           selected ? "bg-accent text-foreground" : "hover:bg-accent/50"
         }`}
       >
+        {selFolder ? (
+          <RowCheckbox
+            keys={[skKey(selFolder)]}
+            state={ticked ? "all" : "none"}
+            label={`Sélectionner ${entry.name}`}
+          />
+        ) : (
+          <span className="inline-block h-3.5 w-3.5 shrink-0" />
+        )}
         <button
           onClick={onToggle}
           className="grid h-5 w-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
@@ -450,6 +523,10 @@ function PluginNode({
     selection?.kind === "plugin" &&
     selection.marketplace === marketplace &&
     selection.plugin === plugin.name;
+  // The plugin box ticks the plugin alone, not its skills: the two are acted on
+  // by different buttons (install/update vs publish), so cascading down here
+  // would conjure skill actions the user never asked for.
+  const ticked = useIsSelected(plKey(marketplace, plugin.name));
 
   const toggleSkill = (key: string) =>
     setExpandedSkills((prev) => {
@@ -468,6 +545,11 @@ function PluginNode({
         )}
         onClick={onSelectPlugin}
       >
+        <RowCheckbox
+          keys={[plKey(marketplace, plugin.name)]}
+          state={ticked ? "all" : "none"}
+          label={`Sélectionner ${plugin.name}`}
+        />
         <Button
           variant="ghost"
           size="icon"
@@ -575,6 +657,16 @@ function MarketplaceNode({
     selection.marketplace === marketplace.name;
   const title =
     marketplace.name === localName ? "Compétences personnelles" : marketplace.name;
+  // A marketplace box covers itself and its visible plugins — "check the whole
+  // marketplace" is what the gesture means. Filtered-out plugins stay out.
+  const groupKeys = useMemo(
+    () => [
+      mpKey(marketplace.name),
+      ...plugins.map(({ plugin }) => plKey(marketplace.name, plugin.name)),
+    ],
+    [marketplace.name, plugins]
+  );
+  const groupState = useGroupState(groupKeys);
 
   return (
     <div className="px-2 py-1">
@@ -585,6 +677,11 @@ function MarketplaceNode({
         )}
         onClick={onSelectMarketplace}
       >
+        <RowCheckbox
+          keys={groupKeys}
+          state={groupState}
+          label={`Sélectionner ${title} et ses plugins`}
+        />
         <Button
           variant="ghost"
           size="icon"
@@ -904,7 +1001,7 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
                 <div className="font-medium">Suivi PR</div>
                 <div className="text-xs text-muted-foreground">
                   Suit les PR ouvertes de ce marketplace et de ses plugins
-                  (onglet Suivi Marketplace + Dashboard).
+                  (onglet Suivi marketplace + Dashboard).
                 </div>
               </div>
               <Switch
@@ -1217,6 +1314,7 @@ interface SkillDetailProps {
   status: SkillSyncStatus;
   canPush: boolean;
   onPush: () => void;
+  onDelete: () => void;
 }
 
 function SkillDetailView({
@@ -1228,6 +1326,7 @@ function SkillDetailView({
   status,
   canPush,
   onPush,
+  onDelete,
 }: SkillDetailProps) {
   const mdPath =
     entry.skillMdPath ||
@@ -1262,6 +1361,19 @@ function SkillDetailView({
           >
             <Code2 className="h-4 w-4" />
             VS Code
+          </Button>
+        )}
+        {entry.folder && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 gap-1.5 px-2 text-xs text-destructive"
+            aria-label="Supprimer en local"
+            title="Supprimer ce dossier de skill sur cette machine"
+            onClick={onDelete}
+          >
+            <Trash2 className="h-4 w-4" />
+            Supprimer
           </Button>
         )}
       </header>
@@ -1432,6 +1544,7 @@ function DetailPanel({
   onArchived,
   onRestored,
   onPushSkill,
+  onDeleteSkill,
   onAddSkill,
 }: {
   selection: Selection;
@@ -1440,7 +1553,8 @@ function DetailPanel({
   onToggleDescription: () => void;
   onArchived: () => void;
   onRestored: () => void;
-  onPushSkill: (entry: SkillEntry, status: SkillSyncStatus) => void;
+  onPushSkill: (entry: SkillEntry) => void;
+  onDeleteSkill: (entry: SkillEntry) => void;
   onAddSkill: (p: Plugin) => void;
 }) {
   const findPlugin = useApp((s) => s.findPlugin);
@@ -1537,7 +1651,8 @@ function DetailPanel({
         localName={localName}
         status={skillStatus}
         canPush={canPushSkill}
-        onPush={() => onPushSkill(selection.entry, skillStatus)}
+        onPush={() => onPushSkill(selection.entry)}
+        onDelete={() => onDeleteSkill(selection.entry)}
       />
     );
   }
@@ -1561,6 +1676,7 @@ function DetailPanel({
 // ---------- Main page ----------
 
 export function SkillsPage() {
+  const navigate = useNavigate();
   const marketplaces = useApp((s) => s.marketplaces);
   const localOnly = useApp((s) => s.localOnly);
   const globalSelection = useApp((s) => s.selection);
@@ -1572,56 +1688,84 @@ export function SkillsPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [showDescription, setShowDescription] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
-  const [wizard, setWizard] = useState<WizardKind | null>(null);
   const [addSkillFor, setAddSkillFor] = useState<Plugin | null>(null);
-  const [bulkOpen, setBulkOpen] = useState(false);
-  // Folder being pushed, so we can mark it synced once the PR is opened.
-  const pushFolderRef = useRef<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<SkillEntry | null>(null);
   const setSyncOne = useSkillSync((s) => s.setOne);
-  const syncMap = useSkillSync((s) => s.status);
+  const qc = useQueryClient();
+  const notify = useNotifications((s) => s.push);
 
   const localName = localOnly?.name ?? "(local skills)";
 
-  // Open the right draft for the selected skill's sync status. The repo path
-  // uses the folder's basename (not the frontmatter `name`) so it matches
-  // `skills/<folder>` on the remote — the two diverge often enough that keying
-  // on the name would target the wrong path.
-  const pushSkill = (entry: SkillEntry, status: SkillSyncStatus) => {
-    const plugin = findPlugin(entry.marketplaceNameSafe, entry.pluginNameSafe);
+  // Pushing a single skill goes to the Changes tab with that skill alone
+  // ticked, rather than opening a draft dialog: one screen builds every PR,
+  // whatever the status, so there is a single place to review before pushing.
+  // Keyed on the watch folder — a deleted skill has no `folder` left, and it is
+  // exactly the one that needs pushing.
+  const pushSkill = (entry: SkillEntry) => {
     const target = entry.folder ?? entry.watchFolder;
-    if (!plugin || !target) return;
-    const basename =
-      target.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || entry.name;
-    pushFolderRef.current = target;
-    if (status === "deleted") {
-      // Nothing to upload — this PR removes the skill from the repo.
-      setWizard({
-        kind: "deleteSkill",
-        marketplace: entry.marketplaceNameSafe,
-        plugin,
-        skillName: basename,
-      });
-      return;
-    }
-    setWizard({
-      kind: "uploadSkill",
-      marketplace: entry.marketplaceNameSafe,
-      plugin,
-      initialLocalFolder: target,
-      initialTargetName: basename,
-    });
+    if (!target) return;
+    navigate("/changes", { state: { folders: [target], focus: target } });
   };
 
-  const onWizardSubmitted = () => {
-    const folder = pushFolderRef.current;
-    if (!folder) return;
-    // What is on disk now matches what we just pushed → stop nudging. For a
-    // deletion the backend drops the reference entirely (there is no folder to
-    // take one of), so the skill stops reading `deleted` too.
-    api.skillMarkSynced(folder).catch(() => {});
-    setSyncOne(folder, "synced");
-    pushFolderRef.current = null;
-  };
+  // Delete the folder on disk. A plugin skill stays in the tree afterwards,
+  // flagged `deleted` — the removal is then pushed like any other change.
+  const deleteSkill = useMutation({
+    mutationFn: async (entry: SkillEntry) => {
+      const folder = entry.folder as string;
+      const tracked = await api.deleteSkillLocal(folder);
+      return { entry, folder, tracked };
+    },
+    onSuccess: ({ entry, folder, tracked }) => {
+      if (tracked) {
+        // Red dot now rather than at the next sweep; the backend set the same
+        // status, so the watcher will not overwrite it with `modified`.
+        setSyncOne(folder, "deleted");
+        // The tree rebuilds this row with `folder: null`; the detail panel holds
+        // a snapshot, so drop the folder there too — otherwise its disk-bound
+        // buttons (VS Code, Supprimer) outlive the bytes they act on.
+        setSelection((cur) =>
+          cur?.kind === "skill" && cur.entry.folder === folder
+            ? {
+                kind: "skill",
+                entry: {
+                  ...cur.entry,
+                  folder: null,
+                  watchFolder: cur.entry.watchFolder ?? folder,
+                },
+              }
+            : cur
+        );
+      } else {
+        // No upstream: the row is about to disappear from the tree.
+        setSelection(null);
+      }
+      // ["refresh"] alone would leave the per-folder caches serving a skill
+      // that no longer exists on disk.
+      for (const key of [
+        ["refresh"],
+        ["duplicate-skills"],
+        ["archived-skills"],
+        ["skill-files"],
+        ["skill-mtime"],
+      ]) {
+        qc.invalidateQueries({ queryKey: key });
+      }
+      notify({
+        kind: "success",
+        title: "Compétence supprimée en local",
+        body: tracked
+          ? `${entry.name} — poussez la suppression depuis Changements pour la retirer du dépôt.`
+          : entry.name,
+      });
+      setDeleteTarget(null);
+    },
+    onError: (e, entry) =>
+      notify({
+        kind: "error",
+        title: `Échec de la suppression : ${entry.name}`,
+        body: errMsg(e),
+      }),
+  });
 
   // Deep-links from the dashboard / command palette set the shared `useApp`
   // selection then navigate here; mirror it into the local selection so the
@@ -1664,38 +1808,6 @@ export function SkillsPage() {
     if (localOnly && localOnly.plugins.length > 0) out.unshift(localOnly);
     return out;
   }, [marketplaces, localOnly]);
-
-  // Pushable skills = installed skills under an editable marketplace with a
-  // source repo (same gate as the single-skill "Pousser"). Drives the bulk push
-  // button + dialog.
-  //
-  // `modified` and `new` only: the bulk flow uploads a folder, and a `deleted`
-  // skill has no folder to upload — removing it upstream goes through the
-  // delete-skill draft instead, one at a time and on purpose.
-  const bulkCandidates = useMemo<BulkCandidate[]>(() => {
-    const out: BulkCandidate[] = [];
-    for (const m of marketplaces) {
-      if (!m.editable || !m.sourceRepo) continue;
-      for (const p of m.plugins) {
-        for (const s of p.skills) {
-          if (!s.folder) continue;
-          const st = syncMap[s.folder];
-          if (st !== "modified" && st !== "new") continue;
-          const folder = s.folder;
-          const basename =
-            folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || s.name;
-          out.push({
-            marketplace: m.name,
-            plugin: p,
-            skillName: s.name,
-            folder,
-            targetName: basename,
-          });
-        }
-      }
-    }
-    return out;
-  }, [marketplaces, syncMap]);
 
   const filtersActive = query.trim() !== "" || stateFilter !== "all";
 
@@ -1748,6 +1860,45 @@ export function SkillsPage() {
     return { total, visible };
   }, [list, skillVisible]);
 
+  // Feed the multi-selection store: `ordered` is the visible rows in tree order
+  // (the axis shift-click walks along), `prune` runs against *every* key so a
+  // filter change hides rows without silently dropping what they had ticked.
+  const setOrdered = useTreeSelection((s) => s.setOrdered);
+  const pruneSelection = useTreeSelection((s) => s.prune);
+
+  const orderedKeys = useMemo(() => {
+    const out: string[] = [];
+    for (const { marketplace, plugins } of tree) {
+      out.push(mpKey(marketplace.name));
+      for (const { plugin, visibleSkills } of plugins) {
+        out.push(plKey(marketplace.name, plugin.name));
+        for (const s of visibleSkills) {
+          const folder = s.watchFolder ?? s.folder;
+          if (folder) out.push(skKey(folder));
+        }
+      }
+    }
+    return out;
+  }, [tree]);
+
+  const allKeys = useMemo(() => {
+    const out = new Set<string>();
+    for (const m of list) {
+      out.add(mpKey(m.name));
+      for (const p of m.plugins) {
+        out.add(plKey(m.name, p.name));
+        for (const s of p.skills) {
+          const folder = s.watchFolder ?? s.folder;
+          if (folder) out.add(skKey(folder));
+        }
+      }
+    }
+    return out;
+  }, [list]);
+
+  useEffect(() => setOrdered(orderedKeys), [orderedKeys, setOrdered]);
+  useEffect(() => pruneSelection(allKeys), [allKeys, pruneSelection]);
+
   const selectedDuplicateFolder =
     selection?.kind === "duplicate" ? selection.value.local.folder : null;
   const selectedArchivedFolder =
@@ -1770,24 +1921,6 @@ export function SkillsPage() {
           Ajouter
         </Button>
       </div>
-
-      {bulkCandidates.length >= 2 && (
-        <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2">
-          <UploadCloud className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-          <span className="min-w-0 flex-1 text-xs font-medium text-amber-700 dark:text-amber-300">
-            {bulkCandidates.length} compétences à pousser
-          </span>
-          <Button
-            size="sm"
-            className="h-7 shrink-0 gap-1 px-2 text-xs"
-            onClick={() => setBulkOpen(true)}
-            title="Ouvrir une PR par plugin pour toutes les compétences modifiées"
-          >
-            <UploadCloud className="h-3.5 w-3.5" />
-            Pousser en masse
-          </Button>
-        </div>
-      )}
 
       <div className="space-y-2 border-b p-3">
         <DuplicateSkillsPanel
@@ -1878,6 +2011,12 @@ export function SkillsPage() {
           ))}
         </div>
       </ScrollArea>
+
+      <BulkActionBar
+        onPublishSkills={(folders) =>
+          navigate("/changes", { state: { folders } })
+        }
+      />
     </>
   );
 
@@ -1891,6 +2030,7 @@ export function SkillsPage() {
         onArchived={() => setSelection(null)}
         onRestored={() => setSelection(null)}
         onPushSkill={pushSkill}
+        onDeleteSkill={(entry) => setDeleteTarget(entry)}
         onAddSkill={(p) => setAddSkillFor(p)}
       />
     </ScrollArea>
@@ -1905,11 +2045,52 @@ export function SkillsPage() {
         defaultLeftSize={32}
       />
       <AddMarketplaceDialog open={addOpen} onOpenChange={setAddOpen} />
-      <WizardHost
-        active={wizard}
-        onClose={() => setWizard(null)}
-        onSubmitted={onWizardSubmitted}
-      />
+
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(v) => !v && setDeleteTarget(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Supprimer « {deleteTarget?.name} » en local
+            </DialogTitle>
+            <DialogDescription>
+              {deleteTarget &&
+              deleteTarget.marketplaceNameSafe === localName ? (
+                <>
+                  Le dossier est supprimé définitivement de{" "}
+                  <code>~/.claude/skills/</code>. Cette compétence n'a pas de
+                  dépôt distant : rien ne pourra la restaurer.
+                </>
+              ) : (
+                <>
+                  Le dossier est supprimé de cette machine. La compétence reste
+                  listée avec la pastille <strong>supprimé</strong> : poussez-la
+                  depuis l'onglet <strong>Changements</strong> pour la retirer
+                  aussi du dépôt — sinon la prochaine mise à jour du plugin la
+                  réinstallera.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Annuler</Button>
+            </DialogClose>
+            <Button
+              variant="destructive"
+              disabled={deleteSkill.isPending}
+              onClick={() => deleteTarget && deleteSkill.mutate(deleteTarget)}
+            >
+              {deleteSkill.isPending && (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              )}
+              Supprimer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {addSkillFor && (
         <AddSkillDialog
           open
@@ -1928,14 +2109,6 @@ export function SkillsPage() {
           }}
         />
       )}
-      <BulkPushDialog
-        open={bulkOpen}
-        onOpenChange={setBulkOpen}
-        candidates={bulkCandidates}
-        onPushed={(folders) => {
-          for (const f of folders) setSyncOne(f, "synced");
-        }}
-      />
     </div>
   );
 }
