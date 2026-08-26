@@ -8,6 +8,11 @@
 //!
 //! # How the in-place swap works
 //!
+//! Nothing here starts on its own: the background poller only *detects* a new
+//! release, and the swap runs when the user presses "Installer". Each step
+//! reports through the `on_progress` callback so the top banner can show a real
+//! download bar — the module stays free of any `tauri` dependency.
+//!
 //! The shipped artifact is a single standalone `skillmanager.exe` next to a
 //! portable `config/` + `logs/` — nothing else to install. So an update is just
 //! "put the new binary where the old one is", which Windows allows even while
@@ -83,6 +88,44 @@ pub struct AppUpdateInfo {
     pub status: String,
 }
 
+/// Where an in-progress update currently is. Reported to the caller through
+/// [`ProgressFn`] so the UI can label the bar instead of showing a bare
+/// percentage that sits at 100 % during the (short) verify and swap steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdatePhase {
+    Downloading,
+    /// Zip extraction, shape checks, Authenticode verification.
+    Verifying,
+    /// The two renames that put the new binary in place.
+    Installing,
+}
+
+/// Progress sink: `(phase, downloaded, total)`. `total` is 0 while unknown.
+///
+/// A plain callback rather than an `AppHandle`: this module never depends on
+/// `tauri`, and the command layer is the only place that knows about events.
+pub type ProgressFn<'a> = &'a mut dyn FnMut(UpdatePhase, u64, u64);
+
+/// Convenience for callers that don't care (tests, one-off paths).
+pub fn no_progress(_: UpdatePhase, _: u64, _: u64) {}
+
+/// A published release, as shown in the in-app "Notes de mise à jour" panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseNote {
+    /// Tag, e.g. `v3.2.0`.
+    pub version: String,
+    /// Release title; falls back to the tag when GitHub has none.
+    pub name: String,
+    /// ISO-8601, as GitHub returns it. Formatting is the frontend's business.
+    pub published_at: String,
+    /// Release body, markdown.
+    pub body: String,
+    pub url: Option<String>,
+    pub prerelease: bool,
+}
+
 /// An update already written to disk. The running process is still the old
 /// build — the new one takes over on the next launch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +142,22 @@ pub struct StagedUpdate {
 fn staged_slot() -> &'static Mutex<Option<StagedUpdate>> {
     static SLOT: OnceLock<Mutex<Option<StagedUpdate>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// Serialises [`apply_update`]. It writes to a fixed scratch path and renames
+/// the running image aside; two overlapping runs would delete each other's
+/// verified binary — or, worse, one could rename a still-being-written file
+/// onto the install slot (Windows opens with `FILE_SHARE_DELETE`, so the rename
+/// succeeds) and leave a truncated `skillmanager.exe` behind.
+///
+/// This has to live here, not in the UI: the frontend's own "already
+/// installing" flag dies with the webview, which tray mode destroys on close —
+/// reopening the window is enough to get a second "Installer" button on a store
+/// that knows nothing about the download still running. Same reasoning as the
+/// process-wide mutex around `sweep_remote`.
+fn applying() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 /// The update applied during this session, if any. Drives the "restart to
@@ -300,10 +359,14 @@ pub fn check_for_update() -> Result<AppUpdateInfo> {
         }
     }
 
+    // Normalise here, once. Tags carry a leading `v`, `CARGO_PKG_VERSION` does
+    // not, and the two are printed side by side ("3.4.0 est disponible — vous
+    // êtes en 3.3.0"). Nothing downstream needs the raw tag: the asset URLs come
+    // from the release payload, not from the tag.
     let latest_version = if tag.is_empty() {
         None
     } else {
-        Some(tag.clone())
+        Some(tag.trim_start_matches('v').trim().to_string())
     };
     let has_update = latest_version
         .as_deref()
@@ -347,13 +410,83 @@ pub fn check_for_update() -> Result<AppUpdateInfo> {
     })
 }
 
+/// The published releases, newest first — what the in-app "Notes de mise à
+/// jour" panel shows.
+///
+/// Separate from [`check_for_update`] on purpose: that one answers "is there
+/// something newer" and only ever sees `/releases/latest`, so the notes of the
+/// version you are *running* were unreachable. Drafts are skipped (they are
+/// invisible to unauthenticated calls anyway, but a token-bearing future caller
+/// would see them).
+pub fn fetch_releases(limit: u32) -> Result<Vec<ReleaseNote>> {
+    let per_page = limit.clamp(1, 50);
+    let url =
+        format!("https://api.github.com/repos/{UPDATE_REPO}/releases?per_page={per_page}");
+    let resp = http()?.get(&url).send().map_err(|e| {
+        tracing::warn!("app_updater: GET {} failed: {}", url, e);
+        Error::Other(format!("Network error: {e}"))
+    })?;
+    let status = resp.status();
+    if status.as_u16() == 404 {
+        // No release ever published — an empty history, not a failure.
+        return Ok(Vec::new());
+    }
+    if !status.is_success() {
+        let text = resp.text().unwrap_or_default();
+        return Err(Error::Other(format!(
+            "GitHub returned {status} for {url}: {text}"
+        )));
+    }
+    let items: Vec<Value> = resp.json().map_err(|e| Error::Other(e.to_string()))?;
+    let notes: Vec<ReleaseNote> = items
+        .iter()
+        .filter(|r| !r.get("draft").and_then(|d| d.as_bool()).unwrap_or(false))
+        .map(|r| {
+            let str_of = |k: &str| r.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let version = str_of("tag_name");
+            let name = {
+                let n = str_of("name");
+                if n.is_empty() {
+                    version.clone()
+                } else {
+                    n
+                }
+            };
+            ReleaseNote {
+                version,
+                name,
+                published_at: str_of("published_at"),
+                body: str_of("body"),
+                url: r.get("html_url").and_then(|x| x.as_str()).map(String::from),
+                prerelease: r
+                    .get("prerelease")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false),
+            }
+        })
+        .collect();
+    tracing::info!("app_updater: fetched {} release note(s)", notes.len());
+    Ok(notes)
+}
+
 // ============================================================
 // In-place update
 // ============================================================
 
-fn download(url: &str, expected_size: u64) -> Result<Vec<u8>> {
+/// Cap on the buffer we pre-allocate from a server-declared length. The real
+/// asset is ~10 MB; refusing to trust `Content-Length` past this keeps a bogus
+/// header from asking for a gigabyte of RAM up front.
+const MAX_PREALLOC_BYTES: u64 = 256 * 1024 * 1024;
+const DOWNLOAD_CHUNK: usize = 64 * 1024;
+
+/// Stream the asset into memory, reporting progress as it goes.
+///
+/// Read in chunks rather than through `Response::bytes()`: the point is not
+/// memory (the asset is ~10 MB either way) but that a single blocking call
+/// gives the UI nothing to show for the whole transfer.
+fn download(url: &str, expected_size: u64, on_progress: ProgressFn) -> Result<Vec<u8>> {
     tracing::info!("app_updater: downloading {}", url);
-    let resp = http()?
+    let mut resp = http()?
         .get(url)
         .timeout(Duration::from_secs(600))
         .send()
@@ -362,10 +495,27 @@ fn download(url: &str, expected_size: u64) -> Result<Vec<u8>> {
     if !status.is_success() {
         return Err(Error::Other(format!("download failed: {status} for {url}")));
     }
-    let bytes = resp
-        .bytes()
-        .map_err(|e| Error::Other(format!("download body read failed: {e}")))?
-        .to_vec();
+    // Prefer what the release told us: `Content-Length` is absent on a chunked
+    // response, and GitHub's asset URLs redirect to a CDN that may not set it.
+    let total = if expected_size > 0 {
+        expected_size
+    } else {
+        resp.content_length().unwrap_or(0)
+    };
+
+    let mut bytes: Vec<u8> = Vec::with_capacity(total.min(MAX_PREALLOC_BYTES) as usize);
+    let mut buf = vec![0u8; DOWNLOAD_CHUNK];
+    on_progress(UpdatePhase::Downloading, 0, total);
+    loop {
+        let n = resp
+            .read(&mut buf)
+            .map_err(|e| Error::Other(format!("download body read failed: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buf[..n]);
+        on_progress(UpdatePhase::Downloading, bytes.len() as u64, total);
+    }
     // The release tells us the byte count; a mismatch means a truncated or
     // mangled transfer, and we are about to overwrite our own binary with it.
     // Refuse rather than assume it's fine.
@@ -463,7 +613,27 @@ pub fn cleanup_stale() {
 ///
 /// Returns once the new binary is on disk — this process keeps running the old
 /// code until someone restarts it (see [`relaunch`]).
-pub fn apply_update(info: &AppUpdateInfo) -> Result<StagedUpdate> {
+///
+/// `on_progress` is called throughout; pass [`no_progress`] when there is
+/// nothing to report to.
+pub fn apply_update(info: &AppUpdateInfo, on_progress: ProgressFn) -> Result<StagedUpdate> {
+    // Refuse rather than queue: a second caller is a duplicate click or a
+    // rebuilt window, and making it wait would only download the same asset
+    // twice and then fight over the same scratch file.
+    // `Other`, not `Invalid`: these two land verbatim in a toast the user sees
+    // by double-clicking "Installer", and `Invalid` renders as
+    // "invalid input: …" (see `error.rs`).
+    let Some(_guard) = applying().try_lock() else {
+        return Err(Error::Other(
+            "Une mise à jour est déjà en cours d'installation.".into(),
+        ));
+    };
+    if let Some(done) = staged() {
+        return Err(Error::Other(format!(
+            "La version {} est déjà installée — redémarrez SkillManager pour l'utiliser.",
+            done.version
+        )));
+    }
     let (Some(url), Some(name)) = (
         info.portable_asset_url.as_deref(),
         info.portable_asset_name.as_deref(),
@@ -483,7 +653,9 @@ pub fn apply_update(info: &AppUpdateInfo) -> Result<StagedUpdate> {
     cleanup_stale();
     let dir = config::update_dir();
 
-    let bytes = download(url, info.portable_asset_size)?;
+    let bytes = download(url, info.portable_asset_size, on_progress)?;
+    let downloaded = bytes.len() as u64;
+    on_progress(UpdatePhase::Verifying, downloaded, downloaded);
     let fresh = dir.join("skillmanager-new.exe");
     let _ = fs::remove_file(&fresh);
     if name.to_ascii_lowercase().ends_with(".zip") {
@@ -505,6 +677,7 @@ pub fn apply_update(info: &AppUpdateInfo) -> Result<StagedUpdate> {
     // Park the running image. Windows refuses to delete or overwrite it, but a
     // rename is fine — the loader opened it with FILE_SHARE_DELETE. The stamp
     // keeps a second update in the same session from colliding with the first.
+    on_progress(UpdatePhase::Installing, downloaded, downloaded);
     let stamp = chrono::Utc::now().timestamp_millis();
     let parked = dir.join(format!(
         "skillmanager-{}-{}.old.exe",
@@ -686,7 +859,11 @@ pub fn wait_for_pid(_pid: u32, _timeout_ms: u32) {}
 
 /// Download the installer asset to `%TEMP%`. Returns the absolute path so the
 /// caller can hand it off to ShellExecuteW.
-pub fn download_installer(asset_url: &str, asset_name: &str) -> Result<PathBuf> {
+pub fn download_installer(
+    asset_url: &str,
+    asset_name: &str,
+    on_progress: ProgressFn,
+) -> Result<PathBuf> {
     if asset_url.is_empty() || asset_name.is_empty() {
         return Err(Error::Invalid("empty asset url or name".into()));
     }
@@ -701,7 +878,9 @@ pub fn download_installer(asset_url: &str, asset_name: &str) -> Result<PathBuf> 
     fs::create_dir_all(&dir)?;
     let target = dir.join(safe_name);
 
-    let bytes = download(asset_url, 0)?;
+    let bytes = download(asset_url, 0, on_progress)?;
+    let downloaded = bytes.len() as u64;
+    on_progress(UpdatePhase::Verifying, downloaded, downloaded);
     fs::write(&target, &bytes)?;
     // Same gate as the in-place path: this installer is about to be run, with
     // elevation if the install location needs it.

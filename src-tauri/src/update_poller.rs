@@ -5,15 +5,16 @@
 //! `setInterval`.
 //!
 //! The loop checks GitHub Releases every `update.auto.interval.hours` and, when
-//! a newer build is out, applies it **in place** (`app_updater::apply_update`) —
-//! no installer window, no uninstall/reinstall, no UAC on a per-user install.
-//! The running session is untouched; the new binary takes over at the next
-//! launch. The UI is told through [`EVENT_READY`] so it can offer "restart now",
-//! and when no window is around to show that, a native toast says the same.
+//! a newer build is out, **says so and stops there** — it emits
+//! [`EVENT_AVAILABLE`], which raises the green banner at the top of the window
+//! (and a native toast when no window is around to show it).
 //!
-//! [`EVENT_AVAILABLE`] is the degraded path: a release exists but we can't swap
-//! it ourselves (install directory read-only, or the release ships only an
-//! installer). The frontend then points at the manual buttons in Settings.
+//! It deliberately downloads nothing. Replacing the binary is the user's call,
+//! taken by pressing "Installer": the frontend then invokes `app_apply_update`,
+//! which streams the download with progress and emits [`EVENT_READY`] once the
+//! new build is on disk. So this module detects, and only detects — the whole
+//! point of `update.auto.enabled` is now "check automatically", not "install
+//! automatically".
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -27,10 +28,14 @@ use tauri_plugin_notification::NotificationExt;
 use crate::app_updater;
 use crate::config;
 
-/// A new build is on disk; restarting picks it up.
+/// A new build is on disk; restarting picks it up. Emitted by
+/// `commands::app_apply_update`, never by this poller.
 pub const EVENT_READY: &str = "app-update-ready";
-/// A new build exists but needs the user to act (Settings → Mise à jour).
+/// A new build exists and is waiting on the user to press "Installer".
 pub const EVENT_AVAILABLE: &str = "app-update-available";
+/// Download/verify/install progress of a user-triggered update. Emitted by
+/// `commands::app_apply_update` and `commands::app_install_update`.
+pub const EVENT_PROGRESS: &str = "app-update-progress";
 
 /// Let the first refresh and the PR poller settle before adding network work.
 const STARTUP_DELAY_SECS: u64 = 25;
@@ -43,13 +48,63 @@ const MIN_INTERVAL_HOURS: u32 = 1;
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 
-/// Last version announced through [`EVENT_AVAILABLE`]. A release we can't
-/// install ourselves stays "available" forever, and re-toasting it every
-/// interval would be nagging, not informing — so each version is announced
-/// once per session.
-fn announced() -> &'static Mutex<Option<String>> {
-    static LAST: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+/// The release last announced through [`EVENT_AVAILABLE`], kept for two
+/// reasons.
+///
+/// A release stays "available" until the user installs it, and re-toasting it
+/// every interval would be nagging, not informing — so the toast fires once per
+/// version while the event keeps flowing.
+///
+/// And the window is destroyed in tray mode: a frontend that rebuilt after the
+/// announcement would have nothing to show until the next tick, hours later.
+/// [`last_available`] lets it ask, the same way it asks `app_update_staged`.
+fn available_slot() -> &'static Mutex<Option<UpdateEvent>> {
+    static LAST: OnceLock<Mutex<Option<UpdateEvent>>> = OnceLock::new();
     LAST.get_or_init(|| Mutex::new(None))
+}
+
+/// Version whose banner the user waved away.
+///
+/// Kept in the process, not in the store: the webview owns no memory that
+/// survives a tray close, and `last_available` would hand the rebuilt window
+/// the very release it was just told to stop showing.
+fn dismissed_slot() -> &'static Mutex<Option<String>> {
+    static DISMISSED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    DISMISSED.get_or_init(|| Mutex::new(None))
+}
+
+/// Stop offering `version` until a newer one shows up (or the app restarts).
+pub fn dismiss(version: &str) {
+    tracing::info!("update_poller: {} dismissed by the user", version);
+    *dismissed_slot().lock() = Some(version.to_string());
+}
+
+fn is_dismissed(version: &str) -> bool {
+    dismissed_slot().lock().as_deref() == Some(version)
+}
+
+/// The pending release, if the poller has seen one this session and the user
+/// has not waved it away.
+pub fn last_available() -> Option<UpdateEvent> {
+    let pending = available_slot().lock().clone()?;
+    if is_dismissed(&pending.version) {
+        return None;
+    }
+    Some(pending)
+}
+
+/// Drop the pending release — called once it has actually been installed, so a
+/// window opened afterwards doesn't offer an update that is already on disk.
+pub fn clear_available() {
+    *available_slot().lock() = None;
+}
+
+/// Raise the "installed, restart when you like" toast. Lives here because
+/// `maybe_notify` owns the "is a window actually showing this?" decision, but
+/// the install itself is now driven by `commands::app_apply_update`.
+pub fn notify_staged(app: &AppHandle, payload: &UpdateEvent) {
+    let settings = config::load_settings();
+    maybe_notify(app, &settings, payload);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,6 +116,21 @@ pub struct UpdateEvent {
     pub release_url: Option<String>,
     /// True for [`EVENT_READY`]: the binary is already swapped in.
     pub staged: bool,
+    /// Whether "Installer" can do the in-place swap, or has to fall back to the
+    /// NSIS installer (read-only install dir, or a release with no portable
+    /// asset). Only changes the button's wording — both paths are one click.
+    pub can_self_update: bool,
+}
+
+/// Progress of a user-triggered update, mirrored from
+/// `app_updater::UpdatePhase`. `total` is 0 while the size is unknown.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProgress {
+    pub version: String,
+    pub phase: app_updater::UpdatePhase,
+    pub downloaded: u64,
+    pub total: u64,
 }
 
 /// Arm the updater. Idempotent: subsequent calls are no-ops.
@@ -69,9 +139,10 @@ pub fn start(app: AppHandle) {
         return;
     }
     // A debug build lives in `target/debug` next to the artifacts cargo is
-    // about to rewrite. Swapping a release binary in there would be actively
-    // hostile to the dev loop, so background updates are release-only. The
-    // Settings page's manual button still works in either build.
+    // about to rewrite. Announcing (and letting someone press "Installer" on)
+    // a release binary in there would be actively hostile to the dev loop, so
+    // background checks are release-only. The Settings page's manual button
+    // still works in either build.
     if cfg!(debug_assertions) {
         tracing::info!("update_poller: skipped (debug build)");
         return;
@@ -90,8 +161,8 @@ fn worker(app: AppHandle) {
             std::thread::sleep(Duration::from_secs(DISABLED_POLL_SECS));
             continue;
         }
-        // Already updated this session — the work is done until the user
-        // restarts, and re-checking would just re-download the same release.
+        // Already installed this session — the work is done until the user
+        // restarts, and re-announcing would just repeat what the banner says.
         if app_updater::staged().is_none() {
             tick(&app, &settings);
         }
@@ -115,62 +186,51 @@ fn tick(app: &AppHandle, settings: &config::Settings) {
     if !info.has_update {
         return;
     }
-    let version = info.latest_version.clone().unwrap_or_default();
-
-    if !info.can_self_update {
-        tracing::info!(
-            "update_poller: {} available but not self-installable (portable asset: {}, writable: {})",
-            version,
-            info.portable_asset_name.as_deref().unwrap_or("<none>"),
-            app_updater::install_dir_writable()
-        );
-        emit(app, settings, &info, false);
-        return;
-    }
-
-    match app_updater::apply_update(&info) {
-        Ok(staged) => {
-            tracing::info!(
-                "update_poller: {} staged in place (running {})",
-                staged.version,
-                staged.running_version
-            );
-            emit(app, settings, &info, true);
-        }
-        Err(e) => {
-            tracing::warn!("update_poller: in-place update to {} failed: {}", version, e);
-            emit(app, settings, &info, false);
-        }
-    }
+    tracing::info!(
+        "update_poller: {} available (portable asset: {}, self-installable: {})",
+        info.latest_version.as_deref().unwrap_or("?"),
+        info.portable_asset_name.as_deref().unwrap_or("<none>"),
+        info.can_self_update
+    );
+    announce(app, settings, &info);
 }
 
-fn emit(
-    app: &AppHandle,
-    settings: &config::Settings,
-    info: &app_updater::AppUpdateInfo,
-    staged: bool,
-) {
+/// Raise the banner (and, if nothing is on screen, a toast) for a release the
+/// user has not installed yet. Nothing is downloaded — that starts when they
+/// press "Installer".
+fn announce(app: &AppHandle, settings: &config::Settings, info: &app_updater::AppUpdateInfo) {
     let payload = UpdateEvent {
         version: info.latest_version.clone().unwrap_or_default(),
         running_version: info.current_version.clone(),
         release_notes: info.release_notes.clone(),
         release_url: info.release_url.clone(),
-        staged,
+        staged: false,
+        can_self_update: info.can_self_update,
     };
-    let event = if staged { EVENT_READY } else { EVENT_AVAILABLE };
-    if !staged {
-        let mut last = announced().lock();
-        if last.as_deref() == Some(payload.version.as_str()) {
-            tracing::debug!(
-                "update_poller: {} already announced this session",
-                payload.version
-            );
-            return;
-        }
-        *last = Some(payload.version.clone());
+    // Waved away: remember it (so a later, newer release still gets through)
+    // but say nothing more about this one.
+    if is_dismissed(&payload.version) {
+        *available_slot().lock() = Some(payload.clone());
+        tracing::debug!("update_poller: {} is dismissed, staying quiet", payload.version);
+        return;
     }
-    if let Err(e) = app.emit(event, &payload) {
-        tracing::debug!("update_poller: emit {} failed: {}", event, e);
+    // The event is cheap and idempotent — a window opened after the first tick
+    // needs it — but the toast is not, so only the toast is once-per-version.
+    let is_new = {
+        let mut slot = available_slot().lock();
+        let changed = slot.as_ref().map(|p| p.version.as_str()) != Some(payload.version.as_str());
+        *slot = Some(payload.clone());
+        changed
+    };
+    if let Err(e) = app.emit(EVENT_AVAILABLE, &payload) {
+        tracing::debug!("update_poller: emit {} failed: {}", EVENT_AVAILABLE, e);
+    }
+    if !is_new {
+        tracing::debug!(
+            "update_poller: {} already announced this session",
+            payload.version
+        );
+        return;
     }
     maybe_notify(app, settings, &payload);
 }
@@ -197,7 +257,7 @@ fn maybe_notify(app: &AppHandle, settings: &config::Settings, payload: &UpdateEv
     } else {
         (
             format!("SkillManager {} est disponible", payload.version),
-            "Ouvrez les Paramètres pour lancer la mise à jour.".to_string(),
+            "Ouvrez SkillManager et cliquez sur Installer pour la télécharger.".to_string(),
         )
     };
     if let Err(e) = app

@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   ArrowUpCircle,
   ExternalLink,
+  FileText,
   AlertTriangle,
   Info,
   Palette,
@@ -60,8 +61,10 @@ import { useNotifications } from "@/stores/notifications";
 import { setFrontendLogLevel } from "@/lib/logger";
 import { useAppVersion } from "@/hooks/useAppVersion";
 import { useAppUpdate } from "@/stores/appUpdate";
-import { restartNow } from "@/hooks/useAppUpdateEvents";
+import { useReleaseNotes } from "@/stores/releaseNotes";
+import { restartNow, startUpdate } from "@/hooks/useAppUpdateEvents";
 import { GiteaInstancesCard } from "@/components/GiteaInstancesCard";
+import { UpdateProgressBar } from "@/components/UpdateProgressBar";
 import {
   useSettingsDialog,
   type SettingsSection,
@@ -173,8 +176,12 @@ export function SettingsDialog() {
   const [showLogs, setShowLogs] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const staged = useAppUpdate((st) => st.staged);
-  const setStaged = useAppUpdate((st) => st.setStaged);
   const setAvailable = useAppUpdate((st) => st.setAvailable);
+  // Install state is owned by the store, not by a local mutation: the same
+  // download can equally have been started from the top banner.
+  const installing = useAppUpdate((st) => st.installing);
+  const progress = useAppUpdate((st) => st.progress);
+  const openReleaseNotes = useReleaseNotes((st) => st.setOpen);
   const appVersion = useAppVersion();
   const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
   const [uninstallInfo, setUninstallInfo] = useState<UninstallInfo | null>(null);
@@ -354,6 +361,7 @@ export function SettingsDialog() {
           releaseNotes: info.releaseNotes,
           releaseUrl: info.releaseUrl,
           staged: false,
+          canSelfUpdate: info.canSelfUpdate,
         });
         push({
           kind: "info",
@@ -404,60 +412,6 @@ export function SettingsDialog() {
       push({
         kind: "error",
         title: "Échec de la désinstallation",
-        body: errMsg(e),
-      }),
-  });
-
-  // Seamless path: the backend swaps the new binary onto skillmanager.exe while
-  // this session keeps running. Nothing is uninstalled and no wizard appears.
-  const applyUpdateMutation = useMutation({
-    mutationFn: () => {
-      if (!updateInfo) {
-        return Promise.reject(new Error("Lancez d'abord une vérification."));
-      }
-      return api.appApplyUpdate(updateInfo);
-    },
-    onSuccess: (staged) => {
-      setStaged(staged);
-      push({
-        kind: "success",
-        title: `SkillManager ${staged.version} est installé`,
-        body: "Redémarrez quand vous voulez : la nouvelle version démarrera au prochain lancement.",
-      });
-    },
-    onError: (e) =>
-      push({
-        kind: "error",
-        title: "Échec de la mise à jour",
-        body: errMsg(e),
-      }),
-  });
-
-  // Fallback: install directory not writable, or a release without a portable
-  // binary. The NSIS installer runs silently, but may need a UAC prompt.
-  const installUpdateMutation = useMutation({
-    mutationFn: () => {
-      if (!updateInfo?.installerAssetUrl || !updateInfo.installerAssetName) {
-        return Promise.reject(
-          new Error("Aucun installateur attaché à la dernière release.")
-        );
-      }
-      return api.appInstallUpdate(
-        updateInfo.installerAssetUrl,
-        updateInfo.installerAssetName
-      );
-    },
-    onSuccess: () => {
-      push({
-        kind: "info",
-        title: "Installateur lancé",
-        body: "SkillManager va se fermer pour que l'installateur puisse terminer.",
-      });
-    },
-    onError: (e) =>
-      push({
-        kind: "error",
-        title: "Échec de l'installation",
         body: errMsg(e),
       }),
   });
@@ -878,12 +832,13 @@ export function SettingsDialog() {
                   Mise à jour de l'app
                 </CardTitle>
                 <CardDescription>
-                  SkillManager se met à jour tout seul : le nouveau binaire est
-                  téléchargé depuis GitHub puis remplace{" "}
-                  <code>skillmanager.exe</code> sur place. Rien n'est
-                  désinstallé, aucun installateur ne s'ouvre, et la session en
-                  cours continue — la nouvelle version démarre au prochain
-                  lancement (ou tout de suite si vous redémarrez).
+                  SkillManager surveille les nouvelles versions et vous prévient
+                  par un bandeau en haut de la fenêtre — mais ne télécharge
+                  rien tant que vous n'avez pas cliqué sur <em>Installer</em>. Le
+                  nouveau binaire remplace ensuite <code>skillmanager.exe</code>{" "}
+                  sur place : rien n'est désinstallé, aucun installateur ne
+                  s'ouvre, et la session en cours continue jusqu'à ce que vous
+                  redémarriez.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
@@ -893,9 +848,10 @@ export function SettingsDialog() {
                     onCheckedChange={(v) => updateUi({ autoUpdateEnabled: v })}
                   />
                   <span>
-                    Installer les mises à jour automatiquement
+                    Vérifier automatiquement les mises à jour
                     <span className="ml-2 text-xs text-muted-foreground">
-                      (en arrière-plan, même fenêtre fermée)
+                      (en arrière-plan, même fenêtre fermée — le téléchargement
+                      reste manuel)
                     </span>
                   </span>
                 </label>
@@ -934,6 +890,12 @@ export function SettingsDialog() {
                       <RotateCw className="mr-1 h-3 w-3" />
                       Redémarrer maintenant
                     </Button>
+                  </div>
+                )}
+
+                {installing && (
+                  <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 p-2.5 text-xs text-emerald-700 dark:text-emerald-300">
+                    <UpdateProgressBar progress={progress} layout="stacked" />
                   </div>
                 )}
 
@@ -998,38 +960,30 @@ export function SettingsDialog() {
                     Vérifier les mises à jour
                   </Button>
 
-                  {updateInfo?.hasUpdate && !staged && updateInfo.canSelfUpdate && (
-                    <Button
-                      size="sm"
-                      onClick={() => applyUpdateMutation.mutate()}
-                      disabled={applyUpdateMutation.isPending}
-                    >
-                      <Download
-                        className={`mr-1 h-3 w-3 ${applyUpdateMutation.isPending ? "animate-pulse" : ""}`}
-                      />
-                      {applyUpdateMutation.isPending
-                        ? "Installation…"
-                        : `Installer ${updateInfo.latestVersion}`}
-                    </Button>
-                  )}
-
+                  {/* One button whatever the path: `startUpdate` re-checks and
+                      picks the in-place swap or the installer fallback itself,
+                      exactly like the banner's. */}
                   {updateInfo?.hasUpdate &&
                     !staged &&
-                    !updateInfo.canSelfUpdate &&
-                    updateInfo.installerAssetUrl && (
-                      <Button
-                        size="sm"
-                        onClick={() => installUpdateMutation.mutate()}
-                        disabled={installUpdateMutation.isPending}
-                      >
+                    (updateInfo.canSelfUpdate || updateInfo.installerAssetUrl) && (
+                      <Button size="sm" onClick={startUpdate} disabled={installing}>
                         <Download
-                          className={`mr-1 h-3 w-3 ${installUpdateMutation.isPending ? "animate-pulse" : ""}`}
+                          className={`mr-1 h-3 w-3 ${installing ? "animate-pulse" : ""}`}
                         />
-                        {installUpdateMutation.isPending
-                          ? "Téléchargement…"
-                          : `Installer ${updateInfo.latestVersion} (installateur)`}
+                        {installing
+                          ? "Installation…"
+                          : `Installer ${updateInfo.latestVersion}`}
                       </Button>
                     )}
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => openReleaseNotes(true)}
+                  >
+                    <FileText className="mr-1 h-3 w-3" />
+                    Notes de mise à jour
+                  </Button>
 
                   {updateInfo?.releaseUrl && (
                     <Button
@@ -1042,12 +996,10 @@ export function SettingsDialog() {
                     </Button>
                   )}
                 </div>
-
-                {updateInfo?.hasUpdate && updateInfo.releaseNotes && (
-                  <pre className="mt-2 max-h-48 overflow-auto rounded-md border bg-muted/40 p-3 text-xs leading-snug whitespace-pre-wrap">
-                    {updateInfo.releaseNotes}
-                  </pre>
-                )}
+                {/* The raw <pre> of the pending release's body used to live
+                    here. It only ever showed the version you *don't* have yet;
+                    the "Notes de mise à jour" panel renders the whole history,
+                    markdown included. */}
               </CardContent>
             </Card>
 

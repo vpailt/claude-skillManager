@@ -12,6 +12,7 @@ import { useBackendEvents } from "@/hooks/useBackendEvents";
 import { useAppUpdateEvents } from "@/hooks/useAppUpdateEvents";
 import { useUi } from "@/stores/ui";
 import { useNotifications } from "@/stores/notifications";
+import { useReleaseNotes } from "@/stores/releaseNotes";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { createLogger, setFrontendLogLevel } from "@/lib/logger";
@@ -40,6 +41,14 @@ const SettingsDialog = lazy(() =>
 const CommandPalette = lazy(() =>
   import("@/components/CommandPalette").then((m) => ({
     default: m.CommandPalette,
+  }))
+);
+// Renders release bodies through SkillMarkdown, i.e. the whole markdown +
+// highlight.js stack. Mounted only while open so none of it is fetched until
+// someone actually asks for the notes.
+const ReleaseNotesDialog = lazy(() =>
+  import("@/components/ReleaseNotesDialog").then((m) => ({
+    default: m.ReleaseNotesDialog,
   }))
 );
 
@@ -144,6 +153,8 @@ export default function App() {
     };
   }, []);
 
+  const releaseNotesOpen = useReleaseNotes((s) => s.open);
+
   const [paletteOpen, setPaletteOpen] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -190,6 +201,7 @@ export default function App() {
         {paletteOpen && (
           <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
         )}
+        {releaseNotesOpen && <ReleaseNotesDialog />}
         <SettingsDialog />
       </Suspense>
       <NotificationStack />

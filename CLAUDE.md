@@ -257,20 +257,44 @@ and `prepare_delete_skill` remains for the one-off delete path.
   `pr-status-changed` and raising the native toast itself when no window was
   visible to show the in-app one. Re-reads settings each tick, so the Settings
   page's toggle/interval take effect without a restart.
-- `app_updater.rs` — self-update **in place**: downloads the release's portable
-  binary, renames the running `skillmanager.exe` into `<exe_dir>/update/` (Windows
-  allows renaming a running image, never overwriting it), then renames the new one
-  onto the install slot. Two atomic same-volume renames, no installer, no
-  uninstall, nothing for the user to click; the session keeps running the old
-  code and the new build takes over at the next launch. `config::exe_path()` is
-  cached at startup precisely so post-rename resolutions still name the install
-  slot. The NSIS installer is only a fallback (read-only install dir, or a release
-  with no portable asset) and even then runs `/S` silent.
-- `update_poller.rs` — background thread doing the above on a timer
-  (`update.auto.enabled`, `update.auto.interval.hours`). Release-only: it is a
-  no-op in debug builds so it never swaps a binary into `target/debug`. Emits
-  `app-update-ready` (swapped, restart when you like) or `app-update-available`
-  (needs the user), raising the native toast itself when no window was visible.
+- `app_updater.rs` — self-update **in place**, and only on a user gesture:
+  downloads the release's portable binary, renames the running `skillmanager.exe`
+  into `<exe_dir>/update/` (Windows allows renaming a running image, never
+  overwriting it), then renames the new one onto the install slot. Two atomic
+  same-volume renames, no installer, no uninstall; the session keeps running the
+  old code and the new build takes over at the next launch. `config::exe_path()`
+  is cached at startup precisely so post-rename resolutions still name the
+  install slot. The NSIS installer is only a fallback (read-only install dir, or
+  a release with no portable asset) and even then runs `/S` silent.
+  `apply_update` takes a process-wide `try_lock` and refuses (rather than
+  queues) a second run: it writes to a fixed scratch path and renames the
+  running image aside, so two overlapping runs could delete each other's
+  verified binary or rename a half-written one onto the install slot. The
+  frontend's own "already installing" flag cannot hold that line — it dies with
+  the webview, and tray mode destroys that on every close.
+  `download()` streams in 64 KB chunks and reports through `ProgressFn`
+  (`(UpdatePhase, downloaded, total)`) — a callback rather than an `AppHandle`,
+  so this module keeps no `tauri` dependency. `latest_version` is normalised
+  (leading `v` stripped) at the boundary, since it is printed next to
+  `CARGO_PKG_VERSION`, which has no prefix. `fetch_releases()` is the separate
+  read behind the in-app release-notes panel: `check_for_update` only ever sees
+  `/releases/latest`, so the notes of the version you are *running* were
+  otherwise unreachable.
+- `update_poller.rs` — background thread **checking** on a timer
+  (`update.auto.enabled`, `update.auto.interval.hours`). It detects and
+  announces; it downloads nothing. Release-only: a no-op in debug builds so it
+  never offers to swap a binary into `target/debug`. Emits `app-update-available`
+  and raises the native toast itself when no window was visible — once per
+  version for the toast, every tick for the event (a window opened later needs
+  it). It also keeps the pending release in a static, readable through
+  `app_update_available` — the tray destroys the window, and the announcement
+  that raised the banner may be hours old; `app_apply_update` clears it once the
+  offer has been taken. Dismissal lives in the same place (`app_update_dismiss`)
+  for the same reason: a store-only dismissal would come straight back on the
+  next window rebuild. `app-update-ready` and `app-update-progress` belong to
+  the user-triggered path and are emitted by `commands::app_apply_update`, which
+  also calls `notify_staged` — the download outlives the window, so the "restart
+  to finish" toast cannot depend on a webview being alive.
 - `authenticode.rs` — `WinVerifyTrust` wrapper gating the update path: the
   downloaded binary must carry a valid signature issued to `EXPECTED_SIGNER`, or
   it is deleted and the swap never happens. Chain validity alone would not do —
@@ -348,14 +372,32 @@ and `prepare_delete_skill` remains for the one-off delete path.
   The hook no longer *derives* the watched set: it used to filter on `marketplace.editable`
   (i.e. forge push rights), so detection went dark whenever the VPN dropped. Push rights
   gate the push button, never the detection.
-- `hooks/useAppUpdateEvents.ts` + `stores/appUpdate.ts` — mirror of the Rust
-  self-updater: the update happens without the UI, this only reflects it
-  (sidebar pill, toast, Settings card) and exposes `restartNow()`.
-  `components/UpdateBanner.tsx` is the top bar, and it is deliberately narrower
-  than that: it appears **only** for an update still waiting on the user, never
-  for one already swapped in — that one is done, and a permanent bar would be
-  noise. Dismissal is per-version and session-only. `App.tsx` is a flex
+- `hooks/useAppUpdateEvents.ts` + `stores/appUpdate.ts` — the update side of the
+  UI. The backend detects, the user decides: `startUpdate()` is the **single**
+  implementation behind every "Installer" button (banner and Settings card both
+  call it), and it re-checks on the way in rather than trusting an announcement
+  that may be hours old. `restartNow()` is next to it. `installing` — not
+  `progress` — is what says an install is running: it is set synchronously on
+  click, and the `app-update-progress` listener drops events that arrive while
+  it is false, since event delivery is not ordered against the command's own
+  response and a trailing tick would otherwise freeze the bar.
+  `components/UpdateBanner.tsx` is the top bar: one element, three faces, in
+  priority order — installing (phase label + progress bar, no dismiss), staged
+  (restart button), available (Installer / Notes de version / dismiss).
+  Dismissal applies to the "available" face only and hides it outright — the
+  sidebar pill covers `staged`, never `available` — so it goes through
+  `dismissUpdate()`, which records it in Rust as well as in the store.
+  `components/UpdateProgressBar.tsx` is the one rendering of the installing
+  state, shared by the banner and the Settings card; keep it that way, the two
+  copies it replaced had already drifted. It is deliberately **not** an
+  `aria-live` region (ticks arrive every 120 ms) — the named `role="progressbar"`
+  plus `aria-valuetext` is what carries the value. `App.tsx` is a flex
   **column** for the bar, so don't turn the root back into a row.
+- `components/ReleaseNotesDialog.tsx` + `stores/releaseNotes.ts` — the "Notes de
+  mise à jour" panel, opened from Settings → À propos and from the banner. Reads
+  `app_release_notes` (the release *history*, newest first) and renders bodies
+  through `SkillMarkdown`; `App.tsx` mounts it only while open so the markdown
+  chunk stays out of startup.
 - `stores/ui.ts` — single source of truth for theme/density/sidebar/polling prefs.
   `stores/theme.ts` is a thin re-export alias kept for legacy imports.
 - `stores/notifications.ts` — in-app toast queue. The polling hook and Settings page

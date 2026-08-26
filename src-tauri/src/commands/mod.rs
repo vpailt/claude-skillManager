@@ -25,6 +25,7 @@ use crate::plugin_state;
 use crate::pr_history::{self, PRRecord};
 use crate::token_store;
 use crate::skill_watch::{MissingLocal, SkillInput, SkillState, SkillWatch};
+use crate::update_poller;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -1903,17 +1904,103 @@ pub async fn app_update_staged() -> Option<StagedUpdate> {
     app_updater::staged()
 }
 
+/// The release the background poller found and has not seen installed yet.
+/// Same reason as `app_update_staged`: in tray mode the window is destroyed,
+/// and the announcement that raised the banner may be hours old.
+#[tauri::command]
+pub async fn app_update_available() -> Option<update_poller::UpdateEvent> {
+    update_poller::last_available()
+}
+
+/// The user closed the update banner. Recorded in the process rather than in
+/// the store, which dies with the webview on a tray close — otherwise reopening
+/// the window would put the dismissed banner straight back.
+#[tauri::command]
+pub async fn app_update_dismiss(version: String) {
+    update_poller::dismiss(&version);
+}
+
+/// The published releases, newest first — feeds the "Notes de mise à jour"
+/// panel. Separate from `app_check_update`, which only ever sees the latest
+/// release and so could never show the notes of the version you are running.
+#[tauri::command]
+pub async fn app_release_notes(limit: Option<u32>) -> Result<Vec<app_updater::ReleaseNote>> {
+    app_updater::fetch_releases(limit.unwrap_or(15))
+}
+
+/// How often the download may push an event to the frontend. A 10 MB asset
+/// arrives in ~160 chunks of 64 KB; emitting each one would spam the bus for a
+/// bar that only moves a pixel. One every 120 ms is smooth and cheap.
+const PROGRESS_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// Build a progress sink that emits `app-update-progress`, throttled.
+///
+/// The final call of each phase is always let through (`downloaded == total`),
+/// so the bar reliably lands on 100 % instead of stopping at whatever the last
+/// tick happened to be.
+fn progress_emitter(
+    app: AppHandle,
+    version: String,
+) -> impl FnMut(app_updater::UpdatePhase, u64, u64) {
+    let mut last = std::time::Instant::now() - PROGRESS_MIN_INTERVAL;
+    let mut last_phase: Option<app_updater::UpdatePhase> = None;
+    move |phase, downloaded, total| {
+        let complete = total > 0 && downloaded >= total;
+        let new_phase = last_phase != Some(phase);
+        if !complete && !new_phase && last.elapsed() < PROGRESS_MIN_INTERVAL {
+            return;
+        }
+        last = std::time::Instant::now();
+        last_phase = Some(phase);
+        let payload = update_poller::UpdateProgress {
+            version: version.clone(),
+            phase,
+            downloaded,
+            total,
+        };
+        if let Err(e) = app.emit(update_poller::EVENT_PROGRESS, &payload) {
+            tracing::debug!("app update: emit progress failed: {}", e);
+        }
+    }
+}
+
 /// Update in place: download the release's portable binary and swap it onto
 /// `skillmanager.exe`. Nothing is uninstalled, no installer window appears, and
 /// this session keeps running the old build until the user restarts.
+///
+/// Only ever called from a user gesture ("Installer") — the background poller
+/// detects and announces, it never downloads.
 #[tauri::command]
-pub async fn app_apply_update(info: AppUpdateInfo) -> Result<StagedUpdate> {
+pub async fn app_apply_update(app: AppHandle, info: AppUpdateInfo) -> Result<StagedUpdate> {
     tracing::info!(
         "app_apply_update: {} -> {}",
         info.current_version,
         info.latest_version.as_deref().unwrap_or("?")
     );
-    app_updater::apply_update(&info)
+    let version = info.latest_version.clone().unwrap_or_default();
+    let mut on_progress = progress_emitter(app.clone(), version);
+    let staged = app_updater::apply_update(&info, &mut on_progress)?;
+    // The pending release is no longer pending; a window rebuilt after this
+    // must not be handed an offer that has already been taken.
+    update_poller::clear_available();
+    // One event for every consumer (banner, sidebar pill, Settings card) rather
+    // than each of them reacting to the command's return value.
+    let payload = update_poller::UpdateEvent {
+        version: staged.version.clone(),
+        running_version: staged.running_version.clone(),
+        release_notes: staged.release_notes.clone(),
+        release_url: staged.release_url.clone(),
+        staged: true,
+        can_self_update: true,
+    };
+    if let Err(e) = app.emit(update_poller::EVENT_READY, &payload) {
+        tracing::debug!("app_apply_update: emit ready failed: {}", e);
+    }
+    // The download outlives the window: closing to tray destroys the webview,
+    // so the in-app toast may have nobody to reach. `notify_staged` checks that
+    // itself and stays quiet when a window is up.
+    update_poller::notify_staged(&app, &payload);
+    Ok(staged)
 }
 
 /// Restart into whatever `skillmanager.exe` now holds — the new build after an
@@ -1940,7 +2027,8 @@ pub async fn app_install_update(
     asset_url: String,
     asset_name: String,
 ) -> Result<()> {
-    let path = app_updater::download_installer(&asset_url, &asset_name)?;
+    let mut on_progress = progress_emitter(app.clone(), asset_name.clone());
+    let path = app_updater::download_installer(&asset_url, &asset_name, &mut on_progress)?;
     app_updater::launch_installer(&path)?;
     tracing::info!("app_install_update: installer launched, exiting app");
     // Tiny delay so the spawned process is fully detached, then quit. Without

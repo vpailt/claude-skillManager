@@ -19,6 +19,7 @@ import type {
   PRRecord,
   Provider,
   RefreshResult,
+  ReleaseNote,
   RemoteSkillInfo,
   Settings,
   SettingsPaths,
@@ -27,6 +28,7 @@ import type {
   TrackedPr,
   UiPrefs,
   UninstallInfo,
+  UpdateEvent,
   UploadResult,
   UploadSkillArgs,
   UsageReport,
@@ -258,8 +260,16 @@ export const api = {
 
   // --- app self-update ---
   appCheckUpdate: () => invoke<AppUpdateInfo>("app_check_update"),
+  /** Published releases, newest first — feeds the "Notes de mise à jour" panel. */
+  appReleaseNotes: (limit?: number) =>
+    invoke<ReleaseNote[]>("app_release_notes", { limit }),
   /** Update already swapped onto disk this session (null when none). */
   appUpdateStaged: () => invoke<StagedUpdate | null>("app_update_staged"),
+  /** Release the poller found and nobody has installed yet (null when none). */
+  appUpdateAvailable: () => invoke<UpdateEvent | null>("app_update_available"),
+  /** Stop offering this version until a newer one appears or the app restarts. */
+  appUpdateDismiss: (version: string) =>
+    invoke<void>("app_update_dismiss", { version }),
   /** In-place update: swap the new binary in, keep this session running. */
   appApplyUpdate: (info: AppUpdateInfo) =>
     invoke<StagedUpdate>("app_apply_update", { info }),

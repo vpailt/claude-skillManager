@@ -481,6 +481,32 @@ export interface UpdateEvent {
   releaseUrl: string | null;
   /** True for `app-update-ready`: the binary is already swapped in. */
   staged: boolean;
+  /** In-place swap possible; false means the installer fallback takes over. */
+  canSelfUpdate: boolean;
+}
+
+/** Where a user-triggered update currently is. Mirrors `UpdatePhase` in Rust. */
+export type UpdatePhase = "downloading" | "verifying" | "installing";
+
+/** Payload of `app-update-progress`. `total` is 0 while the size is unknown. */
+export interface UpdateProgress {
+  version: string;
+  phase: UpdatePhase;
+  downloaded: number;
+  total: number;
+}
+
+/** One published release, as listed in the "Notes de mise à jour" panel. */
+export interface ReleaseNote {
+  /** Tag, e.g. `v3.2.0`. */
+  version: string;
+  name: string;
+  /** ISO-8601 as GitHub returns it. */
+  publishedAt: string;
+  /** Release body, markdown. */
+  body: string;
+  url: string | null;
+  prerelease: boolean;
 }
 
 export interface UninstallInfo {
