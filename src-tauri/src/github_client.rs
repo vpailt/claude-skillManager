@@ -185,6 +185,28 @@ pub struct TreeEntry {
     pub sha: String,
 }
 
+/// One file operation in a batch — see [`GitHubClient::apply_file_ops`].
+///
+/// Content and path are borrowed — the caller already holds the bytes (a PR's
+/// worth of skill files is megabytes) and cloning them just to base64 them a
+/// moment later would double that for nothing. The sha is owned: it is 40
+/// bytes, and it may come from a lookup the caller performs while building the
+/// list, which borrowing would forbid.
+#[derive(Debug)]
+pub enum FileOp<'a> {
+    /// Create when `existing_sha` is `None`, update otherwise. Gitea rejects an
+    /// `update` without the current sha, and a `create` on a path that exists.
+    Write {
+        path: &'a str,
+        content: &'a [u8],
+        existing_sha: Option<String>,
+    },
+    Delete {
+        path: &'a str,
+        sha: String,
+    },
+}
+
 #[derive(Clone)]
 pub struct GitHubClient {
     provider: Provider,
@@ -650,6 +672,228 @@ impl GitHubClient {
             &url,
         )?;
         Ok(resp.json()?)
+    }
+
+    /// Conservative ceiling on one ChangeFiles body.
+    ///
+    /// Gitea itself accepts far more, but these instances sit behind a reverse
+    /// proxy and nginx's `client_max_body_size` defaults to **1 MB**, answering
+    /// 413 above it. We cannot read the proxy's config, so we stay well under
+    /// the common default and let [`gitea_apply_chunk`] split further if a 413
+    /// comes back anyway.
+    const BATCH_BODY_BUDGET: usize = 384 * 1024;
+
+    /// Cap on operations per batch, independent of size — a guard against a
+    /// forge that limits the array length rather than the body.
+    const BATCH_MAX_OPS: usize = 40;
+
+    /// Rough encoded cost of one operation: base64 inflates by 4/3, plus the
+    /// JSON scaffolding (keys, quotes, the path, the sha).
+    fn op_cost(op: &FileOp<'_>) -> usize {
+        match op {
+            FileOp::Write { path, content, .. } => (content.len() * 4) / 3 + path.len() + 160,
+            FileOp::Delete { path, .. } => path.len() + 160,
+        }
+    }
+
+    fn op_json(op: &FileOp<'_>) -> Value {
+        match op {
+            FileOp::Write {
+                path,
+                content,
+                existing_sha,
+            } => {
+                let mut f = json!({
+                    "operation": if existing_sha.is_some() { "update" } else { "create" },
+                    "path": path,
+                    "content": B64.encode(content),
+                });
+                if let Some(sha) = existing_sha {
+                    f["sha"] = json!(sha);
+                }
+                f
+            }
+            FileOp::Delete { path, sha } => json!({
+                "operation": "delete",
+                "path": path,
+                "sha": sha,
+            }),
+        }
+    }
+
+    /// Pull `(path, new sha)` out of whichever response shape came back —
+    /// ChangeFiles answers with a `files` array, the single-file Contents API
+    /// with one `content` object.
+    fn collect_written_shas(resp: &Value, out: &mut Vec<(String, String)>) {
+        let take = |v: &Value, out: &mut Vec<(String, String)>| {
+            if let (Some(p), Some(s)) = (
+                v.get("path").and_then(|x| x.as_str()),
+                v.get("sha").and_then(|x| x.as_str()),
+            ) {
+                out.push((p.to_string(), s.to_string()));
+            }
+        };
+        if let Some(files) = resp.get("files").and_then(|f| f.as_array()) {
+            for f in files {
+                take(f, out);
+            }
+        } else if let Some(c) = resp.get("content") {
+            take(c, out);
+        }
+    }
+
+    /// Send one ChangeFiles batch, splitting on 413 rather than giving up.
+    ///
+    /// A 413 is refused by the proxy before Gitea ever sees the body, so
+    /// nothing was applied and re-sending the halves is safe. A batch that
+    /// reaches Gitea is one commit: it applies whole or not at all.
+    fn gitea_apply_chunk(
+        &self,
+        repo: &str,
+        branch: &str,
+        message: &str,
+        ops: &[FileOp<'_>],
+        out: &mut Vec<(String, String)>,
+    ) -> Result<()> {
+        if ops.is_empty() {
+            return Ok(());
+        }
+        let url = format!("/repos/{repo}/contents");
+        let body = json!({
+            "branch": branch,
+            "message": message,
+            "files": ops.iter().map(Self::op_json).collect::<Vec<_>>(),
+        });
+        let resp = self
+            .request(reqwest::Method::POST, &url)
+            .json(&body)
+            .send()?;
+
+        if resp.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            if ops.len() == 1 {
+                // One operation is already over the ceiling. The per-file
+                // endpoint has a body this batch does not (no array scaffolding)
+                // and is the path that worked before batching existed.
+                tracing::warn!(
+                    "gitea batch: 413 on a single op ({}), falling back to per-file write",
+                    match &ops[0] {
+                        FileOp::Write { path, .. } | FileOp::Delete { path, .. } => path,
+                    }
+                );
+                let single = match &ops[0] {
+                    FileOp::Write {
+                        path,
+                        content,
+                        existing_sha,
+                    } => self.put_file(
+                        repo,
+                        branch,
+                        path,
+                        content,
+                        message,
+                        existing_sha.as_deref(),
+                    )?,
+                    FileOp::Delete { path, sha } => {
+                        self.delete_file(repo, branch, path, message, sha)?
+                    }
+                };
+                Self::collect_written_shas(&single, out);
+                return Ok(());
+            }
+            let mid = ops.len() / 2;
+            tracing::warn!(
+                "gitea batch: 413 for {} ops, splitting into {} + {}",
+                ops.len(),
+                mid,
+                ops.len() - mid
+            );
+            self.gitea_apply_chunk(repo, branch, message, &ops[..mid], out)?;
+            self.gitea_apply_chunk(repo, branch, message, &ops[mid..], out)?;
+            return Ok(());
+        }
+
+        let resp = Self::check(resp, "POST", &url)?;
+        let v: Value = resp.json()?;
+        Self::collect_written_shas(&v, out);
+        Ok(())
+    }
+
+    /// Apply many file operations in as few requests as the forge allows.
+    ///
+    /// **Gitea** batches through ChangeFiles (`POST /repos/{repo}/contents`),
+    /// which takes an array of operations and produces one commit per call — so
+    /// a 91-file PR costs a handful of requests instead of 91. The path travels
+    /// in the body, which also means this subsumes the `path_has_dot_segment`
+    /// workaround for free.
+    ///
+    /// **GitHub** has no equivalent endpoint (the Git Data API would be a
+    /// different write model entirely), so it keeps the per-file loop.
+    ///
+    /// Returns `(path, new blob sha)` for every operation the forge reported
+    /// back, so the caller can keep its sha map current.
+    pub fn apply_file_ops(
+        &self,
+        repo: &str,
+        branch: &str,
+        ops: &[FileOp<'_>],
+        message: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::with_capacity(ops.len());
+        if ops.is_empty() {
+            return Ok(out);
+        }
+        if self.provider != Provider::Gitea {
+            for op in ops {
+                let resp = match op {
+                    FileOp::Write {
+                        path,
+                        content,
+                        existing_sha,
+                    } => self.put_file(
+                        repo,
+                        branch,
+                        path,
+                        content,
+                        message,
+                        existing_sha.as_deref(),
+                    )?,
+                    FileOp::Delete { path, sha } => {
+                        self.delete_file(repo, branch, path, message, sha)?
+                    }
+                };
+                Self::collect_written_shas(&resp, &mut out);
+            }
+            return Ok(out);
+        }
+
+        let mut start = 0;
+        let mut batches = 0;
+        while start < ops.len() {
+            let mut end = start;
+            let mut size = 0;
+            while end < ops.len() {
+                let cost = Self::op_cost(&ops[end]);
+                // Always take at least one, however big it is — the 413 split in
+                // `gitea_apply_chunk` is what handles an oversized single op.
+                if end > start
+                    && (size + cost > Self::BATCH_BODY_BUDGET
+                        || end - start >= Self::BATCH_MAX_OPS)
+                {
+                    break;
+                }
+                size += cost;
+                end += 1;
+            }
+            self.gitea_apply_chunk(repo, branch, message, &ops[start..end], &mut out)?;
+            batches += 1;
+            start = end;
+        }
+        tracing::info!(
+            "gitea batch: {} file op(s) applied to {repo}@{branch} in {} request(s)",
+            ops.len(),
+            batches
+        );
+        Ok(out)
     }
 
     /// List a repo's git tag names (newest API page first). GitHub and Gitea

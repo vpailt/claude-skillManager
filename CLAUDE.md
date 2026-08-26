@@ -212,11 +212,36 @@ safety net — see `catalog_poller`.
 
 ### Admin upload (no git binary)
 
-`admin::submit_changes` performs: `POST /git/refs` (create branch) →
-`PUT /repos/{owner}/{repo}/contents/<path>` for each file (auto-detects existing blob SHA
-so create and update share one path) → `POST /repos/{owner}/{repo}/pulls`. If you add new
-admin operations, follow the same Contents-API + PR pattern; never introduce a code path
-that requires `git` on the user's machine.
+`admin::submit_changes` performs: `POST /git/refs` (create branch) → **one** recursive
+`list_tree` read → `github_client::apply_file_ops` → `POST /repos/{owner}/{repo}/pulls`.
+If you add new admin operations, follow the same Contents-API + PR pattern; never
+introduce a code path that requires `git` on the user's machine.
+
+**Nothing here goes one-request-per-file, and that is the point.** It used to: a GET for
+each file's blob SHA (through `get_file`, which downloads the whole file to derive it)
+plus a PUT to write it — 182 sequential requests for a 91-file PR over a VPN-gated
+Gitea, where a single dropped connection aborted the lot via `?` and left an orphan
+branch with no PR. So:
+
+- **SHAs** come from one `list_tree` call, which returns every blob's git SHA and is
+  ETag-cached on the immutable commit SHA (it cannot go stale). A `truncated` tree or a
+  read failure falls back to per-file lookups — never to guessing, since "absent" would
+  silently turn an update into a create.
+- **Writes** go through `apply_file_ops`, which on **Gitea** batches into ChangeFiles
+  (`POST /repos/{repo}/contents`, an array of `{operation, path, content, sha}`, one
+  commit per call) and on **GitHub** keeps the per-file loop — GitHub has no equivalent
+  endpoint, and the Git Data API is a different write model. Batching also subsumes the
+  `path_has_dot_segment` workaround, since the path travels in the body.
+- **Chunking is not optional.** These Gitea instances sit behind a reverse proxy, and
+  nginx's `client_max_body_size` defaults to 1 MB; base64 inflates content by 4/3, so a
+  91-file batch is ~1.9 MB and would 413. `apply_file_ops` splits on a byte budget, and
+  `gitea_apply_chunk` halves again on an actual 413 — down to falling back to the
+  per-file endpoint for a single oversized op. A 413 is refused by the proxy before
+  Gitea sees the body, so re-sending the halves is safe.
+
+Duplicate paths in one batch are collapsed to the last occurrence: every op is resolved
+against the same pre-batch tree, so sending a path twice would write the second with a
+SHA the first already invalidated.
 
 `admin_drafts::prepare_upload_skills` is the one entry point for skill changes on a
 plugin: adds, updates **and whole-skill removals** (`BulkUploadArgs::removals`) in a

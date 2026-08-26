@@ -2,7 +2,7 @@
 //! Port of src/admin.py.
 
 use crate::error::{Error, Result};
-use crate::github_client::GitHubClient;
+use crate::github_client::{FileOp, GitHubClient};
 use crate::pr_history::{self, PRRecord};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -80,7 +80,7 @@ pub fn submit_changes(
     //
     // Best-effort: a forge that reports the tree `truncated` (or any read
     // failure) falls back to the per-file lookups rather than guessing.
-    let mut sha_map: Option<HashMap<String, String>> = match gh.list_tree(repo, &new_branch) {
+    let sha_map: Option<HashMap<String, String>> = match gh.list_tree(repo, &new_branch) {
         Ok((_, entries)) => {
             let map: HashMap<String, String> = entries
                 .into_iter()
@@ -103,60 +103,53 @@ pub fn submit_changes(
         }
     };
 
-    for change in changes {
-        let existing = match &sha_map {
-            Some(m) => m.get(&change.path).cloned(),
-            None => gh.get_file_sha_or_none(repo, &change.path, &new_branch),
-        };
-        let written = gh.put_file(
-            repo,
-            &new_branch,
-            &change.path,
-            &change.content,
-            &format!("{pr_title}: update {}", change.path),
-            existing.as_deref(),
-        )?;
-        // Keep the map honest: the branch moved, and a path listed twice in the
-        // same batch would otherwise be written with the sha it had before the
-        // first write, which the forge rejects as a conflict.
-        if let Some(m) = sha_map.as_mut() {
-            match written
-                .get("content")
-                .and_then(|c| c.get("sha"))
-                .and_then(|s| s.as_str())
-            {
-                Some(sha) => {
-                    m.insert(change.path.clone(), sha.to_string());
-                }
-                // Response shape we don't recognise: drop the entry so the next
-                // write of this path re-reads it instead of trusting a stale sha.
-                None => {
-                    m.remove(&change.path);
-                }
-            }
+    // Resolve every operation up front, then hand the whole list over — the
+    // forge decides how few requests that takes (`apply_file_ops` batches on
+    // Gitea, loops on GitHub).
+    //
+    // A path listed twice would be resolved against the same pre-batch sha
+    // twice and the second write rejected as a conflict, so duplicates are
+    // collapsed to the last occurrence rather than sent twice.
+    let mut seen: HashMap<&str, usize> = HashMap::with_capacity(changes.len());
+    for (i, change) in changes.iter().enumerate() {
+        if let Some(prev) = seen.insert(change.path.as_str(), i) {
+            tracing::warn!(
+                "submit_changes: {} listed twice, keeping the later revision (dropped #{prev})",
+                change.path
+            );
         }
     }
 
+    let mut ops: Vec<FileOp<'_>> = Vec::with_capacity(changes.len() + deletions.len());
+    for (i, change) in changes.iter().enumerate() {
+        if seen.get(change.path.as_str()) != Some(&i) {
+            continue;
+        }
+        let existing = match &sha_map {
+            Some(m) => m.get(&change.path).cloned(),
+            // No tree read: fall back to a lookup per file, as before.
+            None => gh.get_file_sha_or_none(repo, &change.path, &new_branch),
+        };
+        ops.push(FileOp::Write {
+            path: &change.path,
+            content: &change.content,
+            existing_sha: existing,
+        });
+    }
+
     for path in deletions {
-        let known = match &sha_map {
+        // Unchanged semantics: a deletion of something that isn't there is not
+        // an error, it's already done.
+        let sha = match &sha_map {
             Some(m) => m.get(path).cloned(),
             None => gh.get_file_sha_or_none(repo, path, &new_branch),
         };
-        let sha = match known {
-            Some(s) => s,
-            None => continue,
-        };
-        gh.delete_file(
-            repo,
-            &new_branch,
-            path,
-            &format!("{pr_title}: delete {path}"),
-            &sha,
-        )?;
-        if let Some(m) = sha_map.as_mut() {
-            m.remove(path);
-        }
+        let Some(sha) = sha else { continue };
+        ops.push(FileOp::Delete { path, sha });
     }
+
+    let message = format!("{pr_title} ({} file(s))", ops.len());
+    gh.apply_file_ops(repo, &new_branch, &ops, &message)?;
 
     let pr = gh.open_pull_request(repo, &new_branch, base_branch, pr_title, pr_body)?;
     let result = UploadResult {
