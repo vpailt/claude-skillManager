@@ -1691,6 +1691,13 @@ export function SkillsPage() {
   const [addSkillFor, setAddSkillFor] = useState<Plugin | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SkillEntry | null>(null);
   const setSyncOne = useSkillSync((s) => s.setOne);
+  // A skill still flagged `new` has no counterpart upstream, so deleting it
+  // undoes the creation instead of queueing a removal — the dialog must not
+  // promise a push that will never be offered.
+  const deleteTargetNeverPushed = useSkillSync(
+    (s) =>
+      s.status[deleteTarget?.folder ?? deleteTarget?.watchFolder ?? ""] === "new"
+  );
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
 
@@ -2062,6 +2069,12 @@ export function SkillsPage() {
                   Le dossier est supprimé définitivement de{" "}
                   <code>~/.claude/skills/</code>. Cette compétence n'a pas de
                   dépôt distant : rien ne pourra la restaurer.
+                </>
+              ) : deleteTargetNeverPushed ? (
+                <>
+                  Cette compétence n'a jamais été poussée : le dépôt du plugin
+                  ne la contient pas. Le dossier est supprimé définitivement et
+                  la ligne disparaît — il n'y a rien à publier.
                 </>
               ) : (
                 <>

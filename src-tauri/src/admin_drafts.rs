@@ -883,6 +883,22 @@ pub fn prepare_upload_skills(gh: &GitHubClient, args: &BulkUploadArgs) -> Result
         });
     }
 
+    // Nothing survived resolution — every requested removal is already absent
+    // upstream. Refuse rather than fall through: the manifest bump below is
+    // unconditional, so the PR would carry a version bump and nothing else,
+    // publishing a release for a change the repo already has.
+    if changes.is_empty() && deletions.is_empty() {
+        let detail = if problems.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", problems.join(" "))
+        };
+        return Err(Error::Invalid(format!(
+            "Rien à publier sur {target_repo}@{base_branch} : le dépôt est déjà \
+             dans l'état demandé, aucune version n'est incrémentée.{detail}"
+        )));
+    }
+
     // Build per-file diff entries (bounded to 10 fetched + summary tail) BEFORE
     // the manifest bump, so the cap covers skill files, then manifests are added.
     let mut entries: Vec<DiffEntry> = Vec::new();

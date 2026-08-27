@@ -214,12 +214,18 @@ impl SkillWatch {
     /// folders: an event in `<plugin>/skills/` is how a *new* skill folder
     /// announces itself, and watching only the skill folders themselves meant
     /// nobody was listening at that level.
+    ///
+    /// `remote_known_roots` are the plugin roots whose remote listing was
+    /// actually read this pass. It is what lets a pending deletion be *retired*:
+    /// under such a root, absence from `missing` proves the remote no longer
+    /// holds the skill, so there is nothing left to publish.
     pub fn sync(
         &self,
         app: &AppHandle,
         entries: Vec<SkillInput>,
         missing: Vec<MissingLocal>,
         plugin_roots: Vec<String>,
+        remote_known_roots: Vec<String>,
     ) -> Vec<SkillState> {
         self.ensure_started(app);
 
@@ -292,6 +298,7 @@ impl SkillWatch {
         // A remote skill with no local folder is a deletion only when we have a
         // baseline proving we once had it. Otherwise it was never installed here.
         let mut deleted: Vec<String> = Vec::new();
+        let missing_folders: Vec<String> = missing.iter().map(|m| m.folder.clone()).collect();
         for m in missing {
             if seen.contains(&m.folder) || Path::new(&m.folder).is_dir() {
                 continue;
@@ -304,8 +311,30 @@ impl SkillWatch {
         // remote listing failed — that is the whole point of the set: an
         // unreachable forge produces no `MissingLocal`, and the folder would
         // otherwise leave `roots` and lose its baseline for good.
+        //
+        // Unless the forge *was* reached and does not hold the skill. A deletion
+        // is only publishable while there is something upstream to remove: a
+        // skill created here and never pushed, or one someone else removed
+        // first, has nothing left to delete. Kept, it would sit in the Changes
+        // tab forever and open a PR whose only real effect is a version bump.
+        let known_roots: Vec<String> = remote_known_roots
+            .iter()
+            .map(|r| norm_path(r))
+            .filter(|r| !r.is_empty())
+            .collect();
+        let remote_holds: HashSet<String> =
+            missing_folders.iter().map(|f| norm_path(f)).collect();
+        let mut stale_deleted: Vec<String> = Vec::new();
         for folder in &pending_deleted {
             if seen.contains(folder) || Path::new(folder).is_dir() {
+                continue;
+            }
+            let key = norm_path(folder);
+            let under_known_root = known_roots
+                .iter()
+                .any(|r| key == *r || key.starts_with(&format!("{r}/")));
+            if under_known_root && !remote_holds.contains(&key) {
+                stale_deleted.push(folder.clone());
                 continue;
             }
             if !deleted.iter().any(|d| d == folder) {
@@ -370,6 +399,15 @@ impl SkillWatch {
             let pruned = before - sh.baselines.len();
             if pruned > 0 {
                 tracing::debug!("skill_watch: pruned {pruned} baseline(s) no longer watched");
+            }
+            if !stale_deleted.is_empty() {
+                for folder in &stale_deleted {
+                    sh.pending_deleted.remove(folder);
+                }
+                tracing::info!(
+                    "skill_watch: retired {} pending deletion(s) the remote no longer holds",
+                    stale_deleted.len()
+                );
             }
             sh.roots = roots;
 
@@ -528,6 +566,39 @@ impl SkillWatch {
         // The set of skill folders changed, and the watcher will not say so
         // (the removed path is a known skill root, so `tree_changed` stays
         // false) — tell the frontend to re-run the sweep itself.
+        let _ = app.emit(EVENT_TREE, ());
+    }
+
+    /// This folder's last settled status, if the watcher holds one.
+    pub fn status_of(&self, folder: &str) -> Option<SkillSync> {
+        self.shared.lock().status.get(folder).copied()
+    }
+
+    /// Drop every trace of one folder — baseline, status, watch root, both
+    /// pending flags.
+    ///
+    /// This is what deleting a skill that never reached the forge means. It is
+    /// not a removal anyone can publish: the repo has no such folder, so
+    /// `mark_deleted` would park it in `pending_deleted` for good and offer a
+    /// PR whose only real content is a version bump. Undoing the creation
+    /// leaves nothing behind, which is exactly right.
+    pub fn forget(&self, app: &AppHandle, folder: &str) {
+        {
+            let mut sh = self.shared.lock();
+            sh.baselines.remove(folder);
+            sh.status.remove(folder);
+            sh.remote_sig.remove(folder);
+            sh.roots.retain(|r| r != folder);
+            if sh.pending_new.remove(folder) {
+                save_pending_new(&sh.pending_new);
+            }
+            if sh.pending_deleted.remove(folder) {
+                save_pending_deleted(&sh.pending_deleted);
+            }
+            save_baselines(&sh.baselines);
+        }
+        // The set of skill folders changed and the watcher will not say so (the
+        // removed path is a known skill root, so `tree_changed` stays false).
         let _ = app.emit(EVENT_TREE, ());
     }
 

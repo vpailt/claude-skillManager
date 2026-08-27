@@ -380,6 +380,10 @@ fn feed_skill_watch(
     let mut inputs: Vec<SkillInput> = Vec::new();
     let mut missing: Vec<MissingLocal> = Vec::new();
     let mut plugin_roots: Vec<String> = Vec::new();
+    // Plugin roots whose remote listing was actually read this pass — the
+    // watcher needs them to tell "the forge says this skill is gone upstream"
+    // from "the forge could not be reached".
+    let mut remote_known_roots: Vec<String> = Vec::new();
     // (plugin root, marketplace index, plugin index) — lets the pass below find
     // which plugin a deleted folder belongs to without walking the tree again.
     let mut roots_by_plugin: Vec<(PathBuf, usize, usize)> = Vec::new();
@@ -399,6 +403,9 @@ fn feed_skill_watch(
                 .unwrap_or_default();
 
             let remote_known = plugin.skills_remote_known;
+            if remote_known {
+                remote_known_roots.push(root.to_string_lossy().into_owned());
+            }
             let mut local_keys: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
             for skill in plugin.skills.iter_mut() {
@@ -450,7 +457,7 @@ fn feed_skill_watch(
     }
 
     let watch = app.state::<SkillWatch>();
-    let states = watch.sync(app, inputs, missing, plugin_roots);
+    let states = watch.sync(app, inputs, missing, plugin_roots, remote_known_roots);
 
     // Re-attach deletions the forge could not confirm. `merge_skills` only runs
     // when the plugin's listing was read, so with the forge unreachable nothing
@@ -1865,7 +1872,13 @@ pub async fn delete_skill_local(
     tracing::info!("delete_skill_local: {folder}");
     let path = PathBuf::from(&folder);
     let kind = local_scanner::classify_skill_folder(&path)?;
-    let tracked = kind == local_scanner::SkillFolderKind::Plugin;
+    // A skill still flagged `New` was never pushed, so the plugin repo has no
+    // folder to remove and there is nothing to publish. Deleting it undoes the
+    // creation rather than starting a removal: reported as untracked, so the
+    // row simply leaves the tree instead of turning red and queueing a PR that
+    // would delete files the repo never had.
+    let never_pushed = watch.status_of(&folder) == Some(SkillSync::New);
+    let tracked = kind == local_scanner::SkillFolderKind::Plugin && !never_pushed;
     if tracked {
         watch.ensure_baseline(&folder);
     }
@@ -1874,6 +1887,8 @@ pub async fn delete_skill_local(
         // Key on the string the caller passed, never a canonicalized form: the
         // baseline map is keyed on exactly what the sweep handed us.
         watch.mark_deleted(&app, &folder);
+    } else {
+        watch.forget(&app, &folder);
     }
     Ok(tracked)
 }

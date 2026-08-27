@@ -250,6 +250,10 @@ the same plugin repo would both bump the manifest and `detect_conflicts` would f
 them against each other. `prepare_upload_skill` (singular) is a thin wrapper over it,
 and `prepare_delete_skill` remains for the one-off delete path.
 
+The manifest bump is unconditional, so the draft must refuse an empty batch
+*before* it: a removal the repo no longer holds resolves to zero file ops, and
+falling through published a release whose entire diff was a version bump.
+
 ## Module map (only the non-obvious bits)
 
 ### Rust backend (`src-tauri/src/`)
@@ -358,8 +362,17 @@ and `prepare_delete_skill` remains for the one-off delete path.
   vanished folder as `modified` (it hashes an empty tree), and a sweep that could
   not reach the forge produces no `MissingLocal`, so the folder would leave the
   watched set and its baseline would be pruned — losing the deletion for good.
-  `mark_synced` (a PR was opened) and `forget_under` (the plugin was removed) are
-  the only two things that clear it.
+  It is cleared by `mark_synced` (a PR was opened), `forget_under` (the plugin was
+  removed), `forget` (see below), and by the sweep itself once the forge confirms
+  the skill is not there: `sync` takes `remote_known_roots`, and under a root whose
+  listing *was* read, absence from `MissingLocal` means there is nothing left to
+  remove upstream, so the pending deletion is retired rather than parked forever.
+  **A deletion is only a change while the remote still holds the skill.** Deleting a
+  folder still flagged `New` undoes a creation, it does not start a removal — so
+  `delete_skill_local` routes it to `forget` (drop baseline, status, both pending
+  flags) and returns `tracked = false`, which is the frontend's cue that the row
+  simply leaves the tree. Marking it `Deleted` instead left a red badge nothing
+  could clear and offered a PR whose only real content was a manifest bump.
 - `catalog_poller.rs` — background thread running `sweep_remote` on a timer
   (`catalog.poll.enabled`, `catalog.poll.interval.minutes`). It exists because the
   frontend's `refetchInterval` is paused while the window is hidden, and in tray mode
