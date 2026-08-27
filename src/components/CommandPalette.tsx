@@ -16,7 +16,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { useApp } from "@/stores/app";
 import { useSettingsDialog } from "@/stores/settingsDialog";
+import { useOrgSync } from "@/stores/orgSync";
 import { cn } from "@/lib/utils";
+
+// Typing this exact string and pressing Enter on an empty result list opens the
+// Gitea → GitHub comparison. Deliberately not an `Item`: keeping it out of the
+// list is what makes it undiscoverable, and Enter on no results was a no-op.
+const HIDDEN_ORG_SYNC_QUERY = "sforge-labs";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -69,6 +75,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const localOnly = useApp((s) => s.localOnly);
   const setSelection = useApp((s) => s.setSelection);
   const openSettings = useSettingsDialog((s) => s.openTo);
+  const openOrgSync = useOrgSync((s) => s.setOpen);
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
@@ -173,7 +180,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 setCursor((c) => Math.max(c - 1, 0));
               } else if (e.key === "Enter") {
                 e.preventDefault();
-                if (filtered[cursor]) run(filtered[cursor]);
+                if (filtered[cursor]) {
+                  run(filtered[cursor]);
+                } else if (
+                  q.trim().toLowerCase() === HIDDEN_ORG_SYNC_QUERY
+                ) {
+                  openOrgSync(true);
+                  onOpenChange(false);
+                }
               } else if (e.key === "Escape") {
                 onOpenChange(false);
               }

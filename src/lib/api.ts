@@ -21,10 +21,12 @@ import type {
   RefreshResult,
   ReleaseNote,
   RemoteSkillInfo,
+  RepoOutcome,
   Settings,
   SettingsPaths,
   SkillSyncState,
   StagedUpdate,
+  SyncReport,
   TrackedPr,
   UiPrefs,
   UninstallInfo,
@@ -142,6 +144,12 @@ export const api = {
     invoke<Settings>("settings_remove_gitea_instance", { baseUrl }),
   settingsSetGiteaToken: (baseUrl: string, token: string) =>
     invoke<Settings>("settings_set_gitea_token", { baseUrl, token }),
+
+  // --- org sync (Gitea Claude -> GitHub sforge-labs) ---
+  orgSyncCompare: () => invoke<SyncReport>("org_sync_compare"),
+  orgSyncPull: (sources: string[]) =>
+    invoke<RepoOutcome[]>("org_sync_pull", { sources }),
+  orgSyncCancel: () => invoke<void>("org_sync_cancel"),
   giteaGetToken: (baseUrl: string) =>
     invoke<string>("gitea_get_token", { baseUrl }),
 

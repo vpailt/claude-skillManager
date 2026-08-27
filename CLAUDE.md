@@ -384,6 +384,25 @@ falling through published a release whose entire diff was a version bump.
   a window focus. Emits `claude-state-changed` and interprets nothing; the sweep does
   that. Keep it non-recursive: `plugins/marketplaces/` is rewritten by our own
   auto-update, and watching it recursively would make the app wake itself.
+- `org_sync.rs` — incremental mirror of the Gitea `Claude` org into the GitHub
+  `sforge-labs` org, behind a **hidden** entry point: typing `sforge-labs` in the
+  command palette matches nothing, and Enter on the empty result list opens the
+  comparison (`CommandPalette.tsx` → `stores/orgSync`). It carries the same two
+  rewrite rules the one-shot migration used (`scripts/migrate-gitea-to-github.ps1`):
+  `acx-cl` → `cl`, and forge references repointed at `github.com/sforge-labs`.
+  Rewriting is **byte-level** — decoding to UTF-8 would mangle non-UTF-8 files and
+  lose BOMs and mixed line endings.
+  **Nothing links a GitHub commit to its Gitea origin but the commit message**, so
+  every mirrored commit carries a `Gitea-Source-Sha:` trailer; `anchor_from_message`
+  also accepts the `Imported from … at <sha>.` wording the migration script left
+  behind, which is what lets the seven already-migrated repos join without a rewrite.
+  Reading that anchor **from `HEAD` specifically** is also the divergence test: a
+  `HEAD` with no trailer means someone committed straight to GitHub, and the repo is
+  refused rather than buried. Commits are replayed one by one through GitHub's Git
+  Data API (blobs → tree → commit), which is the only way to keep the original
+  author, date and message; `apply_file_ops` cannot serve here, since on GitHub it
+  writes one commit per file. The branch ref moves **once, at the end** — a failure
+  part-way leaves unreferenced objects GitHub collects on its own, and `main` intact.
 - `usage_audit.rs` — transcripts are append-only, so a cache entry records how far
   it parsed plus a hash of the file head; a file that only grew is parsed from
   that offset instead of whole. `line_may_hold_event` skips the JSON parse for the

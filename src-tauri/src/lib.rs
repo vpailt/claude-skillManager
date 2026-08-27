@@ -22,6 +22,7 @@ pub mod marketplace_installer;
 pub mod marketplace_remote;
 pub mod models;
 pub mod notification_setup;
+pub mod org_sync;
 pub mod pending_prs;
 pub mod plugin_state;
 pub mod pr_poller;
@@ -181,6 +182,9 @@ pub fn run() {
             github_token_scopes,
             gitea_auth_check,
             gitea_status_all,
+            org_sync_compare,
+            org_sync_pull,
+            org_sync_cancel,
             settings_upsert_gitea_instance,
             settings_remove_gitea_instance,
             settings_set_gitea_token,

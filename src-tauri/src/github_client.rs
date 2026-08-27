@@ -183,6 +183,70 @@ pub struct TreeEntry {
     pub kind: String,
     #[serde(default)]
     pub sha: String,
+    /// Git file mode as the forge reports it: `100644`, `100755` (executable),
+    /// `120000` (symlink), `040000` (tree), `160000` (submodule). Carried so a
+    /// tree can be *rebuilt* elsewhere without flattening every file to 100644 —
+    /// dropping it silently strips the executable bit off checked-in scripts.
+    #[serde(default)]
+    pub mode: String,
+}
+
+/// `#[serde(default)]` only covers an **absent** key; a key that is present and
+/// explicitly `null` still fails to deserialize. Both forges return `null` for
+/// an empty repository description, so every nullable field needs this rather
+/// than a plain `default`.
+fn null_to_default<'de, D, T>(d: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// One repository as an org listing reports it.
+///
+/// Field names are the forges' own (`default_branch`, not `defaultBranch`):
+/// this is deserialised *from* the API, so the usual `camelCase` rename that
+/// serves the Rust → TS boundary would silently leave every renamed field at
+/// its default.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrgRepo {
+    pub name: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub description: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub default_branch: String,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub private: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub empty: bool,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub archived: bool,
+}
+
+/// Authorship of a commit, as both forges spell it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CommitAuthor {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub email: String,
+    /// ISO-8601. Passed straight back when replaying so the original date
+    /// survives; an empty string means "let the forge stamp it".
+    #[serde(default)]
+    pub date: String,
+}
+
+/// One commit from a `/repos/{repo}/commits` listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitInfo {
+    pub sha: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub author: CommitAuthor,
+    #[serde(default)]
+    pub committer: CommitAuthor,
 }
 
 /// One file operation in a batch — see [`GitHubClient::apply_file_ops`].
@@ -420,10 +484,32 @@ impl GitHubClient {
         let status = resp.status();
         if status.is_client_error() || status.is_server_error() {
             let text = resp.text().unwrap_or_default();
-            let msg = serde_json::from_str::<Value>(&text)
-                .ok()
+            let parsed = serde_json::from_str::<Value>(&text).ok();
+            let mut msg = parsed
+                .as_ref()
                 .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
-                .unwrap_or(text);
+                .unwrap_or_else(|| text.clone());
+            // GitHub keeps `message` generic ("Repository creation failed.") and
+            // puts the actionable part in `errors[]`. Without it a 422 says
+            // nothing a user or a log reader can act on.
+            let details: Vec<String> = parsed
+                .as_ref()
+                .and_then(|v| v.get("errors").and_then(|e| e.as_array()))
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|e| {
+                            e.get("message")
+                                .and_then(|m| m.as_str())
+                                .or_else(|| e.get("code").and_then(|c| c.as_str()))
+                                .or_else(|| e.as_str())
+                                .map(String::from)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !details.is_empty() {
+                msg = format!("{msg} [{}]", details.join(" ; "));
+            }
             let detail = format!("{method} {url} -> {status}: {msg}");
             return Err(if status == reqwest::StatusCode::NOT_FOUND {
                 Error::NotFound(detail)
@@ -539,6 +625,16 @@ impl GitHubClient {
             .get("sha")
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::GitHub(format!("no commit sha for {repo}@{r}", r = r#ref)))?;
+        Ok((commit_sha.to_string(), self.list_tree_at_commit(repo, commit_sha)?))
+    }
+
+    /// The tree of a commit whose SHA is already known.
+    ///
+    /// [`list_tree`](Self::list_tree) resolves a ref first; when the caller
+    /// already holds a commit sha that resolution is a wasted round trip, and
+    /// replaying a history pays it once per commit. Cached on the commit sha,
+    /// which is immutable, so a re-read is a `304`.
+    pub fn list_tree_at_commit(&self, repo: &str, commit_sha: &str) -> Result<Vec<TreeEntry>> {
         let url = format!("/repos/{repo}/git/trees/{commit_sha}");
         let tree: Value = self.get_json_cached(&url, &[("recursive", "true")])?;
         if tree
@@ -547,8 +643,7 @@ impl GitHubClient {
             .unwrap_or(false)
         {
             return Err(Error::GitHub(format!(
-                "git tree for {repo}@{r} is truncated — repo too large",
-                r = r#ref
+                "git tree for {repo}@{commit_sha} is truncated — repo too large"
             )));
         }
         let mut out = Vec::new();
@@ -570,9 +665,137 @@ impl GitHubClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
+                mode: o
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
             });
         }
-        Ok((commit_sha.to_string(), out))
+        Ok(out)
+    }
+
+    /// Every repository of an organisation, following pagination to the end.
+    ///
+    /// `per_page` (GitHub) and `limit` (Gitea) are both sent — the forge that
+    /// does not know one ignores it, which keeps a single call site for the two
+    /// providers, exactly as [`list_tags`](Self::list_tags) does.
+    pub fn list_org_repos(&self, org: &str) -> Result<Vec<OrgRepo>> {
+        const PAGE: usize = 50;
+        let url = format!("/orgs/{org}/repos");
+        let mut out: Vec<OrgRepo> = Vec::new();
+        for page in 1..=40 {
+            let page_s = page.to_string();
+            let per = PAGE.to_string();
+            let data = self.get_json_cached(
+                &url,
+                &[
+                    ("per_page", per.as_str()),
+                    ("limit", per.as_str()),
+                    ("page", page_s.as_str()),
+                ],
+            )?;
+            let Some(arr) = data.as_array() else { break };
+            if arr.is_empty() {
+                break;
+            }
+            let got = arr.len();
+            for v in arr {
+                // Never drop an entry we failed to read. A short listing reads
+                // as "these repositories do not exist", and the remedy for a
+                // missing repository is to create one — so a parse bug would
+                // surface as an attempt to recreate repositories that are
+                // already there. Same invariant as the truncated-tree guard in
+                // `list_tree`: a failed read is not an empty one.
+                let r = serde_json::from_value::<OrgRepo>(v.clone()).map_err(|e| {
+                    Error::GitHub(format!(
+                        "GET {url}: entrée de listing illisible ({e}) — \
+                         listing refusé plutôt que tronqué"
+                    ))
+                })?;
+                out.push(r);
+            }
+            if got < PAGE {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Commits reachable from `branch`, newest first, one page at a time.
+    ///
+    /// Paged rather than exhaustive on purpose: the caller walks backwards only
+    /// until it recognises its sync anchor, and a repo with years of history
+    /// must not be pulled in full to answer "what changed since yesterday".
+    pub fn list_commits(&self, repo: &str, branch: &str, page: usize, per_page: usize) -> Result<Vec<CommitInfo>> {
+        let url = format!("/repos/{repo}/commits");
+        let page_s = page.to_string();
+        let per_s = per_page.to_string();
+        let data = self.get_json_cached(
+            &url,
+            &[
+                ("sha", branch),
+                ("per_page", per_s.as_str()),
+                ("limit", per_s.as_str()),
+                ("page", page_s.as_str()),
+                // Gitea attaches per-commit diffstats unless told not to, which
+                // on a 50-commit page is a lot of payload for data no caller
+                // here reads. GitHub ignores the parameter.
+                ("stat", "false"),
+                ("verification", "false"),
+                ("files", "false"),
+            ],
+        )?;
+        let mut out = Vec::new();
+        for v in data.as_array().into_iter().flatten() {
+            let Some(sha) = v.get("sha").and_then(|s| s.as_str()) else {
+                continue;
+            };
+            let c = v.get("commit");
+            let read_actor = |key: &str| -> CommitAuthor {
+                c.and_then(|c| c.get(key))
+                    .and_then(|a| serde_json::from_value::<CommitAuthor>(a.clone()).ok())
+                    .unwrap_or_default()
+            };
+            out.push(CommitInfo {
+                sha: sha.to_string(),
+                message: c
+                    .and_then(|c| c.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                author: read_actor("author"),
+                committer: read_actor("committer"),
+            });
+        }
+        Ok(out)
+    }
+
+    /// A blob's **raw bytes**, by git object id.
+    ///
+    /// Distinct from [`get_file`](Self::get_file), which returns a lossily
+    /// decoded `String`: anything that is not valid UTF-8 comes back mangled
+    /// there. Byte-exact copying needs the bytes themselves, so this is what the
+    /// org sync reads with. Not routed through the ETag cache — blobs are
+    /// content-addressed (a given sha can never change) and they are the bulk of
+    /// the traffic, so caching them would only grow the process's memory.
+    pub fn get_blob_bytes(&self, repo: &str, blob_sha: &str) -> Result<Vec<u8>> {
+        let url = format!("/repos/{repo}/git/blobs/{blob_sha}");
+        let resp = Self::check(
+            self.request(reqwest::Method::GET, &url).send()?,
+            "GET",
+            &url,
+        )?;
+        let data: Value = resp.json()?;
+        let content = data.get("content").and_then(|v| v.as_str()).unwrap_or_default();
+        match data.get("encoding").and_then(|v| v.as_str()).unwrap_or("base64") {
+            "base64" => {
+                let cleaned: String = content.chars().filter(|c| !c.is_whitespace()).collect();
+                B64.decode(cleaned)
+                    .map_err(|e| Error::GitHub(format!("blob {blob_sha} in {repo}: {e}")))
+            }
+            _ => Ok(content.as_bytes().to_vec()),
+        }
     }
 
     pub fn get_file(&self, repo: &str, path: &str, r#ref: &str) -> Result<(String, String)> {
@@ -1223,6 +1446,185 @@ impl GitHubClient {
                 self.get_branch_sha(repo, new_branch).or_else(|_| Ok(String::new()))
             }
         }
+    }
+
+    /// Create a repository inside an organisation.
+    ///
+    /// `auto_init` is deliberately false: the caller pushes a history of its
+    /// own, and an auto-created README would be an unrelated root commit that
+    /// every later push would have to reconcile with.
+    pub fn create_org_repo(
+        &self,
+        org: &str,
+        name: &str,
+        description: &str,
+        private: bool,
+    ) -> Result<Value> {
+        let url = format!("/orgs/{org}/repos");
+        let body = json!({
+            "name": name,
+            "description": description,
+            "private": private,
+            "auto_init": false,
+        });
+        let resp = Self::check(
+            self.request(reqwest::Method::POST, &url).json(&body).send()?,
+            "POST",
+            &url,
+        )?;
+        Ok(resp.json()?)
+    }
+
+    /// Guard for the Git Data write endpoints below: Gitea exposes them for
+    /// reading but not for creating objects, so a mistaken call should say so
+    /// rather than fail as an opaque 404.
+    fn require_github(&self, what: &str) -> Result<()> {
+        if self.provider != Provider::Github {
+            return Err(Error::Invalid(format!(
+                "{what} is a GitHub Git Data API operation; this client targets {:?}",
+                self.provider
+            )));
+        }
+        Ok(())
+    }
+
+    /// Upload raw bytes as a git blob, returning its object id. GitHub only.
+    pub fn create_blob(&self, repo: &str, content: &[u8]) -> Result<String> {
+        self.require_github("create_blob")?;
+        let url = format!("/repos/{repo}/git/blobs");
+        let body = json!({ "content": B64.encode(content), "encoding": "base64" });
+        let resp = Self::check(
+            self.request(reqwest::Method::POST, &url).json(&body).send()?,
+            "POST",
+            &url,
+        )?;
+        let data: Value = resp.json()?;
+        data.get("sha")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| Error::GitHub(format!("no sha returned by POST {url}")))
+    }
+
+    /// Build a git tree from a **complete** entry list, returning its object id.
+    ///
+    /// No `base_tree` is sent: the entries given are the whole tree. That is
+    /// what makes deletions and renames fall out for free — a path simply absent
+    /// from the list is absent from the result, with no delete marker to emit.
+    /// GitHub only.
+    pub fn create_tree(&self, repo: &str, entries: &[TreeEntry]) -> Result<String> {
+        self.require_github("create_tree")?;
+        let url = format!("/repos/{repo}/git/trees");
+        let tree: Vec<Value> = entries
+            .iter()
+            .map(|e| {
+                json!({
+                    "path": e.path,
+                    "mode": if e.mode.is_empty() { "100644" } else { e.mode.as_str() },
+                    "type": if e.kind.is_empty() { "blob" } else { e.kind.as_str() },
+                    "sha": e.sha,
+                })
+            })
+            .collect();
+        let resp = Self::check(
+            self.request(reqwest::Method::POST, &url)
+                .json(&json!({ "tree": tree }))
+                .send()?,
+            "POST",
+            &url,
+        )?;
+        let data: Value = resp.json()?;
+        data.get("sha")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| Error::GitHub(format!("no sha returned by POST {url}")))
+    }
+
+    /// Create a commit object, returning its sha. GitHub only.
+    ///
+    /// `author` and `committer` are passed verbatim, which is the whole point:
+    /// a replayed commit keeps the name, address and timestamp it had upstream.
+    /// An actor with an empty `date` is sent without one, letting GitHub stamp
+    /// it. Creating the object does not move any branch — see
+    /// [`set_branch_ref`](Self::set_branch_ref).
+    pub fn create_commit(
+        &self,
+        repo: &str,
+        message: &str,
+        tree_sha: &str,
+        parents: &[String],
+        author: &CommitAuthor,
+        committer: &CommitAuthor,
+    ) -> Result<String> {
+        self.require_github("create_commit")?;
+        let actor = |a: &CommitAuthor| {
+            let mut o = serde_json::Map::new();
+            o.insert("name".into(), json!(a.name));
+            o.insert("email".into(), json!(a.email));
+            if !a.date.is_empty() {
+                o.insert("date".into(), json!(a.date));
+            }
+            Value::Object(o)
+        };
+        let url = format!("/repos/{repo}/git/commits");
+        let body = json!({
+            "message": message,
+            "tree": tree_sha,
+            "parents": parents,
+            "author": actor(author),
+            "committer": actor(committer),
+        });
+        let resp = Self::check(
+            self.request(reqwest::Method::POST, &url).json(&body).send()?,
+            "POST",
+            &url,
+        )?;
+        let data: Value = resp.json()?;
+        data.get("sha")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| Error::GitHub(format!("no sha returned by POST {url}")))
+    }
+
+    /// Point `refs/heads/{branch}` at `sha`, creating the ref if it is absent.
+    ///
+    /// A freshly created repo has no refs at all, so the update has to be able
+    /// to fall through to a create; distinguishing the two up front would cost a
+    /// request and still race. GitHub only.
+    pub fn set_branch_ref(&self, repo: &str, branch: &str, sha: &str, force: bool) -> Result<()> {
+        self.require_github("set_branch_ref")?;
+        let patch_url = format!("/repos/{repo}/git/refs/heads/{branch}");
+        let resp = self
+            .request(reqwest::Method::PATCH, &patch_url)
+            .json(&json!({ "sha": sha, "force": force }))
+            .send()?;
+        match Self::check(resp, "PATCH", &patch_url) {
+            Ok(_) => Ok(()),
+            Err(Error::NotFound(_)) => {
+                let url = format!("/repos/{repo}/git/refs");
+                let body = json!({ "ref": format!("refs/heads/{branch}"), "sha": sha });
+                Self::check(
+                    self.request(reqwest::Method::POST, &url).json(&body).send()?,
+                    "POST",
+                    &url,
+                )?;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Set a repository's default branch. Needed when the source's default is
+    /// not the `main` GitHub assumes for a new repo.
+    pub fn set_default_branch(&self, repo: &str, branch: &str) -> Result<()> {
+        let url = format!("/repos/{repo}");
+        Self::check(
+            self.request(reqwest::Method::PATCH, &url)
+                .json(&json!({ "default_branch": branch }))
+                .send()?,
+            "PATCH",
+            &url,
+        )?;
+        Ok(())
     }
 
     pub fn put_file(

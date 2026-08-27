@@ -110,6 +110,61 @@ export interface GiteaStatus {
   user: string;
 }
 
+/** Mirror of `org_sync::status` on the Rust side. */
+export type OrgSyncStatus =
+  | "upToDate"
+  | "behind"
+  | "new"
+  | "diverged"
+  | "empty"
+  | "error";
+
+export interface RepoComparison {
+  /** Name on Gitea, e.g. acx-cl-salesforce */
+  source: string;
+  /** Name on GitHub, e.g. cl-salesforce */
+  target: string;
+  branch: string;
+  status: OrgSyncStatus;
+  /** Commits waiting to be replayed. */
+  pending: number;
+  /** Human-readable explanation; carries the reason for diverged/error. */
+  detail: string;
+  headSha: string;
+  anchorSha: string;
+}
+
+export interface SyncReport {
+  giteaUrl: string;
+  giteaOrg: string;
+  githubOrg: string;
+  repos: RepoComparison[];
+  /** Present on GitHub with no Gitea counterpart. Reported, never deleted. */
+  orphans: string[];
+}
+
+export interface RepoOutcome {
+  source: string;
+  target: string;
+  status: "synced" | "created" | "skipped" | "cancelled" | "error";
+  replayed: number;
+  detail: string;
+}
+
+export interface SyncProgress {
+  repo: string;
+  phase: "compare" | "create" | "replay" | "ref" | "done";
+  /** Commits replayed so far, out of `total`. */
+  done: number;
+  total: number;
+  /** Files handled within the current commit, out of `stepTotal`.
+   *  An incremental sync usually replays a single commit, so this is the
+   *  counter that actually moves. */
+  step: number;
+  stepTotal: number;
+  detail: string;
+}
+
 export type UiDensity = "compact" | "comfortable";
 export type ThemePref = "light" | "dark" | "auto";
 export type LogLevel = "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE";

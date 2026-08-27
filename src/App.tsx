@@ -13,6 +13,7 @@ import { useAppUpdateEvents } from "@/hooks/useAppUpdateEvents";
 import { useUi } from "@/stores/ui";
 import { useNotifications } from "@/stores/notifications";
 import { useReleaseNotes } from "@/stores/releaseNotes";
+import { useOrgSync } from "@/stores/orgSync";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { createLogger, setFrontendLogLevel } from "@/lib/logger";
@@ -49,6 +50,13 @@ const CommandPalette = lazy(() =>
 const ReleaseNotesDialog = lazy(() =>
   import("@/components/ReleaseNotesDialog").then((m) => ({
     default: m.ReleaseNotesDialog,
+  }))
+);
+// Reached only through the command palette's hidden `sforge-labs` entry, so it
+// has no business being in any chunk that loads on startup.
+const OrgSyncDialog = lazy(() =>
+  import("@/components/OrgSyncDialog").then((m) => ({
+    default: m.OrgSyncDialog,
   }))
 );
 
@@ -154,6 +162,7 @@ export default function App() {
   }, []);
 
   const releaseNotesOpen = useReleaseNotes((s) => s.open);
+  const orgSyncOpen = useOrgSync((s) => s.open);
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   useEffect(() => {
@@ -202,6 +211,7 @@ export default function App() {
           <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
         )}
         {releaseNotesOpen && <ReleaseNotesDialog />}
+        {orgSyncOpen && <OrgSyncDialog />}
         <SettingsDialog />
       </Suspense>
       <NotificationStack />

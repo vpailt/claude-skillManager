@@ -31,6 +31,30 @@ pub enum Error {
     Other(String),
 }
 
+/// Full cause chain of an error, for logs.
+///
+/// `reqwest`'s `Display` stops at `error sending request for url (…)` and hides
+/// its source — which is the only part that says whether the call timed out,
+/// was refused, lost its TLS session or failed to resolve. Logging the head
+/// alone turns a five-second diagnosis into an afternoon of guessing.
+pub fn chain(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut cur = e.source();
+    while let Some(s) = cur {
+        out.push_str(" <- ");
+        out.push_str(&s.to_string());
+        cur = s.source();
+    }
+    out
+}
+
+impl Error {
+    /// This error and every cause behind it, for logs. See [`chain`].
+    pub fn chain(&self) -> String {
+        chain(self)
+    }
+}
+
 impl Serialize for Error {
     fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         s.serialize_str(self.to_string().as_ref())

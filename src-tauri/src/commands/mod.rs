@@ -20,6 +20,7 @@ use crate::local_scanner;
 use crate::marketplace_installer;
 use crate::marketplace_remote;
 use crate::models::{Marketplace, Plugin, Skill, SkillSync};
+use crate::org_sync;
 use crate::pending_prs::{self, PendingPR};
 use crate::plugin_state;
 use crate::pr_history::{self, PRRecord};
@@ -990,6 +991,62 @@ pub async fn gitea_status_all() -> Vec<GiteaStatus> {
         });
     }
     out
+}
+
+/// Turn a `spawn_blocking` join failure into an `AppError`.
+fn joined<T>(r: std::result::Result<T, tauri::Error>) -> Result<T> {
+    r.map_err(|e| crate::error::Error::Other(format!("tâche interrompue : {e}")))
+}
+
+/// Read-only comparison of the Gitea `Claude` organisation against the GitHub
+/// `sforge-labs` one. Writes nothing; safe to run at any time.
+///
+/// Runs on a blocking thread, **not** on the async runtime: everything under it
+/// goes through `reqwest::blocking`, which owns an internal tokio runtime.
+/// Building or dropping that from an async context is a documented misuse —
+/// tokio panics with "Cannot drop a runtime in a context where blocking is not
+/// allowed" — and when the client happens to come from the pool instead, the
+/// misuse degrades into requests that simply never complete.
+#[tauri::command]
+pub async fn org_sync_compare() -> Result<org_sync::SyncReport> {
+    joined(tauri::async_runtime::spawn_blocking(org_sync::compare).await)?
+}
+
+/// Replay the selected Gitea repositories onto GitHub, applying the same
+/// rewrite rules the initial migration used.
+///
+/// Progress is emitted rather than returned as it goes: a full-history replay
+/// runs for a while, and the dialog needs to show where it is. The final
+/// per-repository outcome comes back as the return value.
+#[tauri::command]
+pub async fn org_sync_pull(
+    app: AppHandle,
+    sources: Vec<String>,
+) -> Result<Vec<org_sync::RepoOutcome>> {
+    tracing::info!("org_sync_pull: {} dépôt(s) demandé(s)", sources.len());
+    // Blocking thread, for the reason spelled out on `org_sync_compare` — and
+    // all the more so here: a replay makes hundreds of sequential blocking
+    // calls, so parking an async worker for the whole run is not a detail.
+    joined(
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut on_progress = |p: org_sync::SyncProgress| {
+                if let Err(e) = app.emit(org_sync::EVENT_PROGRESS, &p) {
+                    tracing::debug!("emit {} failed (ignored): {}", org_sync::EVENT_PROGRESS, e);
+                }
+            };
+            org_sync::pull(&sources, &mut on_progress)
+        })
+        .await,
+    )?
+}
+
+/// Ask a running [`org_sync_pull`] to stop at its next checkpoint.
+///
+/// Cannot corrupt anything: a repository's branch is moved only once every
+/// object it needs exists, so stopping short leaves GitHub untouched.
+#[tauri::command]
+pub async fn org_sync_cancel() {
+    org_sync::request_cancel();
 }
 
 /// Register or update a Gitea instance (host + TLS mode). The token is set
