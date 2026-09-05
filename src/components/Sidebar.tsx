@@ -321,7 +321,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
         <div className="px-3 pb-2 text-center text-xs text-muted-foreground/60">
           {/* The version moved to the status bar, where it is readable with the
               bar collapsed and doubles as the way into the release notes. */}
-          <div>Conçu par @vpailt</div>
+          <div className="italic">By @vpailt</div>
         </div>
       )}
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />

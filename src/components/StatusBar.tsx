@@ -1,6 +1,6 @@
 // The permanent bar across the bottom of the window.
 //
-// Three things live here, and they are all things that were previously either
+// Four things live here, and they are all things that were previously either
 // invisible or duplicated:
 //
 // 1. **The running version.** It was a grey line at the bottom of the sidebar,
@@ -9,16 +9,21 @@
 //    text block in the sidebar; the sidebar won, and it now lands here — same
 //    single `useForgeStatus` declaration, one rendering, present on every page
 //    whatever the sidebar is doing.
-// 3. **A progress slot.** New. Everything slow in this app (a sweep, an
-//    install, a PR upload, a self-update) used to run behind a spinning icon at
-//    best, with no indication of what it was doing or how far along it was.
+// 3. **A progress slot**, at the middle of the window. New. Everything slow in
+//    this app (a sweep, an install, a PR upload, a self-update) used to run
+//    behind a spinning icon at best, with no indication of what it was doing or
+//    how far along it was.
+// 4. **The notification bell**, at the right end. Toasts expire after eight
+//    seconds; the notifications themselves now outlive them, and this is where
+//    they are read back.
 //
 // It is chrome: fixed height, never scrolls, never pushes the page around.
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useIsFetching } from "@tanstack/react-query";
-import { Github, Loader2, Sparkles } from "lucide-react";
+import { Github, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GiteaIcon } from "@/components/GiteaIcon";
+import { NotificationCenter } from "@/components/NotificationCenter";
 import { useForgeStatus } from "@/hooks/useForgeStatus";
 import { useSettingsDialog } from "@/stores/settingsDialog";
 import { useReleaseNotes } from "@/stores/releaseNotes";
@@ -49,7 +54,7 @@ function Segment({
   className?: string;
 }) {
   const shell = cn(
-    "flex h-full items-center gap-1.5 px-2 text-[11px] leading-none text-muted-foreground",
+    "flex h-full items-center gap-1.5 px-2.5 text-xs leading-none text-muted-foreground",
     onClick && "transition-colors hover:bg-accent hover:text-accent-foreground",
     className
   );
@@ -141,8 +146,8 @@ function ProgressSlot() {
     const done = updateProgress?.downloaded ?? 0;
     const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : null;
     return (
-      <div className="flex h-full items-center gap-2 px-2 text-[11px] leading-none text-emerald-600 dark:text-emerald-400">
-        <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+      <div className="flex h-full items-center gap-2 px-2 text-xs leading-none text-emerald-600 dark:text-emerald-400">
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
         <span className="shrink-0 font-medium">{PHASE_LABEL[phase]}</span>
         {total > 0 && phase === "downloading" && (
           <span className="shrink-0 tabular-nums opacity-80">
@@ -163,8 +168,8 @@ function ProgressSlot() {
   const others = all.length - 1;
 
   return (
-    <div className="flex h-full min-w-0 items-center gap-2 px-2 text-[11px] leading-none text-muted-foreground">
-      <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" />
+    <div className="flex h-full min-w-0 items-center gap-2 px-2 text-xs leading-none text-muted-foreground">
+      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
       <span className="shrink-0 font-medium text-foreground">{visible.label}</span>
       {visible.detail && (
         <span className="min-w-0 max-w-[22rem] truncate" title={visible.detail}>
@@ -198,8 +203,11 @@ export function StatusBar() {
   const openNotes = useReleaseNotes((s) => s.setOpen);
   const { github, gitea, loading } = useForgeStatus();
 
+  const [bellOpen, setBellOpen] = useState(false);
+  const forgeShown = !loading && (github.known || gitea.length > 0);
+
   return (
-    <footer className="flex h-6 shrink-0 items-stretch gap-0 border-t bg-card/60 text-muted-foreground">
+    <footer className="relative flex h-9 shrink-0 items-stretch gap-0 border-t bg-card/60 text-muted-foreground">
       {/* Version — the one place it is always readable, sidebar collapsed or
           not. Clicking it opens the release history, which is the only
           question anyone has when they read a version number. */}
@@ -213,7 +221,6 @@ export function StatusBar() {
         }
         onClick={() => openNotes(true)}
       >
-        <Sparkles className="h-3 w-3 shrink-0" />
         <span className="font-medium text-foreground">v{version ?? "…"}</span>
         {staged && (
           <span className="rounded-full bg-emerald-500/15 px-1.5 font-medium text-emerald-600 dark:text-emerald-400">
@@ -227,7 +234,7 @@ export function StatusBar() {
         )}
       </Segment>
 
-      <div className="my-1 w-px bg-border" />
+      <div className="my-1.5 w-px bg-border" />
 
       {/* Forge connection. Green connected, red not — the icon carries it, so
           the state survives the window being narrow enough to clip the text. */}
@@ -246,7 +253,7 @@ export function StatusBar() {
         >
           <Github
             className={cn(
-              "h-3.5 w-3.5 shrink-0",
+              "h-4 w-4 shrink-0",
               github.ok ? "text-emerald-500" : "text-red-500"
             )}
           />
@@ -281,7 +288,7 @@ export function StatusBar() {
           >
             <GiteaIcon
               className={cn(
-                "h-3.5 w-3.5 shrink-0",
+                "h-4 w-4 shrink-0",
                 g.ok ? "text-emerald-500" : "text-red-500"
               )}
             />
@@ -291,9 +298,24 @@ export function StatusBar() {
           </Segment>
         ))}
 
-      {/* Progress lives on the right, where nothing it pushes around matters. */}
-      <div className="ml-auto flex min-w-0 items-stretch">
+      {/* Closing delimiter, mirroring the one before the forge block, so the
+          connections read as a group rather than as a run of items. */}
+      {forgeShown && <div className="my-1.5 w-px bg-border" />}
+
+      {/* Progress sits at the middle of the *window*, not of the space left
+          over — which is why it is positioned rather than placed in the flow:
+          a flex or grid centre would drift right by half the width of the
+          segments on the left. It is inert (`pointer-events-none`), so on a
+          window narrow enough for the two to meet it can overlap without ever
+          swallowing a click on a segment beneath it. */}
+      <div className="pointer-events-none absolute inset-y-0 left-1/2 flex max-w-[40%] -translate-x-1/2 items-stretch overflow-hidden">
         <ProgressSlot />
+      </div>
+
+      {/* The bell closes the bar on the right. */}
+      <div className="ml-auto flex items-stretch">
+        <div className="my-1.5 w-px bg-border" />
+        <NotificationCenter open={bellOpen} onOpenChange={setBellOpen} />
       </div>
     </footer>
   );

@@ -40,8 +40,20 @@ const ALL_KINDS_ON: NativeKinds = {
   error: true,
 };
 
+/** How many past notifications the bell keeps. Old enough to answer "what did
+ *  that toast say?", short enough that the panel stays scannable. */
+const HISTORY_MAX = 50;
+
 interface State {
+  /** Live toasts. Each one is removed on its own timer after 8 s. */
   items: Notification[];
+  /** What the status bar's bell shows. Same notifications, but they stay:
+   *  `items` is a display queue that empties itself, so before this existed a
+   *  toast the user did not happen to be looking at was gone for good. Entries
+   *  leave only when dismissed from the panel. */
+  history: Notification[];
+  /** Pushed since the panel was last opened — the count on the bell. */
+  unread: number;
   /** Set by App.tsx: when the main window is hidden, prefer native toasts. */
   windowHidden: boolean;
   /** Master switch synced from settings. Defaults to true. */
@@ -57,6 +69,12 @@ interface State {
   ) => void;
   dismiss: (id: string) => void;
   clear: () => void;
+  /** Drop one entry from the bell's list (its × button). */
+  dismissHistory: (id: string) => void;
+  /** Empty the bell's list. */
+  clearHistory: () => void;
+  /** The panel was opened: the badge goes back to zero. */
+  markRead: () => void;
 }
 
 let permissionChecked = false;
@@ -91,6 +109,8 @@ async function fireNative(title: string, body?: string) {
 
 export const useNotifications = create<State>((set, get) => ({
   items: [],
+  history: [],
+  unread: 0,
   windowHidden: false,
   nativeEnabled: true,
   nativeKinds: { ...ALL_KINDS_ON },
@@ -99,12 +119,14 @@ export const useNotifications = create<State>((set, get) => ({
   setNativeKinds: (kinds) => set({ nativeKinds: kinds }),
   push: (n, opts) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const entry: Notification = { ...n, id, createdAt: Date.now() };
     set((s) => ({
-      items: [
-        { ...n, id, createdAt: Date.now() },
-        ...s.items.slice(0, 19),
-      ],
+      items: [entry, ...s.items.slice(0, 19)],
+      history: [entry, ...s.history].slice(0, HISTORY_MAX),
+      unread: s.unread + 1,
     }));
+    // Only the *toast* expires. The history entry stays until it is dismissed
+    // from the panel, which is the whole point of having one.
     setTimeout(() => {
       set((s) => ({ items: s.items.filter((it) => it.id !== id) }));
     }, 8000);
@@ -120,7 +142,14 @@ export const useNotifications = create<State>((set, get) => ({
       void fireNative(n.title, n.body);
     }
   },
+  // Dismissing a toast closes the toast, not the record of it: the × on a toast
+  // means "stop showing me this now", and the bell is where it is looked up
+  // afterwards. `dismissHistory` is the one that forgets.
   dismiss: (id) =>
     set((s) => ({ items: s.items.filter((it) => it.id !== id) })),
   clear: () => set({ items: [] }),
+  dismissHistory: (id) =>
+    set((s) => ({ history: s.history.filter((it) => it.id !== id) })),
+  clearHistory: () => set({ history: [] }),
+  markRead: () => set({ unread: 0 }),
 }));

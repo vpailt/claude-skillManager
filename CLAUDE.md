@@ -586,9 +586,12 @@ falling through published a release whose entire diff was a version bump.
   The status bar is the first host that is neither in the way of the content
   nor hostage to the sidebar being collapsed.
 - `components/StatusBar.tsx` + `stores/progress.ts` — the permanent bar across
-  the bottom. It carries the running version (clicking it opens the release
-  notes), the forge connection segments (GitHub / Gitea mark, green connected,
-  red not), and **the one progress slot in the app**. Anything slow registers a
+  the bottom (36 px). It carries the running version (clicking it opens the
+  release notes), the forge connection segments (GitHub / Gitea mark, green
+  connected, red not), **the one progress slot in the app** — positioned, not
+  placed in the flow, so it sits at the middle of the *window* rather than of
+  the space left over, and inert so a narrow window can overlap without
+  swallowing a click — and `components/NotificationCenter.tsx` at the right end. Anything slow registers a
   task in `stores/progress.ts` and the bar renders the winner on priority
   (`publish` > install/uninstall/marketplace > audit/tracking > `refresh`),
   counting the rest as `+N` so its height never moves. The self-update is the
@@ -650,8 +653,16 @@ falling through published a release whose entire diff was a version bump.
   chunk stays out of startup.
 - `stores/ui.ts` — single source of truth for theme/density/sidebar/polling prefs.
   `stores/theme.ts` is a thin re-export alias kept for legacy imports.
-- `stores/notifications.ts` — in-app toast queue. The polling hook and Settings page
-  push success/error toasts here; `NotificationStack` renders them.
+- `stores/notifications.ts` — in-app notifications, in **two** lists. `items` is
+  the toast queue (`NotificationStack`), and each entry removes itself after 8 s.
+  `history` is what the status bar's bell shows, it is not on that timer, and it
+  is why the split exists: a toast raised while the user was on another tab —
+  a failed install, a PR link worth clicking — used to be unrecoverable. The ×
+  on a toast means "stop showing me this now" (`dismiss`); the × in the panel is
+  the one that forgets (`dismissHistory`). `unread` badges the bell and is
+  cleared by opening the panel. `components/NotificationCenter.tsx` renders it
+  hand-rolled rather than as a `DropdownMenu`: every row carries its own ×, and
+  a menu closes on any item activation.
 - `pages/` — one file per top-level tab (Overview, Skills, Changes, Suivi
   marketplace, Audit; Settings is a dialog). `pages/Admin.tsx` is the "Suivi
   marketplace" tab, on route `/tracking` (`/admin` redirects to it); it holds

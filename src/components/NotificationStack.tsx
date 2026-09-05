@@ -23,7 +23,10 @@ export function NotificationStack() {
   const dismiss = useNotifications((s) => s.dismiss);
 
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-80 flex-col gap-2">
+    // Clear of the status bar (36 px) rather than sitting on top of it — the
+    // bell the toasts are about is down there, and so is whatever progress line
+    // the operation raising them is writing.
+    <div className="pointer-events-none fixed bottom-12 right-4 z-50 flex w-80 flex-col gap-2">
       {items.map((n) => {
         const Icon = ICONS[n.kind];
         const clickable = !!n.onClick;
