@@ -244,17 +244,34 @@ impl SweepScope {
     }
 }
 
+/// Whether anyone is waiting on this sweep's result.
+///
+/// Only one sweep runs at a time, and the loser of that race used to wait out
+/// the winner in full — up to the whole 75 s budget. That is fine between two
+/// timers and wrong when a click is behind one of them, so a `Foreground` sweep
+/// makes a `Background` one give up its remote half early.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SweepPriority {
+    /// A timer: `catalog_poller`, or the frontend's safety-net interval. Its
+    /// result is disposable — the next tick redoes it.
+    Background,
+    /// A gesture is waiting on it: a click, or the refresh that follows one.
+    Foreground,
+}
+
 /// Rebuild the whole view. See [`RefreshMode`] for what each mode costs.
 #[tauri::command]
 pub async fn refresh_all(app: AppHandle, mode: Option<RefreshMode>) -> Result<RefreshResult> {
     match mode.unwrap_or_default() {
         RefreshMode::Auto => sweep_or_reuse(&app),
-        RefreshMode::Local => sweep_scoped(&app, SweepScope::LocalChange),
+        RefreshMode::Local => {
+            sweep_scoped(&app, SweepScope::LocalChange, SweepPriority::Foreground)
+        }
         RefreshMode::User => {
             // The user is present: give a host written off by the circuit
             // breaker another go before sweeping.
             crate::github_client::reset_host_health();
-            sweep_remote(&app)
+            sweep_scoped(&app, SweepScope::Full, SweepPriority::Foreground)
         }
     }
 }
@@ -267,18 +284,60 @@ pub async fn refresh_all(app: AppHandle, mode: Option<RefreshMode>) -> Result<Re
 /// the same pass on a timer — the UI is destroyed in tray mode, so anything that
 /// only ran from a frontend query effectively stopped running at all.
 pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
-    sweep_scoped(app, SweepScope::Full)
+    sweep_scoped(app, SweepScope::Full, SweepPriority::Background)
 }
 
 /// [`sweep_remote`], with an explicit budget for the optional remote work.
-pub(crate) fn sweep_scoped(app: &AppHandle, scope: SweepScope) -> Result<RefreshResult> {
+pub(crate) fn sweep_scoped(
+    app: &AppHandle,
+    scope: SweepScope,
+    priority: SweepPriority,
+) -> Result<RefreshResult> {
     // One sweep at a time. Two callers now reach this — the frontend command and
     // `catalog_poller` — and step 1 re-extracts marketplace directories in place
     // (`rmtree_robust` then unzip). A concurrent sweep reading that directory
     // mid-rewrite would see a half-empty marketplace and report every plugin in
     // it as gone. Serializing costs nothing: the loser simply runs right after.
+    //
+    // "Right after" was the problem, though: the poller's pass may have a
+    // 75 s budget's worth of remote work left, and a click that lands mid-pass
+    // waited it out before starting its own. So a foreground sweep announces
+    // itself *before* queueing, and a background one holding the lock reads that
+    // and stops making new remote calls — the same exit as running out of
+    // budget, a path that already returns a usable partial view. The waiting
+    // sweep then gets the lock in seconds instead of a minute.
     static SWEEP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static WAITING_FOREGROUND: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    use std::sync::atomic::Ordering::SeqCst;
+
+    if priority == SweepPriority::Foreground {
+        WAITING_FOREGROUND.fetch_add(1, SeqCst);
+    }
     let _guard = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
+    if priority == SweepPriority::Foreground {
+        WAITING_FOREGROUND.fetch_sub(1, SeqCst);
+    }
+
+    // The wait itself may have produced the answer. A background sweep that
+    // queued behind another one is asking a question that was just answered, so
+    // it takes that answer rather than repeating the pass — the reuse window is
+    // tested before queueing, and this is the same test on the other side of the
+    // wait. A foreground sweep never does this: it follows a change on disk that
+    // the finished sweep predates.
+    if priority == SweepPriority::Background {
+        if let Some(cached) = recent_sweep() {
+            tracing::debug!("sweep: another pass answered this one while it waited");
+            return Ok(cached);
+        }
+    }
+
+    // Only a background pass yields, and only to a sweep someone is waiting on.
+    // Two foreground sweeps still serialise in full: both describe a change the
+    // user made, and neither is disposable.
+    let preempted = move || {
+        priority == SweepPriority::Background && WAITING_FOREGROUND.load(SeqCst) > 0
+    };
 
     // Hard ceiling on how long the remote half of a sweep may take.
     //
@@ -297,8 +356,22 @@ pub(crate) fn sweep_scoped(app: &AppHandle, scope: SweepScope) -> Result<Refresh
     // an empty one.
     const SWEEP_BUDGET_SECS: u64 = 75;
     let started = std::time::Instant::now();
-    let over_budget =
-        || started.elapsed() > std::time::Duration::from_secs(SWEEP_BUDGET_SECS);
+    // "No more remote calls": the budget ran out, or a foreground sweep is
+    // queued behind this one. Both leave the local view in place for whatever
+    // was not reached, which is a *failed* read rather than an empty one.
+    let over_budget = move || {
+        started.elapsed() > std::time::Duration::from_secs(SWEEP_BUDGET_SECS) || preempted()
+    };
+    // Which of the two stopped the remote half - worth distinguishing in the
+    // log, since one is a machine that cannot keep up and the other is the app
+    // getting out of the user's way.
+    let stop_reason = move || {
+        if preempted() {
+            "yielding to a refresh someone is waiting on"
+        } else {
+            "sweep budget spent"
+        }
+    };
 
     // Deafen the skill watcher for the whole pass. The sweep walks every plugin
     // directory and the user's `skills/`, and reads every file it compares — on
@@ -325,7 +398,8 @@ pub(crate) fn sweep_scoped(app: &AppHandle, scope: SweepScope) -> Result<Refresh
             if auto && marketplace_installer::is_marketplace_installed(&cfg.name) {
                 if over_budget() {
                     tracing::warn!(
-                        "sweep budget ({SWEEP_BUDGET_SECS}s) spent before auto-updating {} \u{2014} skipping the rest",
+                        "{} before auto-updating {} \u{2014} skipping the rest",
+                        stop_reason(),
                         cfg.name
                     );
                     break;
@@ -414,7 +488,8 @@ pub(crate) fn sweep_scoped(app: &AppHandle, scope: SweepScope) -> Result<Refresh
             if !budget_spent {
                 budget_spent = true;
                 tracing::warn!(
-                    "sweep budget ({SWEEP_BUDGET_SECS}s) spent \u{2014} keeping the local view for the remaining marketplace(s)"
+                    "{} \u{2014} keeping the local view for the remaining marketplace(s)",
+                    stop_reason()
                 );
             }
             continue;
@@ -464,7 +539,8 @@ pub(crate) fn sweep_scoped(app: &AppHandle, scope: SweepScope) -> Result<Refresh
                 if !budget_spent {
                     budget_spent = true;
                     tracing::warn!(
-                        "sweep budget ({SWEEP_BUDGET_SECS}s) spent while reading {} \u{2014} keeping the local view for the rest",
+                        "{} while reading {} \u{2014} keeping the local view for the rest",
+                        stop_reason(),
                         mp.name
                     );
                 }

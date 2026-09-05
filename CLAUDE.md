@@ -262,6 +262,18 @@ lands before the query runs. Nothing invalidates `["refresh"]` directly after a
 local change — `useBulkRunner` routes that key through `forceRefresh` for the
 same reason.
 
+**One sweep runs at a time, but the loser no longer waits it out.** The
+process-wide mutex is still there (step 1 re-extracts marketplace directories in
+place, and a concurrent reader would see a half-empty marketplace), but a
+`SweepPriority::Foreground` sweep — a click, or the refresh behind one —
+announces itself *before* queueing, and a `Background` one holding the lock
+reads that and stops making new remote calls. It is the same exit as running out
+of budget, a path that already returns a usable partial view, so the waiting
+sweep gets the lock in seconds instead of up to a minute. Two foreground sweeps
+still serialise in full: neither is disposable. And a background sweep that did
+wait re-tests the reuse window on the far side of it — the pass it queued behind
+usually just answered its question.
+
 **The sweep is not the only thing that may update the view.** A click's own
 outcome is applied to the store immediately (`markPluginInstalled` /
 `markPluginUninstalled` / `markPluginEnabled` in `stores/app.ts`), and the sweep
