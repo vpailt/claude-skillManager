@@ -185,18 +185,78 @@ pub(crate) fn sweep_or_reuse(app: &AppHandle) -> Result<RefreshResult> {
     sweep_remote(app)
 }
 
-/// Rebuild the whole view. `force` is the user asking for it by hand — it skips
-/// the reuse window *and* clears every host's failure tally, so "reconnect the
-/// VPN, press Rafraîchir" works there and then rather than after the breaker's
-/// cooldown.
-#[tauri::command]
-pub async fn refresh_all(app: AppHandle, force: Option<bool>) -> Result<RefreshResult> {
-    let force = force.unwrap_or(false);
-    if force {
-        crate::github_client::reset_host_health();
-        return sweep_remote(&app);
+/// Why a sweep was asked for. The three answers cost very different amounts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RefreshMode {
+    /// A background trigger (a timer, a filesystem event). Answerable from the
+    /// reuse window.
+    #[default]
+    Auto,
+    /// This app just changed the install state on disk and wants the view that
+    /// follows it. Never reused — a result from before the change is exactly
+    /// the wrong answer — but also never *expensive*: see
+    /// [`SweepScope::LocalChange`].
+    Local,
+    /// The user pressed Rafraîchir. Skips the reuse window *and* clears every
+    /// host's failure tally, so "reconnect the VPN, press Rafraîchir" works
+    /// there and then rather than after the circuit breaker's cooldown.
+    User,
+}
+
+/// How many *not installed* plugins may have their manifest probed in one full
+/// sweep.
+///
+/// Reading a plugin's own manifest is what turns a registry entry into a
+/// version number, and it is worth a request for something on disk that might
+/// be out of date. For a plugin nobody installed it only decides whether the
+/// catalogue row reads "1.2.0" or "version inconnue" — at one to three requests
+/// each, that is several hundred round trips per sweep for a large catalogue,
+/// repeated every half hour. Installed plugins are never capped; the rest are
+/// served first-come and keep whatever the registry said beyond it.
+const MAX_UNINSTALLED_MANIFEST_PROBES: usize = 40;
+
+/// How much remote work one sweep may do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SweepScope {
+    /// Everything, including manifest probes for plugins nobody installed.
+    Full,
+    /// The local install state and the remote reads that describe it — but no
+    /// version probing for *not installed* plugins.
+    ///
+    /// Those probes are the bulk of a sweep's wall clock (measured: 22 s out of
+    /// a 24 s sweep, 40 sequential reads against a 246-plugin catalogue) and
+    /// they only decide whether a catalogue row reads "1.2.0" or "version
+    /// inconnue". Nobody waits on that label; the user who just clicked
+    /// Installer waits on everything else. Versions already learnt are still
+    /// served from the memo, so this drops nothing the previous sweep knew — it
+    /// only declines to acquire more, which the next poller pass does anyway.
+    LocalChange,
+}
+
+impl SweepScope {
+    /// How many not-installed plugins may have their manifest probed.
+    fn uninstalled_probe_cap(self) -> usize {
+        match self {
+            SweepScope::Full => MAX_UNINSTALLED_MANIFEST_PROBES,
+            SweepScope::LocalChange => 0,
+        }
     }
-    sweep_or_reuse(&app)
+}
+
+/// Rebuild the whole view. See [`RefreshMode`] for what each mode costs.
+#[tauri::command]
+pub async fn refresh_all(app: AppHandle, mode: Option<RefreshMode>) -> Result<RefreshResult> {
+    match mode.unwrap_or_default() {
+        RefreshMode::Auto => sweep_or_reuse(&app),
+        RefreshMode::Local => sweep_scoped(&app, SweepScope::LocalChange),
+        RefreshMode::User => {
+            // The user is present: give a host written off by the circuit
+            // breaker another go before sweeping.
+            crate::github_client::reset_host_health();
+            sweep_remote(&app)
+        }
+    }
 }
 
 /// The full remote sweep: auto-update marketplaces, rebuild the local view,
@@ -207,6 +267,11 @@ pub async fn refresh_all(app: AppHandle, force: Option<bool>) -> Result<RefreshR
 /// the same pass on a timer — the UI is destroyed in tray mode, so anything that
 /// only ran from a frontend query effectively stopped running at all.
 pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
+    sweep_scoped(app, SweepScope::Full)
+}
+
+/// [`sweep_remote`], with an explicit budget for the optional remote work.
+pub(crate) fn sweep_scoped(app: &AppHandle, scope: SweepScope) -> Result<RefreshResult> {
     // One sweep at a time. Two callers now reach this — the frontend command and
     // `catalog_poller` — and step 1 re-extracts marketplace directories in place
     // (`rmtree_robust` then unzip). A concurrent sweep reading that directory
@@ -332,18 +397,10 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
         (!installed, i)
     });
 
-    // How many *not installed* plugins may have their manifest probed in one
-    // sweep.
-    //
-    // Reading a plugin's own manifest is what turns a registry entry into a
-    // version number, and it is worth a request for something on disk that
-    // might be out of date. For a plugin nobody installed it only decides
-    // whether the catalogue row reads "1.2.0" or "version inconnue" — at one to
-    // three requests each, that is several hundred round trips per sweep for a
-    // large catalogue, repeated every half hour. Installed plugins are never
-    // capped; the rest are served first-come and keep whatever the registry
-    // said beyond it.
-    const MAX_UNINSTALLED_MANIFEST_PROBES: usize = 40;
+    // How many *not installed* plugins may have their manifest probed in this
+    // sweep — [`SweepScope::Full`]'s cap, or none at all for a sweep that only
+    // has to describe a local change.
+    let probe_cap = scope.uninstalled_probe_cap();
     let mut uninstalled_probes = 0usize;
     let mut probes_skipped = 0usize;
     let mut probes_from_memo = 0usize;
@@ -437,7 +494,7 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
                     }
                     continue;
                 }
-                if uninstalled_probes >= MAX_UNINSTALLED_MANIFEST_PROBES {
+                if uninstalled_probes >= probe_cap {
                     probes_skipped += 1;
                     continue;
                 }
@@ -500,9 +557,13 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
         }
     }
 
+    // Persist whatever versions this pass learnt, so the next launch starts from
+    // them instead of re-probing under the same cap.
+    flush_uninstalled_versions();
+
     if probes_skipped > 0 || probes_from_memo > 0 {
         tracing::info!(
-            "sweep: not-installed plugins - {probes_from_memo} from cache, {uninstalled_probes} probed, {probes_skipped} left for a later pass (cap: {MAX_UNINSTALLED_MANIFEST_PROBES})"
+            "sweep: not-installed plugins - {probes_from_memo} from cache, {uninstalled_probes} probed, {probes_skipped} left for a later pass (cap: {probe_cap})"
         );
     }
 
@@ -545,29 +606,83 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
 /// "obsolète" badge — are never served from here.
 const UNINSTALLED_VERSION_TTL_SECS: u64 = 6 * 3600;
 
-static UNINSTALLED_VERSIONS: std::sync::Mutex<
-    Option<std::collections::HashMap<String, (std::time::Instant, Option<String>)>>,
-> = std::sync::Mutex::new(None);
+/// One remembered probe. `version: None` is a remembered *miss* — the probe ran
+/// and found no version — and is as worth keeping as a hit.
+#[derive(Clone, Serialize, Deserialize)]
+struct VersionMemoEntry {
+    version: Option<String>,
+    /// Unix seconds. A wall clock rather than an `Instant`, because this
+    /// outlives the process now.
+    at: u64,
+}
+
+#[derive(Default)]
+struct VersionMemo {
+    entries: std::collections::HashMap<String, VersionMemoEntry>,
+    /// Set by every insert, cleared by [`flush_uninstalled_versions`]; the file
+    /// is only rewritten when something actually changed.
+    dirty: bool,
+}
+
+static UNINSTALLED_VERSIONS: std::sync::Mutex<Option<VersionMemo>> = std::sync::Mutex::new(None);
+
+/// `<exe_dir>/config/plugin_versions.json`.
+fn version_memo_path() -> PathBuf {
+    config::app_settings_dir().join("plugin_versions.json")
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Read the memo back from disk, dropping whatever has expired.
+///
+/// Without this the memo was per-session, so the first sweep after every launch
+/// paid the full probe cap again — and a cap of 40 against a 246-plugin
+/// catalogue means the versions were never all learnt in the first place.
+fn load_version_memo() -> VersionMemo {
+    let path = version_memo_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return VersionMemo::default();
+    };
+    let parsed: std::collections::HashMap<String, VersionMemoEntry> =
+        match serde_json::from_str(&text) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("plugin_versions.json unreadable ({e}) — starting empty");
+                return VersionMemo::default();
+            }
+        };
+    let now = now_secs();
+    let entries: std::collections::HashMap<_, _> = parsed
+        .into_iter()
+        .filter(|(_, e)| now.saturating_sub(e.at) < UNINSTALLED_VERSION_TTL_SECS)
+        .collect();
+    tracing::debug!("plugin version memo: {} entry(ies) restored", entries.len());
+    VersionMemo {
+        entries,
+        dirty: false,
+    }
+}
 
 fn uninstalled_memo_key(gh: &GitHubClient, src: &crate::models::PluginSource) -> String {
     format!("{}|{}|{}", gh.host(), src.repo, src.r#ref)
 }
 
 /// The remembered version for a not-installed plugin, if it is still fresh.
-///
-/// `Some(None)` is a remembered *miss* — the probe ran and found no version —
-/// and is as worth keeping as a hit: without it every unversioned plugin is
-/// re-probed on every sweep.
 fn uninstalled_version_memo(
     gh: &GitHubClient,
     src: &crate::models::PluginSource,
 ) -> Option<Option<String>> {
     let key = uninstalled_memo_key(gh, src);
-    let guard = UNINSTALLED_VERSIONS.lock().unwrap_or_else(|e| e.into_inner());
-    let map = guard.as_ref()?;
-    let (at, v) = map.get(&key)?;
-    (at.elapsed() < std::time::Duration::from_secs(UNINSTALLED_VERSION_TTL_SECS))
-        .then(|| v.clone())
+    let mut guard = UNINSTALLED_VERSIONS.lock().unwrap_or_else(|e| e.into_inner());
+    let memo = guard.get_or_insert_with(load_version_memo);
+    let entry = memo.entries.get(&key)?;
+    (now_secs().saturating_sub(entry.at) < UNINSTALLED_VERSION_TTL_SECS)
+        .then(|| entry.version.clone())
 }
 
 fn remember_uninstalled_version(
@@ -577,13 +692,43 @@ fn remember_uninstalled_version(
 ) {
     let key = uninstalled_memo_key(gh, src);
     let mut guard = UNINSTALLED_VERSIONS.lock().unwrap_or_else(|e| e.into_inner());
-    let map = guard.get_or_insert_with(std::collections::HashMap::new);
-    // Blown wholesale rather than evicted by age: it is a per-session cache for
-    // catalogue labels, and the cap only bounds a pathological catalogue.
-    if map.len() >= 2000 {
-        map.clear();
+    let memo = guard.get_or_insert_with(load_version_memo);
+    // Blown wholesale rather than evicted by age: it is a cache for catalogue
+    // labels, and the cap only bounds a pathological catalogue.
+    if memo.entries.len() >= 2000 {
+        memo.entries.clear();
     }
-    map.insert(key, (std::time::Instant::now(), version));
+    memo.entries.insert(key, VersionMemoEntry { version, at: now_secs() });
+    memo.dirty = true;
+}
+
+/// Write the memo out, once, at the end of a sweep that learnt something.
+///
+/// `atomic_write_json` skips a byte-identical rewrite, and `dirty` keeps a sweep
+/// that probed nothing from even serializing.
+fn flush_uninstalled_versions() {
+    let payload = {
+        let mut guard = UNINSTALLED_VERSIONS.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(memo) = guard.as_mut() else {
+            return;
+        };
+        if !memo.dirty {
+            return;
+        }
+        memo.dirty = false;
+        let now = now_secs();
+        memo.entries
+            .retain(|_, e| now.saturating_sub(e.at) < UNINSTALLED_VERSION_TTL_SECS);
+        serde_json::to_value(&memo.entries)
+    };
+    match payload {
+        Ok(v) => {
+            if let Err(e) = installer::atomic_write_json(&version_memo_path(), &v) {
+                tracing::warn!("could not persist the plugin version memo: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("could not serialize the plugin version memo: {e}"),
+    }
 }
 
 fn plugin_key(marketplace: &str, plugin: &str) -> String {

@@ -178,10 +178,13 @@ export function AddMarketplaceDialog({
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["app-settings"] });
-      // Forced: the backend reuses a recent sweep for background triggers, and
-      // that result predates the marketplace we just created — reusing it is
-      // precisely how an added marketplace ends up appearing nowhere.
-      forceRefresh(qc);
+      // "user", not "local": the backend reuses a recent sweep for background
+      // triggers, and that result predates the marketplace we just created —
+      // reusing it is precisely how an added marketplace ends up appearing
+      // nowhere. The full mode also earns its cost here, since a brand-new
+      // catalogue has no memoised versions at all and the whole point of adding
+      // it is to see what is in it.
+      forceRefresh(qc, "user");
       notify({
         kind: "success",
         title: "Marketplace ajouté et installé",

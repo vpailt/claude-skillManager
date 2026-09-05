@@ -23,8 +23,9 @@ export function useTrayEvents() {
     offs.push(
       listen("tray://refresh", () => {
         log.info("tray: refresh requested");
-        // A menu click is the user asking, so it forces — same as the sidebar.
-        forceRefresh(qc);
+        // A menu click is the user asking, so it is the full sweep — same as
+        // the sidebar button.
+        forceRefresh(qc, "user");
       })
     );
 

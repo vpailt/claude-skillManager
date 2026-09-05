@@ -6,6 +6,7 @@ import {
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/api";
+import type { RefreshMode } from "@/lib/types";
 import { useApp } from "@/stores/app";
 import { createLogger } from "@/lib/logger";
 
@@ -18,19 +19,28 @@ const log = createLogger("refresh");
  *  window, while a user gesture — or a change this app just made on disk — must
  *  not be, or the new marketplace would be missing from the answer that follows
  *  its own creation. */
-let forceNext = false;
+let modeNext: RefreshMode | null = null;
 
 /**
  * Ask for a real sweep rather than a possibly-reused one.
  *
- * Use it for every trigger that follows a local change (install, uninstall,
- * marketplace added, skill deleted) and for the explicit Refresh gestures. The
- * backend also reads it as "the user is present": it clears each host's failure
- * tally, so reconnecting the VPN and pressing Rafraîchir works immediately
- * instead of after the circuit breaker's cooldown.
+ * Two flavours, and picking the right one is what keeps a click responsive:
+ *
+ * - `"local"` (the default) — this app just changed the install state on disk.
+ *   The reuse window is skipped, but the backend also drops the manifest probes
+ *   for plugins nobody installed, which were the bulk of a sweep's wall clock
+ *   (22 s of 24 s, measured). Use it for install, uninstall, enable/disable,
+ *   marketplace added, skill deleted.
+ * - `"user"` — the explicit Rafraîchir gesture (sidebar or tray). Full sweep,
+ *   and every host's failure tally is cleared, so reconnecting the VPN and
+ *   pressing Rafraîchir works immediately instead of after the circuit
+ *   breaker's cooldown.
+ *
+ * A pending `"user"` is never downgraded by a `"local"` that lands before the
+ * query runs: the user asked for the expensive one.
  */
-export function forceRefresh(qc: QueryClient) {
-  forceNext = true;
+export function forceRefresh(qc: QueryClient, mode: RefreshMode = "local") {
+  if (modeNext !== "user") modeNext = mode;
   qc.invalidateQueries({ queryKey: ["refresh"] });
 }
 
@@ -41,9 +51,9 @@ export function useRefresh() {
   const query = useQuery({
     queryKey: ["refresh"],
     queryFn: () => {
-      const force = forceNext;
-      forceNext = false;
-      return api.refreshAll(force);
+      const mode = modeNext ?? "auto";
+      modeNext = null;
+      return api.refreshAll(mode);
     },
     // `refresh_all` is an N+1 sweep across the forge (registry, push rights, then
     // a manifest read per plugin and a skills listing per installed plugin). At

@@ -327,9 +327,11 @@ export function SettingsDialog() {
     onSuccess: (s) => {
       if (!s) return;
       qc.setQueryData<SettingsType>(["app-settings"], s);
-      // Forced: an import replaces the marketplace list wholesale, so the sweep
-      // that follows must be a real one rather than the previous result reused.
-      forceRefresh(qc);
+      // "user": an import replaces the marketplace list wholesale, so the sweep
+      // that follows must be a real one rather than the previous result reused
+      // — and the catalogues it brings in are new, so their versions are worth
+      // probing rather than deferring to the next poller pass.
+      forceRefresh(qc, "user");
       push({ kind: "success", title: "Paramètres importés" });
     },
     onError: (e) =>

@@ -158,10 +158,11 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
               : "Rafraîchir — re-scanne l'installation locale et les forges (GitHub / Gitea), quota limité"
           }
           onClick={() => {
-            // Forced: the user is present, so skip the backend's reuse window
-            // and give a host written off by the circuit breaker another go —
-            // "reconnect the VPN, press Rafraîchir" has to work at once.
-            forceRefresh(qc);
+            // "user": the person is present, so this is the expensive sweep —
+            // no reuse window, full probing, and a host written off by the
+            // circuit breaker gets another go ("reconnect the VPN, press
+            // Rafraîchir" has to work at once).
+            forceRefresh(qc, "user");
             // Recompute the usage audit (dashboard top-3 skills + audit page)
             // from the transcripts — the index re-parses only changed files.
             qc.invalidateQueries({ queryKey: ["usage-audit"] });

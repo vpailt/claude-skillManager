@@ -70,6 +70,11 @@ export function BulkActionBar({ onPublishSkills }: Props) {
   const clear = useTreeSelection((s) => s.clear);
   const marketplaces = useApp((s) => s.marketplaces);
   const localOnly = useApp((s) => s.localOnly);
+  // Each op patches the tree as it succeeds, so a long batch shows its progress
+  // instead of standing still until the closing sweep lands.
+  const markInstalled = useApp((s) => s.markPluginInstalled);
+  const markUninstalled = useApp((s) => s.markPluginUninstalled);
+  const markEnabled = useApp((s) => s.markPluginEnabled);
   const syncMap = useSkillSync((s) => s.status);
   const [confirm, setConfirm] = useState<null | "uninstall" | "delete">(null);
 
@@ -164,7 +169,9 @@ export function BulkActionBar({ onPublishSkills }: Props) {
         if (!marketplace.installed && marketplace.sourceRepo) {
           await installMarketplaceOnce(marketplace);
         }
-        return api.installPlugin(plugin);
+        const path = await api.installPlugin(plugin);
+        markInstalled(plugin);
+        return path;
       },
     })),
   ];
@@ -173,21 +180,31 @@ export function BulkActionBar({ onPublishSkills }: Props) {
     toUpdate.map(({ plugin, marketplace }) => ({
       id: plKey(marketplace.name, plugin.name),
       label: `${plugin.name} → ${plugin.latestVersion ?? "?"}`,
-      run: () => api.installPlugin(plugin),
+      run: async () => {
+        const path = await api.installPlugin(plugin);
+        markInstalled(plugin);
+        return path;
+      },
     }));
 
   const enableOps = (value: boolean): BulkOp[] =>
     (value ? toEnable : toDisable).map(({ plugin, marketplace }) => ({
       id: plKey(marketplace.name, plugin.name),
       label: plugin.name,
-      run: () => api.setPluginEnabled(plugin.name, marketplace.name, value),
+      run: async () => {
+        await api.setPluginEnabled(plugin.name, marketplace.name, value);
+        markEnabled(marketplace.name, plugin.name, value);
+      },
     }));
 
   const uninstallOps = (): BulkOp[] => [
     ...toUninstall.map(({ plugin, marketplace }) => ({
       id: plKey(marketplace.name, plugin.name),
       label: plugin.name,
-      run: () => api.uninstallPlugin(plugin),
+      run: async () => {
+        await api.uninstallPlugin(plugin);
+        markUninstalled(plugin);
+      },
     })),
     ...uninstallableMps.map((m) => ({
       id: mpKey(m.name),

@@ -1095,6 +1095,11 @@ function PluginDetail({
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
   const findMarketplace = useApp((s) => s.findMarketplace);
+  // Optimistic patches: the refresh that confirms them is a remote pass, and
+  // until it lands the card would still show the state we just left.
+  const markInstalled = useApp((s) => s.markPluginInstalled);
+  const markUninstalled = useApp((s) => s.markPluginUninstalled);
+  const markEnabled = useApp((s) => s.markPluginEnabled);
   const installMarketplace = useInstallMarketplace();
   const installed =
     plugin.installState === "installed" ||
@@ -1114,6 +1119,7 @@ function PluginDetail({
       return api.installPlugin(p);
     },
     onSuccess: (_, p) => {
+      markInstalled(p);
       forceRefresh(qc);
       notify({ kind: "success", title: "Plugin installé", body: p.name });
     },
@@ -1127,6 +1133,7 @@ function PluginDetail({
   const uninstallMutation = useMutation({
     mutationFn: api.uninstallPlugin,
     onSuccess: (_, p) => {
+      markUninstalled(p);
       forceRefresh(qc);
       notify({ kind: "success", title: "Plugin désinstallé", body: p.name });
     },
@@ -1147,7 +1154,10 @@ function PluginDetail({
       marketplace: string;
       value: boolean;
     }) => api.setPluginEnabled(pl, marketplace, value),
-    onSuccess: () => forceRefresh(qc),
+    onSuccess: (_, vars) => {
+      markEnabled(vars.marketplace, vars.plugin, vars.value);
+      forceRefresh(qc);
+    },
     onError: (e, vars) =>
       notify({
         kind: "error",

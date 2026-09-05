@@ -111,6 +111,9 @@ SkillManager/
 │   ├── skill_baselines.json   ← per-skill-folder sync references (`skill_watch.rs`)
 │   ├── skill_new.json         ← skills created locally, not yet pushed
 │   ├── skill_deleted.json     ← skills deleted locally, removal not yet pushed
+│   ├── plugin_versions.json   ← memoised manifest versions of *not installed*
+│   │                             plugins (6 h TTL); survives a restart so the
+│   │                             first sweep after launch re-probes nothing
 │   └── usage_index.json       ← parsed-transcript cache (`usage_audit.rs`)
 └── logs/
     └── skillmanager.YYYY-MM-DD.log
@@ -234,10 +237,37 @@ frontend command and `catalog_poller` come through, and it hands back the last
 result while it is younger than `SWEEP_REUSE_SECS` (45 s). The mutex only ever
 serialised those two; it never stopped them being duplicates — the poller
 finished a sweep, emitted `catalog-changed`, and the frontend answered by asking
-for the same sweep again. `refresh_all(force: true)` bypasses the window, and
-every trigger that follows a *local* change must use it (`forceRefresh` in
-`hooks/useRefresh.ts`) — a reused result predates the marketplace you just
-added, which is exactly how an added marketplace ends up appearing nowhere.
+for the same sweep again.
+
+`refresh_all` takes a **`RefreshMode`**, and picking the right one is what keeps
+a click responsive:
+
+- `auto` — a background trigger. Answerable from the reuse window.
+- `local` — this app just changed the install state on disk (install,
+  uninstall, enable/disable, marketplace added, skill deleted). The window is
+  bypassed (a reused result predates the marketplace you just added, which is
+  exactly how an added marketplace ends up appearing nowhere) **and** the
+  manifest probes for not-installed plugins are dropped entirely. Those probes
+  were 22 s of a measured 24 s sweep — 40 sequential reads whose only product
+  is whether a catalogue row reads "1.2.0" or "version inconnue" — so every
+  install used to freeze the tree for that long. Versions already memoised are
+  still served, so the mode acquires no new labels rather than losing the ones
+  it had; the next poller pass fills them in.
+- `user` — the Rafraîchir button (sidebar or tray). Full probing, and every
+  host's failure tally is cleared.
+
+`forceRefresh(qc, mode)` in `hooks/useRefresh.ts` is the frontend door, and it
+defaults to `local`; a pending `user` is never downgraded by a `local` that
+lands before the query runs. Nothing invalidates `["refresh"]` directly after a
+local change — `useBulkRunner` routes that key through `forceRefresh` for the
+same reason.
+
+**The sweep is not the only thing that may update the view.** A click's own
+outcome is applied to the store immediately (`markPluginInstalled` /
+`markPluginUninstalled` / `markPluginEnabled` in `stores/app.ts`), and the sweep
+overwrites the whole tree behind it. Keep those patches to what the click
+certainly did: a freshly installed plugin's *skills* are left to the local
+scan — guessing them would put rows in the tree that may not exist.
 
 The sweep also **deafens both filesystem watchers while it runs**.
 `claude_watch::quiet_guard` is held across `auto_update_if_changed`: re-extracting
@@ -633,7 +663,8 @@ falling through published a release whose entire diff was a version bump.
   manual translation.
 - App-state files (`config.properties`, `logging.properties`, `marketplaces.json`,
   `gitea.json`, `pr_history.json`, `pending_prs.json`, `skill_baselines.json`,
-  `skill_new.json`, `skill_deleted.json`, `usage_index.json`, `logs/`) sit under
+  `skill_new.json`, `skill_deleted.json`, `plugin_versions.json`,
+  `usage_index.json`, `logs/`) sit under
   `<exe_dir>/`. Never write
   to `%APPDATA%` directly — go through `config::app_settings_dir()` or
   `config::logs_dir()`.

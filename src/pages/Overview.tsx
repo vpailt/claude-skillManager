@@ -151,6 +151,7 @@ function NeedsAttentionSection() {
   const navigate = useNavigate();
   const marketplaces = useApp((s) => s.marketplaces);
   const setSelection = useApp((s) => s.setSelection);
+  const markInstalled = useApp((s) => s.markPluginInstalled);
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
 
@@ -165,6 +166,9 @@ function NeedsAttentionSection() {
   const installMutation = useMutation({
     mutationFn: api.installPlugin,
     onSuccess: (_, plugin) => {
+      // The row leaves "obsolète" at once; the sweep behind `forceRefresh` is a
+      // remote pass and would otherwise keep it amber for seconds.
+      markInstalled(plugin);
       // Forced: the plugin cache just changed on disk, so the sweep that
       // answers must be a real one rather than the previous result reused.
       forceRefresh(qc);

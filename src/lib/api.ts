@@ -19,6 +19,7 @@ import type {
   Plugin,
   PRRecord,
   Provider,
+  RefreshMode,
   RefreshResult,
   ReleaseNote,
   RemoteSkillInfo,
@@ -68,9 +69,9 @@ export const api = {
     invoke<void>("logging_log", { level, target, message }),
 
   // --- refresh ---
-  /** `force` skips the backend's short reuse window and clears the per-host
-   *  failure tally — it is the user asking, not a background trigger. */
-  refreshAll: (force = false) => invoke<RefreshResult>("refresh_all", { force }),
+  /** See {@link RefreshMode} — the three modes cost very different amounts. */
+  refreshAll: (mode: RefreshMode = "auto") =>
+    invoke<RefreshResult>("refresh_all", { mode }),
 
   // --- plugins ---
   installPlugin: (plugin: Plugin) =>

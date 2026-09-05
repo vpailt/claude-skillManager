@@ -11,6 +11,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNotifications } from "@/stores/notifications";
+import { forceRefresh } from "@/hooks/useRefresh";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("bulk-runner");
@@ -102,7 +103,12 @@ export function useBulkRunner<T = unknown>(options: BulkRunnerOptions = {}) {
       setRunning(false);
 
       for (const key of invalidateRef.current) {
-        qc.invalidateQueries({ queryKey: key });
+        // The refresh query goes through `forceRefresh`, never a plain
+        // invalidation: a batch changes the install state on disk, and a plain
+        // invalidation is answerable from the backend's reuse window — i.e.
+        // with the view from *before* the batch ran.
+        if (key[0] === "refresh") forceRefresh(qc);
+        else qc.invalidateQueries({ queryKey: key });
       }
 
       if (notify) {

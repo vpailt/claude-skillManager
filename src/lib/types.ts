@@ -250,6 +250,16 @@ export interface RefreshResult {
   localOnly: Marketplace;
 }
 
+/** Why a sweep is being asked for — mirrors `commands::RefreshMode`.
+ *
+ *  - `auto`  a background trigger; the backend may answer from its reuse window.
+ *  - `local` this app just changed the install state on disk. Never reused, and
+ *            deliberately cheap: it skips the manifest probes for plugins nobody
+ *            installed, which are the bulk of a sweep's wall clock.
+ *  - `user`  the user pressed Rafraîchir: no reuse, every host's failure tally
+ *            cleared, full probing. */
+export type RefreshMode = "auto" | "local" | "user";
+
 export interface PRRecord {
   repo: string;
   number: number;
