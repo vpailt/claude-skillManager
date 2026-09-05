@@ -36,9 +36,15 @@ fn level_filter(level: &str) -> EnvFilter {
         "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE" => level,
         _ => "INFO".to_string(),
     };
-    // Only filter our own crate to keep deps quiet at TRACE.
-    EnvFilter::try_new(format!("skillmanager_lib={level}"))
-        .unwrap_or_else(|_| EnvFilter::new("skillmanager_lib=info"))
+    // Only our own crate and the frontend bridge, to keep deps quiet at TRACE.
+    //
+    // `frontend` has to be named explicitly: `logging_log` emits under that
+    // target, so a filter naming `skillmanager_lib` alone dropped every line the
+    // React side sent — the file logging that `lib/logger.ts` exists to provide
+    // recorded nothing at all. Diagnosing a refresh loop meant guessing at which
+    // event drove it, because the one log line that says so never arrived.
+    EnvFilter::try_new(format!("skillmanager_lib={level},frontend={level}"))
+        .unwrap_or_else(|_| EnvFilter::new("skillmanager_lib=info,frontend=info"))
 }
 
 /// Initialise the global subscriber. Safe to call exactly once (during
@@ -71,7 +77,7 @@ pub fn init() {
             .try_init();
     } else {
         let _ = tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new("skillmanager_lib=warn"))
+            .with_env_filter(EnvFilter::new("skillmanager_lib=warn,frontend=warn"))
             .with_ansi(false)
             .with_target(false)
             .with_writer(std::io::stderr)

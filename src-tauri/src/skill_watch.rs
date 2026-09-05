@@ -53,6 +53,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::Duration;
@@ -93,6 +94,53 @@ const EVENT: &str = "skill-sync-changed";
 /// refresh query — classifying the newcomer needs the remote, which only the
 /// refresh reads.
 pub const EVENT_TREE: &str = "skills-tree-changed";
+
+/// How many [`QuietGuard`]s are alive — this app is reading the watched folders.
+static QUIET_DEPTH: AtomicUsize = AtomicUsize::new(0);
+/// Unix millis until which events stay ignored after the last guard dropped.
+static QUIET_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+/// Filesystem events land a beat after the reads that caused them.
+const QUIET_GRACE_MS: u64 = 3_000;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn is_quiet() -> bool {
+    QUIET_DEPTH.load(Ordering::SeqCst) > 0 || now_ms() < QUIET_UNTIL_MS.load(Ordering::SeqCst)
+}
+
+/// Silences the watcher while the refresh sweep walks the folders it watches.
+///
+/// The sweep reads every watched skill folder — `local_scanner` walks each
+/// plugin directory and the user's own `skills/`, and `content_sig` opens the
+/// files. On Windows those reads are reported back as directory changes, so the
+/// watcher announced the sweep's own reads as "something moved", the frontend
+/// answered by asking for a refresh, and that refresh read the same folders
+/// again. A closed loop: the refresh spinner never stopped, and the only thing
+/// that changed when the sweep result started being reused was that the loop
+/// went quiet in the log.
+///
+/// Losing events for the duration of a sweep costs nothing: the sweep ends by
+/// re-hashing every folder itself (`SkillWatch::sync`), which is a stricter
+/// answer than the event would have produced.
+pub struct QuietGuard(());
+
+impl Drop for QuietGuard {
+    fn drop(&mut self) {
+        QUIET_UNTIL_MS.store(now_ms() + QUIET_GRACE_MS, Ordering::SeqCst);
+        QUIET_DEPTH.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Take a [`QuietGuard`]; hold it while this app reads the watched folders.
+pub fn quiet_guard() -> QuietGuard {
+    QUIET_DEPTH.fetch_add(1, Ordering::SeqCst);
+    QuietGuard(())
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -667,7 +715,9 @@ impl SkillWatch {
         let (tx, rx) = std::sync::mpsc::channel::<Vec<PathBuf>>();
         let watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             if let Ok(ev) = res {
-                let _ = tx.send(ev.paths);
+                if event_is_a_change(&ev.kind) && !is_quiet() {
+                    let _ = tx.send(ev.paths);
+                }
             }
         }) {
             Ok(w) => w,
@@ -709,6 +759,27 @@ impl SkillWatch {
                 Err(e) => tracing::debug!("skill_watch: watch {} failed: {e}", p.display()),
             }
         }
+    }
+}
+
+/// Whether a filesystem event says the *contents* moved, as opposed to someone
+/// having merely looked at them.
+///
+/// Reading a file bumps its last-access time, and Windows reports that as a
+/// change like any other. This watcher used to forward every event it was
+/// handed, so the sweep's own reads came straight back as "something moved" —
+/// `claude_watch` has filtered for exactly this reason since it was written.
+/// Metadata-only modifications are excluded here for the same reason, which is
+/// stricter than `claude_watch` needs to be: it watches two files, this watches
+/// every byte of every installed skill.
+fn event_is_a_change(kind: &notify::EventKind) -> bool {
+    use notify::event::{EventKind, ModifyKind};
+    match kind {
+        EventKind::Create(_) | EventKind::Remove(_) => true,
+        EventKind::Modify(ModifyKind::Metadata(_)) => false,
+        EventKind::Modify(_) => true,
+        // `Access`, `Any` and `Other` say nothing about the contents.
+        _ => false,
     }
 }
 
@@ -844,17 +915,26 @@ fn rescan(shared: &Arc<Mutex<Shared>>, touched: &[PathBuf]) -> (Vec<SkillState>,
         let rn = norm_path(root);
         *n == rn || n.starts_with(&format!("{rn}/"))
     };
+    // Strictly *inside* `root`, never the directory itself.
+    let below = |root: &str, n: &String| n.starts_with(&format!("{}/", norm_path(root)));
 
     let hit: Vec<&Snap> = snapshot
         .iter()
         .filter(|s| norms.iter().any(|n| under(&s.folder, n)))
         .collect();
 
-    // A path under a watched plugin but under no known skill folder means a
-    // folder appeared or vanished — the case the old per-skill watch set could
-    // not see at all, since nobody was listening to `<plugin>/skills/` itself.
+    // A path inside a watched plugin's `skills/` but under no known skill folder
+    // means a folder appeared or vanished — the case the old per-skill watch set
+    // could not see at all, since nobody was listening to `<plugin>/skills/`.
+    //
+    // Restricted to the `skills/` subtree on purpose. "Anywhere under a plugin
+    // root" also matched the root itself, `manifest.json`, `.claude-plugin/` and
+    // every file the plugin ships outside `skills/` — none of which changes the
+    // set of skills, and all of which the refresh sweep touches while scanning.
+    // Each match asked the frontend for a full refresh, which scanned again.
     let tree_changed = norms.iter().any(|n| {
-        plugin_roots.iter().any(|p| under(p, n)) && !snapshot.iter().any(|s| under(&s.folder, n))
+        skill_parents(&plugin_roots).iter().any(|p| below(p, n))
+            && !snapshot.iter().any(|s| under(&s.folder, n))
     });
 
     // An empty or unmatched path set falls back to re-checking everything:
@@ -1117,6 +1197,24 @@ fn rel_posix(folder: &Path, path: &Path) -> Option<String> {
 /// prefix, unify separators to `/`, drop any trailing slash, and case-fold
 /// (Windows paths are case-insensitive). Both sides come from app-constructed
 /// paths, so this only absorbs formatting differences — it resolves nothing.
+/// The directories a new skill folder can appear directly inside.
+///
+/// A plugin root holds its skills under `skills/`; the user's own skills
+/// directory *is* that folder, so it stands for itself.
+fn skill_parents(plugin_roots: &[String]) -> Vec<String> {
+    plugin_roots
+        .iter()
+        .map(|r| {
+            let n = norm_path(r);
+            if n.ends_with("/skills") {
+                n
+            } else {
+                format!("{n}/skills")
+            }
+        })
+        .collect()
+}
+
 fn norm_path(p: &str) -> String {
     let p = p.strip_prefix(r"\\?\").unwrap_or(p);
     p.replace('\\', "/").trim_end_matches('/').to_lowercase()

@@ -239,10 +239,21 @@ every trigger that follows a *local* change must use it (`forceRefresh` in
 `hooks/useRefresh.ts`) — a reused result predates the marketplace you just
 added, which is exactly how an added marketplace ends up appearing nowhere.
 
-The sweep also **deafens `claude_watch` while it writes** (`claude_watch::quiet_guard`,
-held across `auto_update_if_changed`). Re-extracting a marketplace rewrites
-`~/.claude/plugins/`, the watcher reported that as an outside change, and the
-refresh it triggered made the same writes again.
+The sweep also **deafens both filesystem watchers while it runs**.
+`claude_watch::quiet_guard` is held across `auto_update_if_changed`: re-extracting
+a marketplace rewrites `~/.claude/plugins/`, the watcher reported that as an
+outside change, and the refresh it triggered made the same writes again.
+`skill_watch::quiet_guard` is held across the **whole** sweep, because the sweep
+walks every plugin directory and the user's `skills/` and reads every file it
+compares — those reads came straight back as events, and `rescan` called any of
+them a change to the *set* of skill folders, which is a `skills-tree-changed`,
+which is another refresh. Measured on a shipped build: a sweep started exactly
+45 s after the previous one finished, forever, which is the reuse window
+lapsing — the loop had not stopped, it had merely gone quiet in the log.
+`rescan` now counts a tree change only inside a `skills/` directory, not anywhere
+under a plugin root (which matched the root itself and every file outside
+`skills/`), and `useBackendEvents` keeps a 15 s floor between two refresh
+invalidations as a backstop.
 
 Two invariants worth keeping:
 
@@ -327,7 +338,10 @@ falling through published a release whose entire diff was a version bump.
   `UiPrefs` / `LoggingConfig` structs, and the load/save split between
   `config.properties` (scalars) and `marketplaces.json` (the list).
 - `logger.rs` — boots the `tracing` subscriber against `<exe_dir>/logs/`. `init()` is
-  idempotent. `purge()` handles the Windows file-lock case by truncating in place when
+  idempotent. The filter names **both** `skillmanager_lib` and `frontend`:
+  `logging_log` emits under the latter, so a filter naming only the crate
+  silently dropped every line the React side sent, and the file logging
+  `lib/logger.ts` exists to provide recorded nothing. `purge()` handles the Windows file-lock case by truncating in place when
   removal fails. `tail()` powers the in-app log viewer.
 - `github_client.rs::extract_zipball` — strips the top-level `<repo>-<sha>/` folder
   GitHub adds, and uses the `\\?\` long-path prefix on Windows (via `long_path()`) to

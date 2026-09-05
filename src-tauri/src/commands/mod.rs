@@ -235,6 +235,12 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
     let over_budget =
         || started.elapsed() > std::time::Duration::from_secs(SWEEP_BUDGET_SECS);
 
+    // Deafen the skill watcher for the whole pass. The sweep walks every plugin
+    // directory and the user's `skills/`, and reads every file it compares — on
+    // Windows all of that is reported straight back as a change, which had the
+    // frontend asking for another refresh the moment this one landed.
+    let _quiet_skills = crate::skill_watch::quiet_guard();
+
     tracing::info!("refresh_all started");
     let settings = config::load_settings();
 
