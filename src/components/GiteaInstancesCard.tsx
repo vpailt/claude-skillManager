@@ -41,6 +41,12 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const ACX_GITEA_URL = "https://git.almaviacx.local";
 const ACX_GITEA_HOST = "git.almaviacx.local";
 const ACX_TOKEN_SETTINGS_URL = `${ACX_GITEA_URL}/user/settings/applications`;
+/** The instance is served by an internal CA that Windows does not trust, so
+ *  every read fails at the TLS handshake until verification is skipped. The
+ *  checkbox exists to be *un*ticked by someone who knows better, not to be
+ *  hunted for on a fresh install. Existing installs are brought in line once by
+ *  `config::migrate_acx_tls_default`. */
+const ACX_DEFAULT_INSECURE_TLS = true;
 
 const hostOf = (url: string) =>
   url
@@ -104,7 +110,8 @@ export function GiteaInstancesCard() {
   // key + TLS mode + status query have something to hang off of.
   const seededRef = useRef(false);
   const seed = useMutation({
-    mutationFn: () => api.settingsUpsertGiteaInstance(ACX_GITEA_URL, false),
+    mutationFn: () =>
+      api.settingsUpsertGiteaInstance(ACX_GITEA_URL, ACX_DEFAULT_INSECURE_TLS),
     onSuccess: onSettings,
   });
   useEffect(() => {
@@ -226,7 +233,7 @@ export function GiteaInstancesCard() {
 
           <label className="flex cursor-pointer items-center gap-2 text-xs">
             <Switch
-              checked={inst?.insecureTls ?? false}
+              checked={inst?.insecureTls ?? ACX_DEFAULT_INSECURE_TLS}
               onCheckedChange={(v) => toggleInsecure.mutate(v)}
               disabled={!inst || toggleInsecure.isPending}
             />

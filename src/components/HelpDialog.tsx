@@ -74,10 +74,11 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
                     <div className="font-medium">Dashboard</div>
                     <div className="text-xs text-muted-foreground">
                       Vue d'ensemble : compteurs (marketplaces / plugins /
-                      skills), état des connexions GitHub et Gitea, plugins{" "}
-                      <em>à traiter</em> (mises à jour disponibles), suivi des PR
-                      des marketplaces, et activité récente. Un aperçu, peu
-                      d'actions.
+                      skills), plugins <em>à traiter</em> (mises à jour
+                      disponibles), suivi des PR des marketplaces, et activité
+                      récente. Un aperçu, peu d'actions. L'état des connexions
+                      GitHub et Gitea est dans le bandeau de gauche, sous la
+                      navigation.
                     </div>
                   </div>
                 </li>

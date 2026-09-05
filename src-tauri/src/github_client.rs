@@ -24,7 +24,7 @@ use std::fs::{create_dir_all, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const GITHUB_API: &str = "https://api.github.com";
 
@@ -48,6 +48,53 @@ static CLIENT_POOL: OnceLock<Mutex<HashMap<String, Client>>> = OnceLock::new();
 /// Cap on distinct pooled clients. The pool only grows when the token or the set
 /// of registered hosts changes; the cap just bounds a pathological case.
 const MAX_POOLED_CLIENTS: usize = 8;
+
+/// Per-host read-path health, the circuit breaker behind [`GitHubClient::guard`].
+///
+/// A refresh sweep issues hundreds of reads: a registry per marketplace, a
+/// manifest probe and a git tree per plugin. When the host is simply not
+/// reachable — the VPN down for the Gitea instance, the laptop resumed with no
+/// network for GitHub — every one of those paid the full connect (and often the
+/// full request) timeout, in sequence. Measured on a shipped log: one sweep
+/// spent **fifteen minutes** failing four reads and never finished. The UI's
+/// refresh spinner has no other end condition than that sweep returning, so it
+/// simply span.
+///
+/// So the first failures teach the rest of the sweep: after
+/// [`FAILURES_BEFORE_TRIP`] consecutive transport errors a host is written off
+/// for [`TRIP_COOLDOWN_SECS`], and reads against it fail immediately without
+/// touching the network. Two properties keep this safe: it guards **reads**
+/// only — a user-initiated write always goes out and reports its real error —
+/// and a short-circuited read is still a *failed* read, so "a failed remote
+/// read is never an empty one" holds: `remote_ok` stays false and the local
+/// view is kept.
+struct HostHealth {
+    consecutive_failures: u32,
+    /// Set when the breaker trips: no read is attempted before this instant.
+    blocked_until: Option<Instant>,
+    /// Why it tripped, for the message the short-circuited reads carry.
+    reason: String,
+}
+
+static HOST_HEALTH: OnceLock<Mutex<HashMap<String, HostHealth>>> = OnceLock::new();
+/// Consecutive transport failures before a host's reads are short-circuited.
+/// Two rather than one: a single dropped connection is normal.
+const FAILURES_BEFORE_TRIP: u32 = 2;
+/// How long a written-off host stays short-circuited. Long enough to save a
+/// whole sweep, short enough that reconnecting the VPN shows up on the next one.
+const TRIP_COOLDOWN_SECS: u64 = 90;
+
+fn host_health() -> &'static Mutex<HashMap<String, HostHealth>> {
+    HOST_HEALTH.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Forget every host's failure tally.
+///
+/// Called when the user explicitly asks for a refresh, so "reconnect the VPN,
+/// press Rafraîchir" works there and then instead of waiting out the cooldown.
+pub fn reset_host_health() {
+    host_health().lock().clear();
+}
 
 /// One cached conditional-GET response.
 #[derive(Clone)]
@@ -392,6 +439,172 @@ impl GitHubClient {
         }
     }
 
+    /// How this client names itself in a user-facing error.
+    ///
+    /// `GitHub`, or `Gitea (git.example.com)`. The host matters for Gitea: more
+    /// than one instance can be registered, and "which one is down" is the
+    /// whole content of the message.
+    pub fn forge_label(&self) -> String {
+        match self.provider {
+            Provider::Github => "GitHub".to_string(),
+            Provider::Gitea => format!("Gitea ({})", self.host()),
+        }
+    }
+
+    /// Build an [`Error::Forge`] already labelled with the forge that produced
+    /// it. Every failure raised from this client goes through here, so a Gitea
+    /// problem can no longer reach the UI wearing GitHub's name.
+    pub fn forge_err(&self, detail: impl std::fmt::Display) -> Error {
+        Error::Forge(format!("{}: {detail}", self.forge_label()))
+    }
+
+    /// Refuse the call when this client's host is currently written off.
+    ///
+    /// Read paths only — see [`HostHealth`]. `Ok(())` when the host is healthy
+    /// or its cooldown has lapsed.
+    fn guard(&self) -> Result<()> {
+        let host = self.host();
+        let mut map = host_health().lock();
+        let Some(h) = map.get_mut(&host) else {
+            return Ok(());
+        };
+        match h.blocked_until {
+            Some(t) if Instant::now() < t => Err(Error::Unreachable(format!(
+                "{} injoignable — {} (nouvel essai dans {} s)",
+                self.forge_label(),
+                h.reason,
+                (t - Instant::now()).as_secs()
+            ))),
+            Some(_) => {
+                // Cooldown lapsed: give the host another chance, clean slate.
+                h.blocked_until = None;
+                h.consecutive_failures = 0;
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// Record that a read against this host succeeded, clearing its tally.
+    fn note_reachable(&self) {
+        let host = self.host();
+        let mut map = host_health().lock();
+        if let Some(h) = map.get_mut(&host) {
+            h.consecutive_failures = 0;
+            h.blocked_until = None;
+        }
+    }
+
+    /// Record a transport failure; trip the breaker once they pile up.
+    fn note_transport_failure(&self, detail: &str) {
+        let host = self.host();
+        let mut map = host_health().lock();
+        let h = map.entry(host.clone()).or_insert(HostHealth {
+            consecutive_failures: 0,
+            blocked_until: None,
+            reason: String::new(),
+        });
+        h.consecutive_failures += 1;
+        if h.consecutive_failures >= FAILURES_BEFORE_TRIP && h.blocked_until.is_none() {
+            h.blocked_until = Some(Instant::now() + Duration::from_secs(TRIP_COOLDOWN_SECS));
+            h.reason = detail.to_string();
+            tracing::warn!(
+                "{host}: {} consecutive transport failures - pausing reads for {}s ({detail})",
+                h.consecutive_failures,
+                TRIP_COOLDOWN_SECS
+            );
+        }
+    }
+
+    /// Trip the breaker outright, because the forge itself said to back off
+    /// (`x-ratelimit-remaining: 0`, or a `retry-after`). Hammering a spent quota
+    /// only buys 403s, and each one still costs a round trip.
+    fn note_rate_limited(&self, secs: u64, detail: &str) {
+        let host = self.host();
+        let mut map = host_health().lock();
+        let h = map.entry(host.clone()).or_insert(HostHealth {
+            consecutive_failures: 0,
+            blocked_until: None,
+            reason: String::new(),
+        });
+        h.blocked_until = Some(Instant::now() + Duration::from_secs(secs));
+        h.reason = detail.to_string();
+        tracing::warn!("{host}: rate limited - pausing reads for {secs}s ({detail})");
+    }
+
+    /// Send a **read** request through the circuit breaker.
+    ///
+    /// Checks the host is not written off, then turns a transport failure into a
+    /// tally entry on the way out. Writes deliberately do not come through here:
+    /// a PR the user just asked for must always be attempted, and must report
+    /// the forge's own error.
+    fn send_read(
+        &self,
+        req: reqwest::blocking::RequestBuilder,
+        what: &str,
+    ) -> Result<Response> {
+        self.guard()?;
+        match req.send() {
+            Ok(r) => {
+                self.note_reachable();
+                if let Some(secs) = Self::rate_limit_backoff(&r) {
+                    self.note_rate_limited(secs, "quota d'API épuisé");
+                }
+                Ok(r)
+            }
+            Err(e) => {
+                let detail = crate::error::chain(&e);
+                self.note_transport_failure(&detail);
+                tracing::debug!("{what}: {detail}");
+                Err(Error::Http(e))
+            }
+        }
+    }
+
+    /// How long to back off when a response says the quota is spent, else
+    /// `None`. Reads GitHub's `x-ratelimit-remaining` / `x-ratelimit-reset` and
+    /// the `retry-after` either forge may send.
+    fn rate_limit_backoff(resp: &Response) -> Option<u64> {
+        let status = resp.status().as_u16();
+        if status != 403 && status != 429 {
+            return None;
+        }
+        let h = resp.headers();
+        if let Some(retry) = h
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok())
+        {
+            return Some(retry.clamp(30, 3600));
+        }
+        let remaining = h
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<i64>().ok());
+        if remaining == Some(0) {
+            // `x-ratelimit-reset` is an epoch second; fall back to a flat pause
+            // when it is missing or already in the past.
+            let secs = h
+                .get("x-ratelimit-reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<i64>().ok())
+                .and_then(|reset| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()?
+                        .as_secs() as i64;
+                    if reset > now {
+                        Some((reset - now) as u64)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(300);
+            return Some(secs.clamp(30, 3600));
+        }
+        None
+    }
+
     fn request(&self, method: reqwest::Method, url: &str) -> reqwest::blocking::RequestBuilder {
         let url = if url.starts_with("http") {
             url.to_string()
@@ -437,7 +650,7 @@ impl GitHubClient {
                 req = req.header(IF_NONE_MATCH, hv);
             }
         }
-        let resp = req.send()?;
+        let resp = self.send_read(req, path)?;
 
         if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
             // Only reachable when we sent `If-None-Match`, i.e. `cached` is Some.
@@ -447,7 +660,7 @@ impl GitHubClient {
             }
         }
 
-        let resp = Self::check(resp, "GET", path)?;
+        let resp = self.check(resp, "GET", path)?;
         let etag = resp
             .headers()
             .get(ETAG)
@@ -480,7 +693,7 @@ impl GitHubClient {
     /// message reading `github: …` for a Gitea response — the variant name is
     /// shared by both providers and made 404s look like they had been sent to
     /// GitHub.
-    fn check(resp: Response, method: &str, url: &str) -> Result<Response> {
+    fn check(&self, resp: Response, method: &str, url: &str) -> Result<Response> {
         let status = resp.status();
         if status.is_client_error() || status.is_server_error() {
             let text = resp.text().unwrap_or_default();
@@ -510,11 +723,16 @@ impl GitHubClient {
             if !details.is_empty() {
                 msg = format!("{msg} [{}]", details.join(" ; "));
             }
-            let detail = format!("{method} {url} -> {status}: {msg}");
+            // The label comes from the client that made the call, never from a
+            // hard-coded prefix: the same `GitHubClient` type serves GitHub and
+            // every registered Gitea instance, so a fixed "github:" turned every
+            // Gitea 401/403/5xx into a GitHub error — shown to the user under a
+            // Gitea heading, telling them to fix the wrong token.
+            let detail = format!("{}: {method} {url} -> {status}: {msg}", self.forge_label());
             return Err(if status == reqwest::StatusCode::NOT_FOUND {
                 Error::NotFound(detail)
             } else {
-                Error::GitHub(detail)
+                Error::Forge(detail)
             });
         }
         Ok(resp)
@@ -624,7 +842,7 @@ impl GitHubClient {
         let commit_sha = commit
             .get("sha")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::GitHub(format!("no commit sha for {repo}@{r}", r = r#ref)))?;
+            .ok_or_else(|| self.forge_err(format!("no commit sha for {repo}@{r}", r = r#ref)))?;
         Ok((commit_sha.to_string(), self.list_tree_at_commit(repo, commit_sha)?))
     }
 
@@ -642,7 +860,7 @@ impl GitHubClient {
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
-            return Err(Error::GitHub(format!(
+            return Err(self.forge_err(format!(
                 "git tree for {repo}@{commit_sha} is truncated — repo too large"
             )));
         }
@@ -708,7 +926,7 @@ impl GitHubClient {
                 // already there. Same invariant as the truncated-tree guard in
                 // `list_tree`: a failed read is not an empty one.
                 let r = serde_json::from_value::<OrgRepo>(v.clone()).map_err(|e| {
-                    Error::GitHub(format!(
+                    self.forge_err(format!(
                         "GET {url}: entrée de listing illisible ({e}) — \
                          listing refusé plutôt que tronqué"
                     ))
@@ -781,8 +999,8 @@ impl GitHubClient {
     /// the traffic, so caching them would only grow the process's memory.
     pub fn get_blob_bytes(&self, repo: &str, blob_sha: &str) -> Result<Vec<u8>> {
         let url = format!("/repos/{repo}/git/blobs/{blob_sha}");
-        let resp = Self::check(
-            self.request(reqwest::Method::GET, &url).send()?,
+        let resp = self.check(
+            self.send_read(self.request(reqwest::Method::GET, &url), &url)?,
             "GET",
             &url,
         )?;
@@ -792,7 +1010,7 @@ impl GitHubClient {
             "base64" => {
                 let cleaned: String = content.chars().filter(|c| !c.is_whitespace()).collect();
                 B64.decode(cleaned)
-                    .map_err(|e| Error::GitHub(format!("blob {blob_sha} in {repo}: {e}")))
+                    .map_err(|e| self.forge_err(format!("blob {blob_sha} in {repo}: {e}")))
             }
             _ => Ok(content.as_bytes().to_vec()),
         }
@@ -812,7 +1030,7 @@ impl GitHubClient {
         };
         let data: Value = self.get_json_cached(&url, &query)?;
         if data.is_array() {
-            return Err(Error::GitHub(format!("{path} is a directory")));
+            return Err(self.forge_err(format!("{path} is a directory")));
         }
         let content = data
             .get("content")
@@ -854,8 +1072,8 @@ impl GitHubClient {
             .map(|e| e.sha)
             .ok_or_else(|| Error::NotFound(format!("{path} not found in {repo}@{r}", r = r#ref)))?;
         let blob_url = format!("/repos/{repo}/git/blobs/{blob_sha}");
-        let resp = Self::check(
-            self.request(reqwest::Method::GET, &blob_url).send()?,
+        let resp = self.check(
+            self.send_read(self.request(reqwest::Method::GET, &blob_url), &blob_url)?,
             "GET",
             &blob_url,
         )?;
@@ -889,7 +1107,7 @@ impl GitHubClient {
             "message": message,
             "files": files,
         });
-        let resp = Self::check(
+        let resp = self.check(
             self.request(reqwest::Method::POST, &url).json(&body).send()?,
             "POST",
             &url,
@@ -1035,7 +1253,7 @@ impl GitHubClient {
             return Ok(());
         }
 
-        let resp = Self::check(resp, "POST", &url)?;
+        let resp = self.check(resp, "POST", &url)?;
         let v: Value = resp.json()?;
         Self::collect_written_shas(&v, out);
         Ok(())
@@ -1125,10 +1343,12 @@ impl GitHubClient {
     /// plenty for picking the latest release tag.
     pub fn list_tags(&self, repo: &str) -> Result<Vec<String>> {
         let url = format!("/repos/{repo}/tags");
-        let resp = Self::check(
-            self.request(reqwest::Method::GET, &url)
-                .query(&[("per_page", "100"), ("limit", "100")])
-                .send()?,
+        let resp = self.check(
+            self.send_read(
+                self.request(reqwest::Method::GET, &url)
+                    .query(&[("per_page", "100"), ("limit", "100")]),
+                &url,
+            )?,
             "GET",
             &url,
         )?;
@@ -1164,7 +1384,7 @@ impl GitHubClient {
                 v.as_array()
                     .and_then(|a| a.first())
                     .cloned()
-                    .ok_or_else(|| Error::GitHub(format!("no commits for {repo}@{branch}")))
+                    .ok_or_else(|| self.forge_err(format!("no commits for {repo}@{branch}")))
             }
         }
     }
@@ -1184,14 +1404,13 @@ impl GitHubClient {
             // segment generically, so extraction is unaffected.
             Provider::Gitea => format!("{}/repos/{repo}/archive/{}.zip", self.api_base, r#ref),
         };
-        let resp = self
-            .client
-            .get(&url)
-            .timeout(Duration::from_secs(120))
-            .send()?;
+        let resp = self.send_read(
+            self.client.get(&url).timeout(Duration::from_secs(120)),
+            &url,
+        )?;
         let status = resp.status();
         if status.is_client_error() || status.is_server_error() {
-            return Err(Error::GitHub(self.zipball_error_message(
+            return Err(Error::Forge(self.zipball_error_message(
                 repo,
                 &r#ref,
                 status.as_u16(),
@@ -1201,20 +1420,33 @@ impl GitHubClient {
     }
 
     fn zipball_error_message(&self, repo: &str, r#ref: &str, status: u16) -> String {
+        let forge = self.forge_label();
         if status != 404 {
-            return format!("zipball {repo}@{} -> {status}", r#ref);
+            return format!("{forge}: zipball {repo}@{} -> {status}", r#ref);
         }
+        // Which credential to check depends on the forge, and saying the wrong
+        // one sends the user to the wrong settings page. A Gitea 404 on a repo
+        // that exists is almost always a missing token or a dropped VPN.
+        let token_hint = match self.provider {
+            Provider::Github => {
+                "vérifiez que votre token GitHub y a accès (Paramètres → Connexions)".to_string()
+            }
+            Provider::Gitea => format!(
+                "vérifiez votre token Gitea pour {} et que le VPN est actif (Paramètres → Connexions → Gitea)",
+                self.host()
+            ),
+        };
         let repo_ok = self.get_repo(repo).is_ok();
         if !repo_ok {
             return format!(
-                "Repository {repo} is not accessible (404).\n\nCheck the owner/repo spelling, \
-                 or — if it's private — make sure your GitHub token has access to it."
+                "{forge}: dépôt {repo} inaccessible (404).\n\nVérifiez l'orthographe owner/repo, \
+                 ou — s'il est privé — {token_hint}."
             );
         }
         format!(
-            "zipball {repo}@{r} -> 404\n\nThe repository {repo} exists, but it has no tag, \
-             branch, or commit named '{r}'.\n\nEither create a git tag matching that ref \
-             (e.g. `git tag {r} && git push origin {r}`), or update the marketplace.json entry.",
+            "{forge}: zipball {repo}@{r} -> 404\n\nLe dépôt {repo} existe, mais il n'a ni tag, \
+             ni branche, ni commit nommé '{r}'.\n\nCréez un tag git correspondant \
+             (par ex. `git tag {r} && git push origin {r}`), ou corrigez l'entrée marketplace.json.",
             r = r#ref
         )
     }
@@ -1282,7 +1514,7 @@ impl GitHubClient {
             Provider::Github => {
                 let url = format!("/repos/{repo}/commits/{}", r#ref);
                 match self.request(reqwest::Method::GET, &url).send() {
-                    Ok(r) => Self::check(r, "GET", &url).is_ok(),
+                    Ok(r) => self.check(r, "GET", &url).is_ok(),
                     Err(_) => false,
                 }
             }
@@ -1293,7 +1525,7 @@ impl GitHubClient {
                     .query(&[("sha", r#ref), ("limit", "1"), ("stat", "false")])
                     .send();
                 match resp {
-                    Ok(r) => match Self::check(r, "GET", &url) {
+                    Ok(r) => match self.check(r, "GET", &url) {
                         Ok(r) => r
                             .json::<Value>()
                             .ok()
@@ -1312,7 +1544,7 @@ impl GitHubClient {
         match self.provider {
             Provider::Github => {
                 let url = format!("/repos/{repo}/git/ref/heads/{branch}");
-                let resp = Self::check(
+                let resp = self.check(
                     self.request(reqwest::Method::GET, &url).send()?,
                     "GET",
                     &url,
@@ -1322,7 +1554,7 @@ impl GitHubClient {
             }
             Provider::Gitea => {
                 let url = format!("/repos/{repo}/branches/{branch}");
-                let resp = Self::check(
+                let resp = self.check(
                     self.request(reqwest::Method::GET, &url).send()?,
                     "GET",
                     &url,
@@ -1346,7 +1578,7 @@ impl GitHubClient {
                 json!({"tag_name": tag, "target": sha}),
             ),
         };
-        let resp = Self::check(
+        let resp = self.check(
             self.request(reqwest::Method::POST, &url)
                 .json(&body)
                 .send()?,
@@ -1385,7 +1617,7 @@ impl GitHubClient {
         // 422 "already_exists" — fetch the existing release for the tag.
         if status.as_u16() == 422 {
             let existing_url = format!("/repos/{repo}/releases/tags/{tag}");
-            if let Ok(r) = Self::check(
+            if let Ok(r) = self.check(
                 self.request(reqwest::Method::GET, &existing_url).send()?,
                 "GET",
                 &existing_url,
@@ -1394,7 +1626,7 @@ impl GitHubClient {
             }
         }
         let text = resp.text().unwrap_or_default();
-        Err(Error::GitHub(format!("POST {url} -> {status}: {text}")))
+        Err(self.forge_err(format!("POST {url} -> {status}: {text}")))
     }
 
     pub fn create_branch(
@@ -1418,7 +1650,7 @@ impl GitHubClient {
                 if status.is_client_error() {
                     let text = resp.text().unwrap_or_default();
                     if !text.contains("Reference already exists") {
-                        return Err(Error::GitHub(format!("POST {url} -> {status}: {text}")));
+                        return Err(self.forge_err(format!("POST {url} -> {status}: {text}")));
                     }
                 }
                 Ok(sha)
@@ -1437,7 +1669,7 @@ impl GitHubClient {
                         || text.contains("already exists")
                         || text.contains("branch already exists");
                     if !already {
-                        return Err(Error::GitHub(format!("POST {url} -> {status}: {text}")));
+                        return Err(self.forge_err(format!("POST {url} -> {status}: {text}")));
                     }
                 }
                 // The caller (submit_changes) discards this; resolve lazily only
@@ -1467,7 +1699,7 @@ impl GitHubClient {
             "private": private,
             "auto_init": false,
         });
-        let resp = Self::check(
+        let resp = self.check(
             self.request(reqwest::Method::POST, &url).json(&body).send()?,
             "POST",
             &url,
@@ -1493,7 +1725,7 @@ impl GitHubClient {
         self.require_github("create_blob")?;
         let url = format!("/repos/{repo}/git/blobs");
         let body = json!({ "content": B64.encode(content), "encoding": "base64" });
-        let resp = Self::check(
+        let resp = self.check(
             self.request(reqwest::Method::POST, &url).json(&body).send()?,
             "POST",
             &url,
@@ -1502,7 +1734,7 @@ impl GitHubClient {
         data.get("sha")
             .and_then(|v| v.as_str())
             .map(str::to_string)
-            .ok_or_else(|| Error::GitHub(format!("no sha returned by POST {url}")))
+            .ok_or_else(|| self.forge_err(format!("no sha returned by POST {url}")))
     }
 
     /// Build a git tree from a **complete** entry list, returning its object id.
@@ -1525,7 +1757,7 @@ impl GitHubClient {
                 })
             })
             .collect();
-        let resp = Self::check(
+        let resp = self.check(
             self.request(reqwest::Method::POST, &url)
                 .json(&json!({ "tree": tree }))
                 .send()?,
@@ -1536,7 +1768,7 @@ impl GitHubClient {
         data.get("sha")
             .and_then(|v| v.as_str())
             .map(str::to_string)
-            .ok_or_else(|| Error::GitHub(format!("no sha returned by POST {url}")))
+            .ok_or_else(|| self.forge_err(format!("no sha returned by POST {url}")))
     }
 
     /// Create a commit object, returning its sha. GitHub only.
@@ -1573,7 +1805,7 @@ impl GitHubClient {
             "author": actor(author),
             "committer": actor(committer),
         });
-        let resp = Self::check(
+        let resp = self.check(
             self.request(reqwest::Method::POST, &url).json(&body).send()?,
             "POST",
             &url,
@@ -1582,7 +1814,7 @@ impl GitHubClient {
         data.get("sha")
             .and_then(|v| v.as_str())
             .map(str::to_string)
-            .ok_or_else(|| Error::GitHub(format!("no sha returned by POST {url}")))
+            .ok_or_else(|| self.forge_err(format!("no sha returned by POST {url}")))
     }
 
     /// Point `refs/heads/{branch}` at `sha`, creating the ref if it is absent.
@@ -1597,12 +1829,12 @@ impl GitHubClient {
             .request(reqwest::Method::PATCH, &patch_url)
             .json(&json!({ "sha": sha, "force": force }))
             .send()?;
-        match Self::check(resp, "PATCH", &patch_url) {
+        match self.check(resp, "PATCH", &patch_url) {
             Ok(_) => Ok(()),
             Err(Error::NotFound(_)) => {
                 let url = format!("/repos/{repo}/git/refs");
                 let body = json!({ "ref": format!("refs/heads/{branch}"), "sha": sha });
-                Self::check(
+                self.check(
                     self.request(reqwest::Method::POST, &url).json(&body).send()?,
                     "POST",
                     &url,
@@ -1617,7 +1849,7 @@ impl GitHubClient {
     /// not the `main` GitHub assumes for a new repo.
     pub fn set_default_branch(&self, repo: &str, branch: &str) -> Result<()> {
         let url = format!("/repos/{repo}");
-        Self::check(
+        self.check(
             self.request(reqwest::Method::PATCH, &url)
                 .json(&json!({ "default_branch": branch }))
                 .send()?,
@@ -1664,7 +1896,7 @@ impl GitHubClient {
             (Provider::Gitea, None) => reqwest::Method::POST,
             _ => reqwest::Method::PUT,
         };
-        let resp = Self::check(
+        let resp = self.check(
             self.request(method.clone(), &url).json(&body).send()?,
             method.as_str(),
             &url,
@@ -1695,7 +1927,7 @@ impl GitHubClient {
         }
         let url = format!("/repos/{repo}/contents/{path}");
         let body = json!({"message": message, "branch": branch, "sha": sha});
-        let resp = Self::check(
+        let resp = self.check(
             self.request(reqwest::Method::DELETE, &url)
                 .json(&body)
                 .send()?,
@@ -1715,7 +1947,7 @@ impl GitHubClient {
     ) -> Result<Value> {
         let url = format!("/repos/{repo}/pulls");
         let payload = json!({"title": title, "head": head, "base": base, "body": body});
-        let resp = Self::check(
+        let resp = self.check(
             self.request(reqwest::Method::POST, &url)
                 .json(&payload)
                 .send()?,
@@ -1730,8 +1962,8 @@ impl GitHubClient {
             return (false, "No token configured".to_string());
         }
         let url = "/user";
-        match self.request(reqwest::Method::GET, url).send() {
-            Ok(r) => match Self::check(r, "GET", url) {
+        match self.send_read(self.request(reqwest::Method::GET, url), url) {
+            Ok(r) => match self.check(r, "GET", url) {
                 Ok(r) => match r.json::<Value>() {
                     Ok(v) => (
                         true,
@@ -1838,8 +2070,10 @@ impl GitHubClient {
             return None;
         }
         let url = format!("/repos/{repo}/branch_protections");
-        let resp = self.request(reqwest::Method::GET, &url).send().ok()?;
-        let rules: Value = Self::check(resp, "GET", &url).ok()?.json().ok()?;
+        let resp = self
+            .send_read(self.request(reqwest::Method::GET, &url), &url)
+            .ok()?;
+        let rules: Value = self.check(resp, "GET", &url).ok()?.json().ok()?;
         let arr = rules.as_array()?;
         let pattern_of = |r: &Value| -> String {
             r.get("rule_name")
@@ -1868,7 +2102,7 @@ impl GitHubClient {
             .query(&[("limit", "50")])
             .send()
             .ok()
-            .and_then(|r| Self::check(r, "GET", &list_url).ok())
+            .and_then(|r| self.check(r, "GET", &list_url).ok())
             .and_then(|r| r.json().ok());
         let team_id = teams.as_ref().and_then(|v| v.as_array()).and_then(|arr| {
             arr.iter()
@@ -1893,7 +2127,7 @@ impl GitHubClient {
             return Vec::new();
         }
         let url = "/user";
-        let resp = match self.request(reqwest::Method::GET, url).send() {
+        let resp = match self.send_read(self.request(reqwest::Method::GET, url), url) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         };
@@ -1911,7 +2145,7 @@ impl GitHubClient {
 
     pub fn get_rate_limit(&self) -> (i64, i64) {
         let url = "/rate_limit";
-        let resp = match self.request(reqwest::Method::GET, url).send() {
+        let resp = match self.send_read(self.request(reqwest::Method::GET, url), url) {
             Ok(r) => r,
             Err(_) => return (-1, -1),
         };
@@ -1940,7 +2174,7 @@ impl GitHubClient {
             Provider::Gitea => format!("/repos/{repo}/branches/{branch}"),
         };
         match self.request(reqwest::Method::GET, &url).send() {
-            Ok(r) => Self::check(r, "GET", &url).is_ok(),
+            Ok(r) => self.check(r, "GET", &url).is_ok(),
             Err(_) => false,
         }
     }
@@ -1963,7 +2197,7 @@ impl GitHubClient {
         if !base.is_empty() {
             req = req.query(&[("base", base)]);
         }
-        let prs: Value = match req.send().and_then(|r| r.json()) {
+        let prs: Value = match self.send_read(req, &url).and_then(|r| Ok(r.json()?)) {
             Ok(v) => v,
             Err(_) => return Vec::new(),
         };
@@ -1979,10 +2213,12 @@ impl GitHubClient {
             };
             let files_url = format!("/repos/{repo}/pulls/{number}/files");
             let files: Value = match self
-                .request(reqwest::Method::GET, &files_url)
-                .query(&[("per_page", "100"), ("limit", "100")])
-                .send()
-                .and_then(|r| r.json())
+                .send_read(
+                    self.request(reqwest::Method::GET, &files_url)
+                        .query(&[("per_page", "100"), ("limit", "100")]),
+                    &files_url,
+                )
+                .and_then(|r| Ok(r.json()?))
             {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -2002,8 +2238,8 @@ impl GitHubClient {
 
     pub fn get_pull_request(&self, repo: &str, number: i64) -> Result<Value> {
         let url = format!("/repos/{repo}/pulls/{number}");
-        let resp = Self::check(
-            self.request(reqwest::Method::GET, &url).send()?,
+        let resp = self.check(
+            self.send_read(self.request(reqwest::Method::GET, &url), &url)?,
             "GET",
             &url,
         )?;
@@ -2017,10 +2253,12 @@ impl GitHubClient {
     /// both page-size keys.
     pub fn list_open_prs(&self, repo: &str) -> Result<Vec<Value>> {
         let url = format!("/repos/{repo}/pulls");
-        let resp = Self::check(
-            self.request(reqwest::Method::GET, &url)
-                .query(&[("state", "open"), ("per_page", "50"), ("limit", "50")])
-                .send()?,
+        let resp = self.check(
+            self.send_read(
+                self.request(reqwest::Method::GET, &url)
+                    .query(&[("state", "open"), ("per_page", "50"), ("limit", "50")]),
+                &url,
+            )?,
             "GET",
             &url,
         )?;

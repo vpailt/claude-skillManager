@@ -10,6 +10,7 @@
 // repo/branch/provider/Gitea resolution stays in lockstep.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { forceRefresh } from "@/hooks/useRefresh";
 import { useNotifications } from "@/stores/notifications";
 import type { Marketplace } from "@/lib/types";
 
@@ -43,7 +44,9 @@ export function useInstallMarketplace() {
   return useMutation({
     mutationFn: installMarketplaceOnce,
     onSuccess: (_, mp) => {
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      // Forced: we just changed what is on disk, so the sweep that answers this
+      // must be a real one — a reused result would not know about it.
+      forceRefresh(qc);
       notify({ kind: "success", title: "Marketplace installé", body: mp.name });
     },
     // Without explicit onError, React Query swallows install failures and the

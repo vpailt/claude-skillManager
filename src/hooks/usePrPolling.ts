@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { useNotifications } from "@/stores/notifications";
+import { useTrackingView } from "@/stores/trackingView";
 import { createLogger } from "@/lib/logger";
 import type { PrStatusChange } from "@/lib/types";
 
@@ -59,13 +60,20 @@ export function usePrPolling() {
     };
   }, [qc, push]);
 
-  // Keep the marketplace PR tracking fresh while the dashboard/admin view is
-  // open. Invalidate-only: with no such view mounted this costs nothing, and
-  // the timer dies with the window when the UI is released to tray.
+  // Keep the marketplace PR tracking fresh while the tracking view is open.
+  //
+  // "Invalidate-only, so it is free while you are elsewhere" was wrong: the
+  // taskbar badge keeps `["tracked-prs"]` mounted at App level whenever any
+  // marketplace is tracked, so the query is *always* active and invalidating it
+  // always refetched — one `can_push`, one `/user`, one PR listing per tracked
+  // repo, plus the same again per plugin repo, every minute, on every tab. Gate
+  // it on the view that actually displays PRs; everywhere else the badge lives
+  // off the 5-minute staleness like any other query.
   const lastTrackedRef = useRef<number>(0);
   useEffect(() => {
     const tick = () => {
       if (document.visibilityState === "hidden") return;
+      if (!useTrackingView.getState().active) return;
       if (Date.now() - lastTrackedRef.current < TRACKED_PRS_MIN_MS) return;
       lastTrackedRef.current = Date.now();
       qc.invalidateQueries({ queryKey: ["tracked-prs"] });

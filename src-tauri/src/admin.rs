@@ -291,9 +291,9 @@ pub fn fetch_marketplace_registry(
         match gh.get_file(repo, path, r#ref) {
             Ok((text, sha)) => {
                 let data: Value = serde_json::from_str(&text)
-                    .map_err(|e| Error::GitHub(format!("{path} is not valid JSON: {e}")))?;
+                    .map_err(|e| gh.forge_err(format!("{path} is not valid JSON: {e}")))?;
                 if !data.is_object() {
-                    return Err(Error::GitHub(format!("{path} root must be an object")));
+                    return Err(gh.forge_err(format!("{path} root must be an object")));
                 }
                 tracing::debug!("fetch_marketplace_registry: {repo}@{ref_label} found {path}");
                 return Ok((data, path.to_string(), sha));
@@ -307,8 +307,10 @@ pub fn fetch_marketplace_registry(
             }
         }
     }
-    Err(Error::GitHub(format!(
-        "No marketplace.json found in {repo}@{ref_label}: {}",
+    // Do not re-label: `last_err` already carries the forge it came from, and
+    // a second prefix would read "GitHub: ... Gitea (host): ..." on a Gitea miss.
+    Err(Error::Forge(format!(
+        "Aucun marketplace.json dans {repo}@{ref_label} : {}",
         last_err.map(|e| e.to_string()).unwrap_or_default()
     )))
 }

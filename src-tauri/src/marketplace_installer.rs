@@ -54,9 +54,9 @@ pub fn install_marketplace(
         return Err(Error::Invalid("Marketplace name is required.".into()));
     }
     if repo.is_empty() {
-        tracing::error!("marketplace {} has no GitHub repo configured", name);
+        tracing::error!("marketplace {} has no source repo configured", name);
         return Err(Error::Invalid(format!(
-            "Marketplace '{name}' has no GitHub repo configured."
+            "Le marketplace '{name}' n'a aucun dépôt source configuré."
         )));
     }
     let r#ref = if r#ref.is_empty() {

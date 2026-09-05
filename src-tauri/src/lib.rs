@@ -51,6 +51,11 @@ pub fn run() {
     // does exactly that), so every later resolution names the install slot.
     let _ = config::exe_path();
 
+    // One-shot: the internal Gitea instance is served by an internal CA, so it
+    // starts with TLS verification skipped. Guarded by its own marker in
+    // `config.properties`, so unticking the box in Settings sticks.
+    config::migrate_acx_tls_default();
+
     // Relaunched by the self-updater: the outgoing process is still alive for a
     // moment. Wait it out *here*, before the single-instance plugin arms —
     // otherwise the guard sees the old process, hands the session back to the
@@ -168,6 +173,8 @@ pub fn run() {
             set_marketplace_auto_update,
             check_marketplace_updates,
             parse_marketplace_url,
+            guess_forge_for_url,
+            resolve_default_branch,
             set_plugin_enabled,
             list_skill_files,
             read_text_file,

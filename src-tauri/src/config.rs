@@ -389,12 +389,17 @@ const PROP_UPDATE_AUTO: &str = "update.auto.enabled";
 const PROP_UPDATE_INTERVAL: &str = "update.auto.interval.hours";
 const PROP_CATALOG_POLL: &str = "catalog.poll.enabled";
 const PROP_CATALOG_INTERVAL: &str = "catalog.poll.interval.minutes";
+/// Marker for the one-shot "TLS verification off by default on the internal
+/// Gitea" migration. Written once so a deliberate re-tick of the checkbox is
+/// never undone on the next launch.
+const PROP_ACX_TLS_MIGRATED: &str = "gitea.acx.tls.default.applied";
 
 const PROPS_SECTIONS: &[(&str, &[&str])] = &[
     ("PR status polling", &["polling."]),
     ("Marketplace / plugin polling", &["catalog."]),
     ("UI preferences", &["ui."]),
     ("Application updates", &["update."]),
+    ("Gitea", &["gitea."]),
 ];
 
 fn settings_from_properties_and_marketplaces(
@@ -475,6 +480,58 @@ fn save_marketplaces(items: &[MarketplaceConfig]) -> Result<()> {
     fs::write(&tmp, payload).map_err(Error::from)?;
     fs::rename(&tmp, &f).map_err(Error::from)?;
     Ok(())
+}
+
+/// The internal AlmaviaCX Gitea instance, whose certificate is issued by an
+/// internal CA that Windows does not trust. Every read against it fails at the
+/// TLS handshake until verification is skipped, so that is what a fresh install
+/// should start from — the checkbox exists to be ticked here, not to be found.
+pub const ACX_GITEA_HOST: &str = "git.almaviacx.local";
+
+/// Whether a host should start with TLS verification skipped.
+///
+/// Host-scoped on purpose. A blanket `#[serde(default)] = true` would silently
+/// disable certificate checking for *every* Gitea instance the user ever
+/// registers, including a public one with a perfectly good certificate.
+pub fn default_insecure_tls_for(base_url: &str) -> bool {
+    host_of(base_url).eq_ignore_ascii_case(ACX_GITEA_HOST)
+}
+
+/// One-shot: turn TLS verification off for the internal Gitea instance on
+/// installs that predate the default.
+///
+/// Existing `gitea.json` files carry an explicit `"insecureTls": false` written
+/// by the old seed, so nothing on disk distinguishes "auto-seeded" from
+/// "deliberately unticked" — hence the marker in `config.properties`, which
+/// makes this run exactly once. After it, the switch is the user's.
+pub fn migrate_acx_tls_default() {
+    let props = Properties::load(&config_properties_file()).unwrap_or_default();
+    if props.get_bool(PROP_ACX_TLS_MIGRATED, false) {
+        return;
+    }
+    let mut s = load_settings();
+    let mut changed = false;
+    for inst in s.gitea_instances.iter_mut() {
+        if default_insecure_tls_for(&inst.base_url) && !inst.insecure_tls {
+            inst.insecure_tls = true;
+            changed = true;
+        }
+    }
+    // Save unconditionally: the marker has to land even when there was nothing
+    // to change, or this would re-run and re-tick a box the user just cleared.
+    if let Err(e) = save_settings(&s) {
+        tracing::warn!("acx TLS default migration: could not save settings: {e}");
+        return;
+    }
+    let mut props = Properties::load(&config_properties_file()).unwrap_or_default();
+    props.set_bool(PROP_ACX_TLS_MIGRATED, true);
+    if let Err(e) = write_atomic(&config_properties_file(), &render_config_properties(&props)) {
+        tracing::warn!("acx TLS default migration: could not write the marker: {e}");
+        return;
+    }
+    if changed {
+        tracing::info!("acx TLS default migration: TLS verification disabled for {ACX_GITEA_HOST}");
+    }
 }
 
 /// Load registered Gitea instances and stamp `has_token` from the credential
@@ -621,7 +678,16 @@ pub fn load_settings() -> Settings {
 pub fn save_settings(s: &Settings) -> Result<()> {
     // Token persistence is handled separately via `token_store` so it never
     // touches the on-disk properties file.
-    let props = settings_to_properties(s);
+    //
+    // Start from what is on disk and overlay the keys we own, rather than
+    // rendering a fresh file: `config.properties` is hand-editable, and a
+    // wholesale rewrite silently dropped anything this build does not know
+    // about — including the one-shot migration markers, which would then run
+    // again on the next launch and undo the user's choice.
+    let mut props = Properties::load(&config_properties_file()).unwrap_or_default();
+    for (k, v) in settings_to_properties(s).iter() {
+        props.set(k, v);
+    }
     let rendered = render_config_properties(&props);
     write_atomic(&config_properties_file(), &rendered)?;
     save_marketplaces(&s.marketplaces)?;

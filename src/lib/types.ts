@@ -73,6 +73,18 @@ export interface Marketplace {
 
 export type Provider = "github" | "gitea";
 
+/** Mirror of `commands::ForgeGuess`: which forge a pasted URL points at. */
+export interface ForgeGuess {
+  provider: Provider;
+  /** Instance root for Gitea, empty for GitHub. */
+  baseUrl: string;
+  /** `owner/repo`, empty when the URL carries none. */
+  repo: string;
+  host: string;
+  /** False when the host is neither github.com nor a registered Gitea instance. */
+  known: boolean;
+}
+
 export interface MarketplaceConfig {
   name: string;
   /** `owner/repo` on the marketplace's host (field name kept for back-compat). */

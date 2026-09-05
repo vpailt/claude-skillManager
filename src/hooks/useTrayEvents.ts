@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useQueryClient } from "@tanstack/react-query";
+import { forceRefresh } from "@/hooks/useRefresh";
 import { createLogger } from "@/lib/logger";
 import { useHelpDialog } from "@/stores/helpDialog";
 import { useSettingsDialog } from "@/stores/settingsDialog";
@@ -22,7 +23,8 @@ export function useTrayEvents() {
     offs.push(
       listen("tray://refresh", () => {
         log.info("tray: refresh requested");
-        qc.invalidateQueries({ queryKey: ["refresh"] });
+        // A menu click is the user asking, so it forces — same as the sidebar.
+        forceRefresh(qc);
       })
     );
 

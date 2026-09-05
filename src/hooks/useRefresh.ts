@@ -1,4 +1,8 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/api";
@@ -7,22 +11,51 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("refresh");
 
+/** Set by {@link forceRefresh} and consumed by the very next `queryFn` run.
+ *
+ *  TanStack has nowhere to carry a per-invocation argument, and the distinction
+ *  matters: a background trigger may be answered from the backend's short reuse
+ *  window, while a user gesture — or a change this app just made on disk — must
+ *  not be, or the new marketplace would be missing from the answer that follows
+ *  its own creation. */
+let forceNext = false;
+
+/**
+ * Ask for a real sweep rather than a possibly-reused one.
+ *
+ * Use it for every trigger that follows a local change (install, uninstall,
+ * marketplace added, skill deleted) and for the explicit Refresh gestures. The
+ * backend also reads it as "the user is present": it clears each host's failure
+ * tally, so reconnecting the VPN and pressing Rafraîchir works immediately
+ * instead of after the circuit breaker's cooldown.
+ */
+export function forceRefresh(qc: QueryClient) {
+  forceNext = true;
+  qc.invalidateQueries({ queryKey: ["refresh"] });
+}
+
 export function useRefresh() {
   const setMarketplaces = useApp((s) => s.setMarketplaces);
   const qc = useQueryClient();
 
   const query = useQuery({
     queryKey: ["refresh"],
-    queryFn: api.refreshAll,
+    queryFn: () => {
+      const force = forceNext;
+      forceNext = false;
+      return api.refreshAll(force);
+    },
     // `refresh_all` is an N+1 sweep across the forge (registry, push rights, then
     // a manifest read per plugin and a skills listing per installed plugin). At
     // the old 60 s staleness it re-ran on essentially every alt-tab into the
     // app. Ten minutes keeps the view current without turning window focus into
     // a network event.
     staleTime: 10 * 60_000,
-    // Still worth refetching on focus, though `claude_watch` now usually beats
-    // the user to it: a CLI install fires `claude-state-changed` within a second.
-    refetchOnWindowFocus: true,
+    // Deliberately off. `claude_watch` reports a `/plugin install` run from a
+    // terminal within a second, and `catalog_poller` covers upstream changes
+    // even with no window at all — so returning to the window has nothing left
+    // to discover, and this only turned alt-tabbing into forge traffic.
+    refetchOnWindowFocus: false,
     // A safety net, no longer the mechanism. Upstream detection lives in
     // `catalog_poller` on the Rust side, because this interval is paused while
     // the window is hidden (`refetchIntervalInBackground` defaults to false) —

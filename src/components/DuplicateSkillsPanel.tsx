@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { forceRefresh } from "@/hooks/useRefresh";
 import {
   AlertTriangle,
   Archive,
@@ -158,7 +159,7 @@ export function DuplicateSkillDetail({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["duplicate-skills"] });
       qc.invalidateQueries({ queryKey: ["archived-skills"] });
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      forceRefresh(qc);
       onArchived();
     },
   });
@@ -252,7 +253,7 @@ export function ArchivedSkillDetail({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["archived-skills"] });
       qc.invalidateQueries({ queryKey: ["duplicate-skills"] });
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      forceRefresh(qc);
       onRestored();
     },
   });

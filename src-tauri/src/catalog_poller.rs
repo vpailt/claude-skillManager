@@ -37,6 +37,8 @@ const MIN_INTERVAL_MINS: u32 = 5;
 /// Idle step while the sweep is switched off, short enough that re-enabling it
 /// in Settings feels immediate.
 const DISABLED_POLL_SECS: u64 = 60;
+/// How long to stay out of the way at launch — see [`worker`].
+const STARTUP_DELAY_SECS: u64 = 180;
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -68,8 +70,11 @@ fn worker(app: AppHandle) {
     let mut last = CatalogCounts::default();
     let mut first_tick = true;
 
-    // Let the frontend's own initial refresh settle before adding network work.
-    std::thread::sleep(Duration::from_secs(45));
+    // Let the frontend's own initial refresh finish before adding network work.
+    // A cold sweep across a large catalogue takes tens of seconds; at 45 s this
+    // thread woke up while the first one was still running and immediately ran
+    // a second, identical pass.
+    std::thread::sleep(Duration::from_secs(STARTUP_DELAY_SECS));
     loop {
         let settings = config::load_settings();
         if !settings.ui.catalog_poll_enabled {
@@ -110,7 +115,10 @@ fn worker(app: AppHandle) {
 }
 
 fn tick(app: &AppHandle) -> Option<CatalogCounts> {
-    let result = match commands::sweep_remote(app) {
+    // Reuse a sweep the frontend just ran rather than repeat it: this timer and
+    // the UI's query answer the same question, and nothing is learnt by asking
+    // the forge twice within seconds.
+    let result = match commands::sweep_or_reuse(app) {
         Ok(r) => r,
         Err(e) => {
             tracing::debug!("catalog_poller: sweep failed: {e}");

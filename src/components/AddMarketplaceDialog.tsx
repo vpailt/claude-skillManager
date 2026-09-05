@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/stores/notifications";
 import { useSettingsDialog } from "@/stores/settingsDialog";
+import { forceRefresh } from "@/hooks/useRefresh";
 import type { Provider } from "@/lib/types";
 
 // The AlmaviaCX Gitea instance (fixed/auto-seeded) and its default marketplace.
@@ -55,6 +56,11 @@ export function AddMarketplaceDialog({
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [parsedRepo, setParsedRepo] = useState<string | null>(null);
+  const [detectedHost, setDetectedHost] = useState("");
+  // The URL's host matched neither github.com nor a registered Gitea instance.
+  // There is no token for it and no instance record, so the install would 404
+  // against whichever forge the toggle happened to be on.
+  const [unknownHost, setUnknownHost] = useState(false);
   const [error, setError] = useState("");
 
   // When the dialog opens with no instance picked, default to the AlmaviaCX
@@ -72,24 +78,49 @@ export function AddMarketplaceDialog({
     setUrl("");
     setName("");
     setParsedRepo(null);
+    setDetectedHost("");
+    setUnknownHost(false);
     setError("");
   };
 
+  // Read the forge off the URL instead of off a toggle.
+  //
+  // The toggle defaulted to Gitea, so pasting a github.com URL without noticing
+  // it registered the marketplace against the internal Gitea instance and tried
+  // to download `owner/repo` from *there*. The URL already says which forge it
+  // is — `owner/repo` parses identically on both, which is exactly why the
+  // mismatch was silent up to the download.
   const parseUrlInto = async (value: string) => {
     setError("");
     const trimmed = value.trim();
     if (!trimmed) {
       setParsedRepo(null);
+      setUnknownHost(false);
       return;
     }
-    const repo = await api.parseMarketplaceUrl(trimmed);
-    if (!repo) {
+    const guess = await api.guessForgeForUrl(trimmed);
+    if (!guess.repo) {
       setError(`Impossible d'extraire owner/repo depuis : ${trimmed}`);
       setParsedRepo(null);
+      setUnknownHost(false);
       return;
     }
-    setParsedRepo(repo);
-    if (!name.trim()) setName(repo.split("/").pop() || "");
+    setParsedRepo(guess.repo);
+    setUnknownHost(!guess.known);
+    if (guess.known) {
+      setProvider(guess.provider);
+      setGiteaBaseUrl(guess.baseUrl);
+      setDetectedHost(guess.host);
+    } else {
+      // An unknown host cannot be installed from: there is no token for it and
+      // no instance record. Say so here rather than let the download 404.
+      setDetectedHost("");
+      setError(
+        `Hôte inconnu : ${guess.host}. Enregistrez d'abord cette instance Gitea ` +
+          `dans Paramètres → Connexions, ou utilisez une URL github.com.`
+      );
+    }
+    if (!name.trim()) setName(guess.repo.split("/").pop() || "");
   };
 
   const onUrlBlur = () => parseUrlInto(url);
@@ -124,11 +155,16 @@ export function AddMarketplaceDialog({
       }
       const cfgName = name.trim();
       const baseUrl = provider === "gitea" ? giteaBaseUrl : "";
+      // Ask the repo for its default branch rather than assuming `main`: a repo
+      // on `master` (or anything else) was registered against a branch it does
+      // not have, and every later read — registry, manifest, tree — resolved to
+      // nothing while looking like a permission problem.
+      const branch = await api.resolveDefaultBranch(parsedRepo, provider, baseUrl);
       // Register the marketplace with auto-update AND PR tracking ON by default.
       await api.settingsUpsertMarketplace({
         name: cfgName,
         githubRepo: parsedRepo,
-        defaultBranch: "main",
+        defaultBranch: branch,
         owned: false,
         sourcePath: "",
         autoUpdate: true,
@@ -138,11 +174,14 @@ export function AddMarketplaceDialog({
       });
       // Install it right away — download it locally and make it visible to
       // Claude Code, no separate "Installer" step.
-      await api.installMarketplace(cfgName, parsedRepo, "main", true, provider, baseUrl);
+      await api.installMarketplace(cfgName, parsedRepo, branch, true, provider, baseUrl);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["app-settings"] });
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      // Forced: the backend reuses a recent sweep for background triggers, and
+      // that result predates the marketplace we just created — reusing it is
+      // precisely how an added marketplace ends up appearing nowhere.
+      forceRefresh(qc);
       notify({
         kind: "success",
         title: "Marketplace ajouté et installé",
@@ -156,6 +195,7 @@ export function AddMarketplaceDialog({
 
   const blocked =
     !parsedRepo ||
+    unknownHost ||
     !name.trim() ||
     (provider === "gitea" && !giteaBaseUrl) ||
     giteaTokenMissing ||
@@ -183,7 +223,7 @@ export function AddMarketplaceDialog({
             <label className="mb-1 block text-xs text-muted-foreground">
               Fournisseur
             </label>
-            <div className="flex gap-1">
+            <div className="flex items-center gap-1">
               {(["gitea", "github"] as const).map((p) => (
                 <Button
                   key={p}
@@ -195,6 +235,11 @@ export function AddMarketplaceDialog({
                   {p}
                 </Button>
               ))}
+              {detectedHost && (
+                <span className="ml-1 text-xs text-muted-foreground">
+                  détecté depuis l'URL : <code>{detectedHost}</code>
+                </span>
+              )}
             </div>
           </div>
 

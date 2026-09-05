@@ -8,6 +8,7 @@ import type {
   BulkUploadArgs,
   BumpSuggestion,
   DuplicateSkill,
+  ForgeGuess,
   GiteaStatus,
   LocalSkill,
   LogLevel,
@@ -67,7 +68,9 @@ export const api = {
     invoke<void>("logging_log", { level, target, message }),
 
   // --- refresh ---
-  refreshAll: () => invoke<RefreshResult>("refresh_all"),
+  /** `force` skips the backend's short reuse window and clears the per-host
+   *  failure tally — it is the user asking, not a background trigger. */
+  refreshAll: (force = false) => invoke<RefreshResult>("refresh_all", { force }),
 
   // --- plugins ---
   installPlugin: (plugin: Plugin) =>
@@ -108,6 +111,11 @@ export const api = {
       "check_marketplace_updates",
       { only: only ?? null }
     ),
+  /** Which forge a pasted marketplace URL belongs to (and which Gitea instance). */
+  guessForgeForUrl: (url: string) => invoke<ForgeGuess>("guess_forge_for_url", { url }),
+  /** The repo's own default branch, so nothing is registered against a guessed one. */
+  resolveDefaultBranch: (repo: string, provider: Provider, baseUrl: string) =>
+    invoke<string>("resolve_default_branch", { repo, provider, baseUrl }),
   parseMarketplaceUrl: (url: string) =>
     invoke<string | null>("parse_marketplace_url", { url }),
 

@@ -211,7 +211,7 @@ fn repo_for(marketplace: &str) -> Result<(String, String)> {
     };
     if repo.is_empty() {
         return Err(Error::Invalid(format!(
-            "Marketplace '{marketplace}' has no GitHub repo configured."
+            "Le marketplace '{marketplace}' n'a aucun dépôt source configuré."
         )));
     }
     let branch = if branch.is_empty() {
@@ -298,12 +298,15 @@ pub fn prepare_add_plugin(
 
     let (manifest_text, _) = gh
         .get_file(&plugin_repo, "manifest.json", "")
-        .map_err(|e| Error::GitHub(format!("Could not fetch manifest.json from {plugin_repo}: {e}")))?;
+        // `e` already names its forge and, for a transport failure, the URL —
+        // wrapping it in a second label used to print "github: ... http: ...
+        // https://git.almaviacx.local/..." for a Gitea read.
+        .map_err(|e| Error::Other(format!("Lecture de manifest.json dans {plugin_repo} impossible : {e}")))?;
     let manifest: Value = serde_json::from_str(&manifest_text)
-        .map_err(|e| Error::GitHub(format!("manifest.json in {plugin_repo} is not valid JSON: {e}")))?;
+        .map_err(|e| gh.forge_err(format!("manifest.json dans {plugin_repo} n'est pas un JSON valide : {e}")))?;
     let manifest_obj = manifest
         .as_object()
-        .ok_or_else(|| Error::GitHub("manifest.json root must be an object".into()))?;
+        .ok_or_else(|| gh.forge_err("la racine de manifest.json doit être un objet"))?;
 
     let name = manifest_obj
         .get("name")

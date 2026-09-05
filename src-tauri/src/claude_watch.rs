@@ -14,7 +14,7 @@
 //! — does the rest.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -27,6 +27,53 @@ use crate::config;
 pub const EVENT: &str = "claude-state-changed";
 
 static STARTED: AtomicBool = AtomicBool::new(false);
+
+/// How many [`QuietGuard`]s are alive — the app is writing to `~/.claude` itself.
+static QUIET_DEPTH: AtomicUsize = AtomicUsize::new(0);
+/// Unix millis until which events stay ignored after the last guard dropped.
+static QUIET_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+/// Filesystem events land a beat after the writes that caused them, so the
+/// window has to outlive the guard itself.
+const QUIET_GRACE_MS: u64 = 2_500;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// True while this app is the one writing to `~/.claude`.
+fn is_quiet() -> bool {
+    QUIET_DEPTH.load(Ordering::SeqCst) > 0 || now_ms() < QUIET_UNTIL_MS.load(Ordering::SeqCst)
+}
+
+/// Silences this watcher while the app writes to `~/.claude` itself, and for a
+/// short grace period after.
+///
+/// The refresh sweep re-extracts every auto-updating marketplace, rewriting
+/// `known_marketplaces.json` and the marketplace directories. Without this the
+/// watcher reported the app's own writes as an outside change, the frontend
+/// asked for a refresh, and that refresh made the same writes again — a sweep
+/// triggering the next one for as long as anything was auto-updating.
+///
+/// It only suppresses *our* writes: anything Claude Code (or a text editor)
+/// does outside the guard's lifetime still wakes the sweep, which is the whole
+/// point of the watcher.
+pub struct QuietGuard(());
+
+impl Drop for QuietGuard {
+    fn drop(&mut self) {
+        QUIET_UNTIL_MS.store(now_ms() + QUIET_GRACE_MS, Ordering::SeqCst);
+        QUIET_DEPTH.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Take a [`QuietGuard`]; hold it for the duration of a write to `~/.claude`.
+pub fn quiet_guard() -> QuietGuard {
+    QUIET_DEPTH.fetch_add(1, Ordering::SeqCst);
+    QuietGuard(())
+}
 /// Holds the watcher for the process lifetime — dropping it stops the watch.
 static WATCHER: Mutex<Option<RecommendedWatcher>> = Mutex::new(None);
 
@@ -46,7 +93,8 @@ pub fn start(app: AppHandle) {
                 notify::EventKind::Create(_)
                     | notify::EventKind::Modify(_)
                     | notify::EventKind::Remove(_)
-            ) {
+            ) && !is_quiet()
+            {
                 let _ = tx.send(());
             }
         }
@@ -92,6 +140,11 @@ pub fn start(app: AppHandle) {
                 // Coalesce a burst — Claude Code rewrites several files per
                 // operation, and each atomic write is create + rename.
                 while rx.recv_timeout(Duration::from_millis(500)).is_ok() {}
+                // A write of ours may have started while the burst was
+                // coalescing; re-check rather than announce our own change.
+                if is_quiet() {
+                    continue;
+                }
                 tracing::debug!("claude_watch: install state changed on disk");
                 if let Err(e) = app.emit(EVENT, ()) {
                     tracing::debug!("claude_watch: emit failed: {e}");

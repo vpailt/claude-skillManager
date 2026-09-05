@@ -64,6 +64,7 @@ import { useAppUpdate } from "@/stores/appUpdate";
 import { useReleaseNotes } from "@/stores/releaseNotes";
 import { restartNow, startUpdate } from "@/hooks/useAppUpdateEvents";
 import { GiteaInstancesCard } from "@/components/GiteaInstancesCard";
+import { forceRefresh } from "@/hooks/useRefresh";
 import { UpdateProgressBar } from "@/components/UpdateProgressBar";
 import {
   useSettingsDialog,
@@ -326,7 +327,9 @@ export function SettingsDialog() {
     onSuccess: (s) => {
       if (!s) return;
       qc.setQueryData<SettingsType>(["app-settings"], s);
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      // Forced: an import replaces the marketplace list wholesale, so the sweep
+      // that follows must be a real one rather than the previous result reused.
+      forceRefresh(qc);
       push({ kind: "success", title: "Paramètres importés" });
     },
     onError: (e) =>

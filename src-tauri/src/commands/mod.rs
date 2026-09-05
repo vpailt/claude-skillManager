@@ -125,7 +125,7 @@ fn logged_admin<T>(op: &str, ctx: String, f: impl FnOnce() -> Result<T>) -> Resu
     r
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResult {
     pub marketplaces: Vec<Marketplace>,
@@ -142,9 +142,61 @@ pub async fn save_app_settings(settings: Settings) -> Result<()> {
     config::save_settings(&settings)
 }
 
+/// The last sweep's result, so a burst of triggers costs one pass.
+///
+/// The catalogue poller finishes a sweep and emits `catalog-changed`; the
+/// frontend answers by invalidating its refresh query, which runs a second,
+/// identical sweep seconds later. The same happens when the sweep's own
+/// marketplace auto-update rewrites `~/.claude/plugins/`, which `claude_watch`
+/// then reports. The mutex below only ever serialised those — it never stopped
+/// them being duplicates.
+static LAST_SWEEP: std::sync::Mutex<Option<(std::time::Instant, RefreshResult)>> =
+    std::sync::Mutex::new(None);
+
+/// How long a sweep's result stands in for the next one. Short enough that a
+/// genuine change is never held back by more than a poll, long enough to absorb
+/// the event storm one sweep sets off.
+const SWEEP_REUSE_SECS: u64 = 45;
+
+/// Store a sweep result for [`SWEEP_REUSE_SECS`].
+fn remember_sweep(result: &RefreshResult) {
+    let mut slot = LAST_SWEEP.lock().unwrap_or_else(|e| e.into_inner());
+    *slot = Some((std::time::Instant::now(), result.clone()));
+}
+
+/// The stored result, if it is still young enough to answer with.
+fn recent_sweep() -> Option<RefreshResult> {
+    let slot = LAST_SWEEP.lock().unwrap_or_else(|e| e.into_inner());
+    slot.as_ref().and_then(|(at, r)| {
+        (at.elapsed() < std::time::Duration::from_secs(SWEEP_REUSE_SECS)).then(|| r.clone())
+    })
+}
+
+/// Run a sweep unless one finished moments ago, in which case reuse it.
+///
+/// The catalogue poller has its own timer and the frontend has its own query;
+/// left to themselves they both swept, seconds apart, for the same answer. This
+/// is the door both of them come through.
+pub(crate) fn sweep_or_reuse(app: &AppHandle) -> Result<RefreshResult> {
+    if let Some(cached) = recent_sweep() {
+        tracing::debug!("sweep: reusing the result from the last {SWEEP_REUSE_SECS}s");
+        return Ok(cached);
+    }
+    sweep_remote(app)
+}
+
+/// Rebuild the whole view. `force` is the user asking for it by hand — it skips
+/// the reuse window *and* clears every host's failure tally, so "reconnect the
+/// VPN, press Rafraîchir" works there and then rather than after the breaker's
+/// cooldown.
 #[tauri::command]
-pub async fn refresh_all(app: AppHandle) -> Result<RefreshResult> {
-    sweep_remote(&app)
+pub async fn refresh_all(app: AppHandle, force: Option<bool>) -> Result<RefreshResult> {
+    let force = force.unwrap_or(false);
+    if force {
+        crate::github_client::reset_host_health();
+        return sweep_remote(&app);
+    }
+    sweep_or_reuse(&app)
 }
 
 /// The full remote sweep: auto-update marketplaces, rebuild the local view,
@@ -163,6 +215,26 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
     static SWEEP: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
 
+    // Hard ceiling on how long the remote half of a sweep may take.
+    //
+    // The sweep is an N+1 across the forge and it is *unbounded*: a catalogue
+    // like `claude-plugins-official` lists 168 plugins, and step 3 probes a
+    // manifest (and, on failure, the tags) for every one of them that carries a
+    // source. Each read that has to time out costs seconds, so an offline or
+    // rate-limited machine turned one refresh into hours — with the UI spinner
+    // spinning the whole time, because a finished sweep is its only end
+    // condition. The circuit breaker in `github_client` handles the common case;
+    // this is the backstop for everything else (a host that accepts the
+    // connection then stalls, a catalogue big enough to be slow while online).
+    // Passing the budget does not fail the refresh: it stops making *new*
+    // remote calls and returns what is already known, which leaves every
+    // `remote_ok` false for the untouched marketplaces — a failed read, never
+    // an empty one.
+    const SWEEP_BUDGET_SECS: u64 = 75;
+    let started = std::time::Instant::now();
+    let over_budget =
+        || started.elapsed() > std::time::Duration::from_secs(SWEEP_BUDGET_SECS);
+
     tracing::info!("refresh_all started");
     let settings = config::load_settings();
 
@@ -180,6 +252,13 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(cfg.auto_update);
             if auto && marketplace_installer::is_marketplace_installed(&cfg.name) {
+                if over_budget() {
+                    tracing::warn!(
+                        "sweep budget ({SWEEP_BUDGET_SECS}s) spent before auto-updating {} \u{2014} skipping the rest",
+                        cfg.name
+                    );
+                    break;
+                }
                 if let Err(e) =
                     app.emit("refresh-progress", &format!("auto-update: {}", cfg.name))
                 {
@@ -192,6 +271,13 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
                         continue;
                     }
                 };
+                // Re-extracting the marketplace rewrites `~/.claude/plugins/`,
+                // which `claude_watch` reports as "the install state moved" —
+                // the frontend then asks for another sweep, and the sweep it
+                // was reacting to is the one that made the change. Deafen the
+                // watcher for the duration plus a moment, since the events land
+                // after the writes.
+                let _quiet = crate::claude_watch::quiet_guard();
                 let (updated, msg) = marketplace_installer::auto_update_if_changed(
                     &gh,
                     &cfg.name,
@@ -223,8 +309,51 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
     // local view beats a hard error in the refresh pipeline. We still log when
     // the merge yields zero remote plugins for a known GitHub source so a
     // diagnostic trail exists.
-    for mp in marketplaces.iter_mut() {
+    let mut budget_spent = false;
+    // Sweep the marketplaces the user actually installed from first.
+    //
+    // The order otherwise comes from `marketplaces.json`, and a catalogue with
+    // nothing installed from it can be enormous: `claude-plugins-official`
+    // lists 168 plugins. Sitting first in the file, it spent the whole budget
+    // (and, before the budget existed, the whole afternoon) before the two
+    // marketplaces the user works from were looked at even once.
+    let mut order: Vec<usize> = (0..marketplaces.len()).collect();
+    order.sort_by_key(|&i| {
+        let installed = marketplaces[i]
+            .plugins
+            .iter()
+            .any(|p| p.installed_version.is_some());
+        (!installed, i)
+    });
+
+    // How many *not installed* plugins may have their manifest probed in one
+    // sweep.
+    //
+    // Reading a plugin's own manifest is what turns a registry entry into a
+    // version number, and it is worth a request for something on disk that
+    // might be out of date. For a plugin nobody installed it only decides
+    // whether the catalogue row reads "1.2.0" or "version inconnue" — at one to
+    // three requests each, that is several hundred round trips per sweep for a
+    // large catalogue, repeated every half hour. Installed plugins are never
+    // capped; the rest are served first-come and keep whatever the registry
+    // said beyond it.
+    const MAX_UNINSTALLED_MANIFEST_PROBES: usize = 40;
+    let mut uninstalled_probes = 0usize;
+    let mut probes_skipped = 0usize;
+    let mut probes_from_memo = 0usize;
+
+    for idx in order {
+        let mp = &mut marketplaces[idx];
         if mp.source_repo.is_empty() {
+            continue;
+        }
+        if over_budget() {
+            if !budget_spent {
+                budget_spent = true;
+                tracing::warn!(
+                    "sweep budget ({SWEEP_BUDGET_SECS}s) spent \u{2014} keeping the local view for the remaining marketplace(s)"
+                );
+            }
             continue;
         }
         if let Err(e) = app.emit("refresh-progress", &format!("fetching: {}", mp.name)) {
@@ -268,6 +397,16 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
             if src.repo.is_empty() {
                 continue;
             }
+            if over_budget() {
+                if !budget_spent {
+                    budget_spent = true;
+                    tracing::warn!(
+                        "sweep budget ({SWEEP_BUDGET_SECS}s) spent while reading {} \u{2014} keeping the local view for the rest",
+                        mp.name
+                    );
+                }
+                continue;
+            }
             // Authoritative latest version = the plugin repo's own manifest
             // `version` on its tracked ref. The version is bumped inside each PR,
             // so it lands on the default branch the moment the PR merges — no git
@@ -278,9 +417,32 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
             // source, not just installed ones (otherwise a not-installed plugin
             // shows "version inconnue"). Best-effort: a failed read (offline /
             // VPN-gated Gitea) leaves latest_version as-is.
-            if let Some(ver) = marketplace_remote::fetch_plugin_manifest_version(&gh, &src)
-                .or_else(|| marketplace_remote::fetch_latest_tag_version(&gh, &src.repo))
-            {
+            let installed = plugin.installed_version.is_some();
+            if !installed {
+                // A version already learnt this half-day is reused rather than
+                // re-read: for a plugin nobody installed it only feeds a
+                // catalogue label, and the alternative is paying the same 40
+                // probes on every sweep, forever.
+                if let Some(memo) = uninstalled_version_memo(&gh, &src) {
+                    probes_from_memo += 1;
+                    if let Some(ver) = memo {
+                        plugin.latest_version = Some(ver);
+                        marketplace_remote::recompute_state(plugin);
+                    }
+                    continue;
+                }
+                if uninstalled_probes >= MAX_UNINSTALLED_MANIFEST_PROBES {
+                    probes_skipped += 1;
+                    continue;
+                }
+                uninstalled_probes += 1;
+            }
+            let probed = marketplace_remote::fetch_plugin_manifest_version(&gh, &src)
+                .or_else(|| marketplace_remote::fetch_latest_tag_version(&gh, &src.repo));
+            if !installed {
+                remember_uninstalled_version(&gh, &src, probed.clone());
+            }
+            if let Some(ver) = probed {
                 if plugin.latest_version.as_deref() != Some(ver.as_str()) {
                     tracing::debug!(
                         "latest version for {}@{}: {} (was {:?})",
@@ -332,10 +494,21 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
         }
     }
 
+    if probes_skipped > 0 || probes_from_memo > 0 {
+        tracing::info!(
+            "sweep: not-installed plugins - {probes_from_memo} from cache, {uninstalled_probes} probed, {probes_skipped} left for a later pass (cap: {MAX_UNINSTALLED_MANIFEST_PROBES})"
+        );
+    }
+
     // 4) Reconcile in-flight PR statuses so "in review" badges clear once a PR
     // merges/closes. The dedicated PR-history tab used to drive this; the
     // regular refresh now does it. Best-effort, provider-aware.
-    reconcile_open_prs(&settings);
+    // `pr_poller` owns PR status when it is running: it checks the same records
+    // on its own timer, so doing it here too is one extra request per open PR on
+    // every sweep for an answer nothing was waiting on.
+    if !settings.ui.pr_polling_enabled && !over_budget() {
+        reconcile_open_prs(&settings);
+    }
 
     let local_only = local_scanner::build_local_only_marketplace();
 
@@ -350,10 +523,61 @@ pub(crate) fn sweep_remote(app: &AppHandle) -> Result<RefreshResult> {
         marketplaces.len(),
         local_only.plugins.iter().map(|p| p.skills.len()).sum::<usize>()
     );
-    Ok(RefreshResult {
+    let result = RefreshResult {
         marketplaces,
         local_only,
-    })
+    };
+    remember_sweep(&result);
+    Ok(result)
+}
+
+/// How long a not-installed plugin's version stands without being re-read.
+///
+/// It only decides what a catalogue row says. Re-reading it every half hour for
+/// a 168-plugin catalogue is hundreds of requests to keep a label honest that
+/// nothing acts on; installed plugins — the ones whose version drives the
+/// "obsolète" badge — are never served from here.
+const UNINSTALLED_VERSION_TTL_SECS: u64 = 6 * 3600;
+
+static UNINSTALLED_VERSIONS: std::sync::Mutex<
+    Option<std::collections::HashMap<String, (std::time::Instant, Option<String>)>>,
+> = std::sync::Mutex::new(None);
+
+fn uninstalled_memo_key(gh: &GitHubClient, src: &crate::models::PluginSource) -> String {
+    format!("{}|{}|{}", gh.host(), src.repo, src.r#ref)
+}
+
+/// The remembered version for a not-installed plugin, if it is still fresh.
+///
+/// `Some(None)` is a remembered *miss* — the probe ran and found no version —
+/// and is as worth keeping as a hit: without it every unversioned plugin is
+/// re-probed on every sweep.
+fn uninstalled_version_memo(
+    gh: &GitHubClient,
+    src: &crate::models::PluginSource,
+) -> Option<Option<String>> {
+    let key = uninstalled_memo_key(gh, src);
+    let guard = UNINSTALLED_VERSIONS.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.as_ref()?;
+    let (at, v) = map.get(&key)?;
+    (at.elapsed() < std::time::Duration::from_secs(UNINSTALLED_VERSION_TTL_SECS))
+        .then(|| v.clone())
+}
+
+fn remember_uninstalled_version(
+    gh: &GitHubClient,
+    src: &crate::models::PluginSource,
+    version: Option<String>,
+) {
+    let key = uninstalled_memo_key(gh, src);
+    let mut guard = UNINSTALLED_VERSIONS.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(std::collections::HashMap::new);
+    // Blown wholesale rather than evicted by age: it is a per-session cache for
+    // catalogue labels, and the cap only bounds a pathological catalogue.
+    if map.len() >= 2000 {
+        map.clear();
+    }
+    map.insert(key, (std::time::Instant::now(), version));
 }
 
 fn plugin_key(marketplace: &str, plugin: &str) -> String {
@@ -735,6 +959,92 @@ pub async fn check_marketplace_updates(only: Option<String>) -> Vec<UpdateCheckR
 #[tauri::command]
 pub fn parse_marketplace_url(url: String) -> Option<String> {
     crate::registry::parse_github_marketplace_url(&url)
+}
+
+/// Which forge a marketplace URL points at, and which Gitea instance if any.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgeGuess {
+    pub provider: Provider,
+    /// Instance root for Gitea, empty for GitHub.
+    pub base_url: String,
+    /// `owner/repo`, or empty when the URL does not carry one.
+    pub repo: String,
+    /// Bare host, for the message when nothing matched.
+    pub host: String,
+    /// False when the host is neither github.com nor a registered Gitea
+    /// instance — the caller has to ask rather than guess.
+    pub known: bool,
+}
+
+/// Work out which forge a pasted marketplace URL belongs to.
+///
+/// The add-marketplace dialog used to take the forge from a toggle whose
+/// default was Gitea, so pasting a `github.com` URL without touching it
+/// registered the marketplace against the internal Gitea instance and tried to
+/// download the repo from there. The URL already says which forge it is; ask it.
+#[tauri::command]
+pub async fn guess_forge_for_url(url: String) -> ForgeGuess {
+    let s = config::load_settings();
+    let host = host_of(&url);
+    let repo = crate::registry::parse_github_marketplace_url(&url).unwrap_or_default();
+    let is_github = matches!(
+        host.to_ascii_lowercase().as_str(),
+        "github.com" | "www.github.com" | "api.github.com"
+    );
+    if is_github {
+        return ForgeGuess {
+            provider: Provider::Github,
+            base_url: String::new(),
+            repo,
+            host,
+            known: true,
+        };
+    }
+    if let Some(inst) = s
+        .gitea_instances
+        .iter()
+        .find(|i| host_of(&i.base_url).eq_ignore_ascii_case(&host))
+    {
+        return ForgeGuess {
+            provider: Provider::Gitea,
+            base_url: inst.base_url.clone(),
+            repo,
+            host,
+            known: true,
+        };
+    }
+    ForgeGuess {
+        provider: Provider::Gitea,
+        base_url: String::new(),
+        repo,
+        host,
+        known: false,
+    }
+}
+
+/// The repository's own default branch, so a marketplace is not registered
+/// against a hard-coded `main` it may not have. Falls back to `main` when the
+/// forge cannot be read — the install then resolves it again for real.
+#[tauri::command]
+pub async fn resolve_default_branch(
+    repo: String,
+    provider: Option<Provider>,
+    base_url: Option<String>,
+) -> String {
+    let s = config::load_settings();
+    let client = match provider.unwrap_or(Provider::Github) {
+        Provider::Gitea => gitea_client(&s, &base_url.unwrap_or_default()),
+        Provider::Github => GitHubClient::new(&s.github_token),
+    };
+    match client.and_then(|c| c.get_default_branch(&repo)) {
+        Ok(b) if !b.trim().is_empty() => b,
+        Ok(_) => "main".to_string(),
+        Err(e) => {
+            tracing::debug!("resolve_default_branch({repo}) failed, assuming main: {e}");
+            "main".to_string()
+        }
+    }
 }
 
 #[tauri::command]

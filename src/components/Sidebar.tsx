@@ -20,8 +20,8 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/stores/ui";
-import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { useIsFetching, useQueryClient } from "@tanstack/react-query";
+import { ForgeStatus } from "@/components/ForgeStatus";
 import { HelpDialog } from "@/components/HelpDialog";
 import { useAppVersion } from "@/hooks/useAppVersion";
 import { useHelpDialog } from "@/stores/helpDialog";
@@ -29,6 +29,7 @@ import { useSettingsDialog } from "@/stores/settingsDialog";
 import { useTrackingView } from "@/stores/trackingView";
 import { useAppUpdate } from "@/stores/appUpdate";
 import { usePendingChangesCount } from "@/lib/changes";
+import { forceRefresh } from "@/hooks/useRefresh";
 import { restartNow } from "@/hooks/useAppUpdateEvents";
 
 interface NavItem {
@@ -103,22 +104,6 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
 
   const isRefreshing = useIsFetching({ queryKey: ["refresh"] }) > 0;
 
-  const rate = useQuery({
-    queryKey: ["github-rate"],
-    queryFn: api.githubRateLimit,
-    staleTime: 60_000,
-  });
-  const auth = useQuery({
-    queryKey: ["github-auth"],
-    queryFn: api.githubAuthCheck,
-    staleTime: 60_000,
-  });
-  const gitea = useQuery({
-    queryKey: ["gitea-status"],
-    queryFn: api.giteaStatusAll,
-    staleTime: 60_000,
-  });
-
   return (
     <aside
       className={cn(
@@ -170,10 +155,13 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           title={
             isRefreshing
               ? "Rafraîchissement…"
-              : "Rafraîchir — re-scanne l'installation locale et GitHub (quota limité)"
+              : "Rafraîchir — re-scanne l'installation locale et les forges (GitHub / Gitea), quota limité"
           }
           onClick={() => {
-            qc.invalidateQueries({ queryKey: ["refresh"] });
+            // Forced: the user is present, so skip the backend's reuse window
+            // and give a host written off by the circuit breaker another go —
+            // "reconnect the VPN, press Rafraîchir" has to work at once.
+            forceRefresh(qc);
             // Recompute the usage audit (dashboard top-3 skills + audit page)
             // from the transcripts — the index re-parses only changed files.
             qc.invalidateQueries({ queryKey: ["usage-audit"] });
@@ -250,50 +238,12 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
         })}
       </nav>
 
-      {/* Forge connection status (only when expanded) */}
-      {!collapsed &&
-        (auth.data || rate.data || (gitea.data?.length ?? 0) > 0) && (
-          <>
-            <Separator />
-            <div className="space-y-1 px-3 py-2 text-xs text-muted-foreground">
-              {auth.data && (
-                <div
-                  className="truncate"
-                  title={auth.data[0] ? `GitHub : authentifié en tant que @${auth.data[1]}` : "Aucun token GitHub configuré (Paramètres)"}
-                >
-                  GitHub : {auth.data[0] ? `@${auth.data[1]}` : "pas de token"}
-                </div>
-              )}
-              {rate.data &&
-                rate.data[0] >= 0 &&
-                rate.data[1] > 0 &&
-                rate.data[0] < Math.max(50, rate.data[1] * 0.1) && (
-                  <div
-                    className="text-amber-500"
-                    title="Quota d'appels à l'API GitHub bientôt épuisé — il se réinitialise au début de l'heure suivante"
-                  >
-                    GitHub : quota bas ({rate.data[0]}/{rate.data[1]})
-                  </div>
-                )}
-              {(gitea.data ?? []).map((g) => (
-                <div
-                  key={g.baseUrl}
-                  className="truncate"
-                  title={
-                    g.ok
-                      ? `Gitea ${g.host} : authentifié en tant que @${g.user}${
-                          g.insecureTls ? " (vérification TLS désactivée)" : ""
-                        }`
-                      : `Gitea ${g.host} : ${g.user}`
-                  }
-                >
-                  {g.host}:{" "}
-                  {g.ok ? `@${g.user}` : g.hasToken ? "échec auth" : "pas de token"}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
+      {/* Forge connection status. Moved off the dashboard, where it was a
+          full-width strip competing with the content, and merged with the
+          plain-text block that used to sit here — one rendering, clickable,
+          and present when the bar is collapsed to icons. */}
+      <Separator />
+      <ForgeStatus collapsed={collapsed} />
 
       <Separator />
 

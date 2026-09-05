@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { forceRefresh } from "@/hooks/useRefresh";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -832,7 +833,7 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["app-settings"] });
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      forceRefresh(qc);
     },
     onError: (e) =>
       notify({
@@ -859,7 +860,7 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
   const uninstall = useMutation({
     mutationFn: () => api.uninstallMarketplaceCascade(marketplace.name),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      forceRefresh(qc);
       qc.invalidateQueries({ queryKey: ["app-settings"] });
       notify({
         kind: "success",
@@ -879,7 +880,7 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
   const deleteCompletely = useMutation({
     mutationFn: () => api.deleteMarketplaceCompletely(marketplace.name),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      forceRefresh(qc);
       qc.invalidateQueries({ queryKey: ["app-settings"] });
       qc.invalidateQueries({ queryKey: ["tracked-prs"] });
       notify({
@@ -1113,7 +1114,7 @@ function PluginDetail({
       return api.installPlugin(p);
     },
     onSuccess: (_, p) => {
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      forceRefresh(qc);
       notify({ kind: "success", title: "Plugin installé", body: p.name });
     },
     onError: (e, p) =>
@@ -1126,7 +1127,7 @@ function PluginDetail({
   const uninstallMutation = useMutation({
     mutationFn: api.uninstallPlugin,
     onSuccess: (_, p) => {
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      forceRefresh(qc);
       notify({ kind: "success", title: "Plugin désinstallé", body: p.name });
     },
     onError: (e, p) =>
@@ -1146,7 +1147,7 @@ function PluginDetail({
       marketplace: string;
       value: boolean;
     }) => api.setPluginEnabled(pl, marketplace, value),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["refresh"] }),
+    onSuccess: () => forceRefresh(qc),
     onError: (e, vars) =>
       notify({
         kind: "error",
@@ -1748,8 +1749,8 @@ export function SkillsPage() {
       }
       // ["refresh"] alone would leave the per-folder caches serving a skill
       // that no longer exists on disk.
+      forceRefresh(qc);
       for (const key of [
-        ["refresh"],
         ["duplicate-skills"],
         ["archived-skills"],
         ["skill-files"],

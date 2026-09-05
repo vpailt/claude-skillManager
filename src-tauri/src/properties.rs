@@ -54,6 +54,12 @@ impl Properties {
         Ok(Self::from_str(&text))
     }
 
+    /// Every key/value pair, sorted by key. Lets a caller overlay one set of
+    /// properties onto another instead of replacing the file wholesale.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
     /// Get a string value or `None` if missing/empty.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.inner

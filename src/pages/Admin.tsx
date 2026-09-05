@@ -136,7 +136,10 @@ function TrackingSection() {
   const tracked = useQuery({
     queryKey: ["tracked-prs"],
     queryFn: () => api.trackedMarketplacePrs(),
-    staleTime: 60_000,
+    // Same staleness as the dashboard's summary: one key with two different
+    // staleTimes refetches on whichever observer is the most aggressive, so the
+    // shorter one here made every visit to either view pay for the tracking.
+    staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
   });
 

@@ -103,7 +103,9 @@ SkillManager/
 │   ├── config.properties      ← token + polling + UI prefs (Java-style key=value)
 │   ├── logging.properties     ← logger config (enabled, level, max files)
 │   ├── marketplaces.json      ← list of registered marketplaces
-│   ├── gitea.json             ← registered Gitea instances (tokens stay in the vault)
+│   ├── gitea.json             ← registered Gitea instances (tokens stay in the vault;
+│   │                             the internal AlmaviaCX host defaults to
+│   │                             `insecureTls: true` — internal CA)
 │   ├── pr_history.json        ← rolling list of admin-opened PRs
 │   ├── pending_prs.json       ← PR drafts awaiting merge
 │   ├── skill_baselines.json   ← per-skill-folder sync references (`skill_watch.rs`)
@@ -124,6 +126,11 @@ is to keep the directory out of the sync root.
 The two `.properties` files are hand-editable; restart the app to pick up changes
 made outside the Settings page. The properties parser is intentionally minimal
 (no multi-line values, no `\uXXXX` escapes) — see `properties.rs`.
+`save_settings` **overlays** the keys it owns onto what is already on disk rather
+than rendering the file fresh, so a hand-added key — or a one-shot migration
+marker such as `gitea.acx.tls.default.applied` — survives the next save. Without
+that, the marker vanished and its migration re-ran on the following launch,
+undoing whatever the user had changed in between.
 
 On first run, if a legacy `%APPDATA%/SkillManager/settings.json` is found and the
 portable `config.properties` does not yet exist, the legacy blob is migrated once
@@ -195,6 +202,48 @@ command and `catalog_poller` — and a process-wide mutex keeps them from overla
 5. `feed_skill_watch` hands `skill_watch` both halves — what is on disk, what the remote
    holds — and it settles every folder's `SkillSync` status.
 
+The sweep is **bounded on three axes**, because it used not to be. A catalogue
+like `claude-plugins-official` lists 168 plugins and step 3 probes a manifest for
+every one of them that carries a source; each read that has to time out costs
+seconds, so an offline machine turned one refresh into hours — with the UI
+spinner spinning throughout, since a finished sweep is its only end condition.
+The three bounds, in the order they bite:
+
+- **A circuit breaker per host** (`github_client::send_read` / `HostHealth`).
+  Two consecutive transport failures write a host off for 90 s and every
+  subsequent *read* against it returns `Error::Unreachable` without touching the
+  network. It guards reads only: a user-initiated write always goes out and
+  reports the forge's real error. A short-circuited read is still a *failed*
+  read, so `remote_ok` stays false and the local view is kept. A `403`/`429`
+  carrying `x-ratelimit-remaining: 0` (or a `retry-after`) trips it too, for as
+  long as the header says. `reset_host_health()` clears every tally and is what
+  a **forced** refresh calls, so "reconnect the VPN, press Rafraîchir" works
+  there and then.
+- **A 75 s budget on the remote half** (`SWEEP_BUDGET_SECS`). Past it the sweep
+  stops making *new* remote calls and returns what it has. Marketplaces are
+  visited **installed-first**, so a large catalogue nobody installed from cannot
+  spend the budget ahead of the two the user actually works in.
+- **A cap on not-installed manifest probes** (40 per pass) plus a 6-hour memo
+  keyed on `host|repo|ref`. An installed plugin's version drives the "obsolète"
+  badge and is never capped or memoised; a not-installed one only decides what a
+  catalogue row reads, and paying hundreds of requests every half hour for that
+  label is what made the sweep expensive in the *online* case.
+
+Two callers, **one pass**: `commands::sweep_or_reuse` is the door both the
+frontend command and `catalog_poller` come through, and it hands back the last
+result while it is younger than `SWEEP_REUSE_SECS` (45 s). The mutex only ever
+serialised those two; it never stopped them being duplicates — the poller
+finished a sweep, emitted `catalog-changed`, and the frontend answered by asking
+for the same sweep again. `refresh_all(force: true)` bypasses the window, and
+every trigger that follows a *local* change must use it (`forceRefresh` in
+`hooks/useRefresh.ts`) — a reused result predates the marketplace you just
+added, which is exactly how an added marketplace ends up appearing nowhere.
+
+The sweep also **deafens `claude_watch` while it writes** (`claude_watch::quiet_guard`,
+held across `auto_update_if_changed`). Re-extracting a marketplace rewrites
+`~/.claude/plugins/`, the watcher reported that as an outside change, and the
+refresh it triggered made the same writes again.
+
 Two invariants worth keeping:
 
 - **A failed remote read is never an empty one.** `fetch_marketplace_plugins` and
@@ -209,6 +258,18 @@ Two invariants worth keeping:
 Network work happens in the Rust command layer, never on the UI thread. The React side
 consumes it via TanStack Query (`src/hooks/useRefresh.ts`), whose interval is now only a
 safety net — see `catalog_poller`.
+
+### Adding a marketplace: the forge comes from the URL
+
+`AddMarketplaceDialog` reads the provider off the pasted URL
+(`commands::guess_forge_for_url`), it does not take it from the toggle. The
+toggle defaulted to Gitea and `owner/repo` parses identically on both forges, so
+pasting a `github.com` URL without noticing registered the marketplace against
+the internal Gitea instance and tried to download the repo from *there* — the
+mismatch stayed invisible until the archive request. A host matching neither
+`github.com` nor a registered Gitea instance blocks the dialog rather than being
+guessed at. The branch likewise comes from the repo
+(`commands::resolve_default_branch`), never from a hard-coded `main`.
 
 ### Admin upload (no git binary)
 
@@ -417,6 +478,16 @@ falling through published a release whose entire diff was a version bump.
   appear in the log file users can ship back as a bug report.
 - `error.rs` — `AppError` is the single error type returned to the frontend. Wrap new
   failure modes here; don't leak `anyhow::Error` across the FFI boundary.
+  `Error::Forge` carries **no hard-coded forge name**: the same `GitHubClient`
+  type serves GitHub and every registered Gitea instance, so the old
+  `#[error("github: {0}")]` labelled every Gitea 401/403/5xx as a GitHub
+  problem — printed under a Gitea heading, telling the user to fix the wrong
+  token. Build it through `GitHubClient::forge_err`, which prefixes
+  `GitHub: ` or `Gitea (host): ` from the client that made the call; the same
+  applies to the 404 → `Error::NotFound` split and to `zipball_error_message`,
+  whose "check your token" wording is provider-specific. `Error::Unreachable` is
+  the circuit breaker's: a request that was never sent, as opposed to
+  `Error::Http`, which is one that failed.
 
 ### React frontend (`src/`)
 
@@ -430,8 +501,33 @@ falling through published a release whose entire diff was a version bump.
 - `lib/utils.ts::openExternal` — always go through this for opening URLs; it falls back
   to `window.open` if the Tauri opener plugin is missing a capability.
 - `hooks/useRefresh.ts` — TanStack Query bridge for the refresh pipeline; UI components
-  consume the resulting query state, not the raw command.
+  consume the resulting query state, not the raw command. It exports
+  `forceRefresh(qc)`, which is what every trigger following a local change must
+  call — TanStack has nowhere to carry a per-invocation argument, so the flag is
+  module-scoped and consumed by the next `queryFn` run. `refetchOnWindowFocus`
+  is deliberately **off**: `claude_watch` reports a CLI install within a second
+  and `catalog_poller` covers upstream changes with no window at all, so
+  alt-tabbing had nothing left to discover and only cost forge traffic. For the
+  same reason, never `invalidateQueries(["refresh"])` from a page mount —
+  invalidation ignores `staleTime`, and both `["refresh"]` and `["tracked-prs"]`
+  are mounted at App level, so it turned every visit to the dashboard into a
+  full sweep. Use `refetchQueries({ stale: true })`.
+- `hooks/useForgeStatus.ts` + `components/ForgeStatus.tsx` — the one place the
+  three connection probes (`github-auth`, `github-rate`, `gitea-status`) are
+  declared, and the one place they are rendered. Five components used to mount
+  them with their own options; a query key with mixed staleness refetches on the
+  most aggressive observer's mount, so every dashboard visit cost a GitHub
+  `/user`, a `/rate_limit` and one Gitea `/user` per instance — the last of them
+  VPN-gated. The block lives in the **sidebar**, not on the dashboard: it is
+  chrome, identical on every page, and it now survives the bar being collapsed
+  to icons (a status dot on the icon), which the plain-text version did not.
 - `hooks/usePrPolling.ts` — gated by `ui.prPollingEnabled` in settings; min interval 15s.
+  Its `["tracked-prs"]` timer is additionally gated on `useTrackingView` being
+  active. "Invalidate-only, so it is free while you're elsewhere" was wrong:
+  `useTaskbarBadge` keeps that query mounted at App level whenever any
+  marketplace is tracked, so it was always active and the invalidation always
+  refetched — `can_push` + `/user` + a PR listing per tracked repo, and the same
+  again per plugin repo, every minute, on every tab.
 - `hooks/useBackendEvents.ts` — debounced bridge from the backend's three "something
   moved" events (`skills-tree-changed`, `claude-state-changed`, `catalog-changed`) to a
   refresh invalidation. The backend detects, the frontend only re-asks.

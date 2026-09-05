@@ -18,8 +18,27 @@ pub enum Error {
     #[error("zip: {0}")]
     Zip(#[from] zip::result::ZipError),
 
-    #[error("github: {0}")]
-    GitHub(String),
+    /// A forge (GitHub *or* Gitea) refused or could not answer a request.
+    ///
+    /// The message carries its own forge label — `GitHub: …` or
+    /// `Gitea (git.example.com): …` — built by
+    /// [`crate::github_client::GitHubClient::forge_err`] from the client that
+    /// made the call. The variant used to hard-code `github: `, which mislabelled
+    /// every Gitea failure: the same client type serves both providers, so a
+    /// Gitea 401 was shown to the user as a GitHub error, under a Gitea heading.
+    #[error("{0}")]
+    Forge(String),
+
+    /// A host the read path has given up on for now: several consecutive
+    /// transport failures, or a rate limit with a known reset.
+    ///
+    /// Distinct from [`Self::Http`] on purpose — it is not a request that
+    /// failed, it is a request that was never sent. A sweep off the VPN used to
+    /// pay the full connect/request timeout on every one of the hundreds of
+    /// reads it makes, which is what turned the refresh spinner into a
+    /// multi-hour affair.
+    #[error("{0}")]
+    Unreachable(String),
 
     #[error("invalid input: {0}")]
     Invalid(String),

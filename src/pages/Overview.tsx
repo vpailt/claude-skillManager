@@ -36,6 +36,8 @@ import { api } from "@/lib/api";
 import { cn, openExternal } from "@/lib/utils";
 import type { Plugin } from "@/lib/types";
 import { useAppVersion } from "@/hooks/useAppVersion";
+import { useForgeStatus } from "@/hooks/useForgeStatus";
+import { forceRefresh } from "@/hooks/useRefresh";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -94,108 +96,12 @@ function CounterCell({
   );
 }
 
-type Tone = "ok" | "warn" | "muted";
-
-function HealthPill({
-  icon: Icon,
-  label,
-  value,
-  tone = "muted",
-  title,
-  onClick,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  value: React.ReactNode;
-  tone?: Tone;
-  title?: string;
-  onClick?: () => void;
-}) {
-  const iconTone =
-    tone === "ok"
-      ? "text-emerald-500"
-      : tone === "warn"
-      ? "text-amber-500"
-      : "text-muted-foreground";
-  const Wrapper = onClick ? "button" : "div";
-  return (
-    <Wrapper
-      type={onClick ? "button" : undefined}
-      onClick={onClick}
-      title={title}
-      className={cn(
-        "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs",
-        onClick && "transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      )}
-    >
-      <Icon className={cn("h-3.5 w-3.5", iconTone)} />
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium text-foreground">{value}</span>
-    </Wrapper>
-  );
-}
-
-function HealthBar() {
-  const openSettingsTo = useSettingsDialog((s) => s.openTo);
-
-  const auth = useQuery({
-    queryKey: ["github-auth"],
-    queryFn: api.githubAuthCheck,
-    staleTime: 60_000,
-  });
-  const rate = useQuery({
-    queryKey: ["github-rate"],
-    queryFn: api.githubRateLimit,
-    staleTime: 60_000,
-  });
-  const gitea = useQuery({
-    queryKey: ["gitea-status"],
-    queryFn: api.giteaStatusAll,
-    staleTime: 60_000,
-  });
-
-  const tokenOk = !!auth.data?.[0];
-  const tokenUser = auth.data?.[1] ?? "";
-  const remaining = rate.data?.[0] ?? -1;
-  const limit = rate.data?.[1] ?? -1;
-  // Single locked Gitea instance (AlmaviaCX).
-  const g = (gitea.data ?? [])[0];
-  const giteaOk = !!g?.ok;
-
-  return (
-    <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border bg-card/40 px-3 py-1.5">
-      <HealthPill
-        icon={Key}
-        label="GitHub"
-        value={tokenOk ? `@${tokenUser}` : "non connecté"}
-        tone={tokenOk ? "ok" : "warn"}
-        title={
-          tokenOk
-            ? `Connecté en tant que @${tokenUser}${
-                remaining >= 0 ? ` · quota ${remaining}/${limit}` : ""
-              }`
-            : "Aucun token GitHub configuré (Paramètres)"
-        }
-        onClick={() => openSettingsTo("connexions")}
-      />
-      <span className="text-muted-foreground/30">·</span>
-      <HealthPill
-        icon={Server}
-        label="Gitea"
-        value={
-          giteaOk ? `@${g?.user}` : g?.hasToken ? "auth échouée" : "non connecté"
-        }
-        tone={giteaOk ? "ok" : "warn"}
-        title={
-          giteaOk
-            ? `Gitea: connecté en tant que @${g?.user}`
-            : "Gitea : non connecté — VPN GlobalProtect + token requis (Paramètres)"
-        }
-        onClick={() => openSettingsTo("connexions", "gitea")}
-      />
-    </div>
-  );
-}
+// The GitHub / Gitea health strip that used to live here has moved into the
+// sidebar (`components/ForgeStatus.tsx`). It was a full-width band above the
+// dashboard's actual content, restating what the sidebar already printed as
+// text, and it is chrome: identical on every page, and read only when something
+// needs fixing. It now sits next to navigation, and survives the sidebar being
+// collapsed to icons — which the old text block did not.
 
 function OutdatedRow({
   plugin,
@@ -259,7 +165,9 @@ function NeedsAttentionSection() {
   const installMutation = useMutation({
     mutationFn: api.installPlugin,
     onSuccess: (_, plugin) => {
-      qc.invalidateQueries({ queryKey: ["refresh"] });
+      // Forced: the plugin cache just changed on disk, so the sweep that
+      // answers must be a real one rather than the previous result reused.
+      forceRefresh(qc);
       notify({ kind: "success", title: "Plugin mis à jour", body: plugin.name });
     },
     onError: (e, plugin) =>
@@ -730,12 +638,8 @@ const ACX_GITEA_HOST = "git.almaviacx.local";
 
 function AcxMarketplaceCard() {
   const openSettingsTo = useSettingsDialog((s) => s.openTo);
-  const gitea = useQuery({
-    queryKey: ["gitea-status"],
-    queryFn: api.giteaStatusAll,
-    staleTime: 60_000,
-  });
-  const status = (gitea.data ?? []).find((g) => g.host === ACX_GITEA_HOST);
+  const { gitea } = useForgeStatus();
+  const status = gitea.find((g) => g.host === ACX_GITEA_HOST);
   const connected = !!status?.ok;
 
   return (
@@ -881,19 +785,7 @@ function GettingStartedCard() {
   const openSettingsTo = useSettingsDialog((s) => s.openTo);
   const marketplaces = useApp((s) => s.marketplaces);
 
-  const auth = useQuery({
-    queryKey: ["github-auth"],
-    queryFn: api.githubAuthCheck,
-    staleTime: 60_000,
-  });
-  const gitea = useQuery({
-    queryKey: ["gitea-status"],
-    queryFn: api.giteaStatusAll,
-    staleTime: 60_000,
-  });
-
-  const connected =
-    !!auth.data?.[0] || (gitea.data ?? []).some((g) => g.ok);
+  const { anyConnected: connected } = useForgeStatus();
   const hasInstalledMarketplace = marketplaces.some((m) => m.installed);
   const hasInstalledPlugin = marketplaces.some((m) =>
     m.plugins.some(
@@ -1041,13 +933,16 @@ export function OverviewPage() {
   const setSelection = useApp((s) => s.setSelection);
   const version = useAppVersion();
 
-  // Landing on the dashboard triggers a fresh check on each visit: both the
-  // "éléments à traiter" pipeline (refresh_all → plugins obsolètes + PR statuses)
-  // and the marketplace PR tracking. Invalidate-only so it respects in-flight
-  // requests and no-ops for queries without active observers; runs once per mount.
+  // Landing on the dashboard used to invalidate both `["refresh"]` and
+  // `["tracked-prs"]`. Invalidation ignores staleTime, and both queries are
+  // mounted at App level, so every navigation back to this tab — and every
+  // window rebuild in tray mode — paid a full forge sweep plus the PR tracking.
+  // `refetchQueries({ stale: true })` asks the same question while honouring
+  // the staleness each query declares, so a tab switch costs nothing when the
+  // data is fresh.
   useEffect(() => {
-    qc.invalidateQueries({ queryKey: ["refresh"] });
-    qc.invalidateQueries({ queryKey: ["tracked-prs"] });
+    qc.refetchQueries({ queryKey: ["refresh"], stale: true });
+    qc.refetchQueries({ queryKey: ["tracked-prs"], stale: true });
   }, [qc]);
 
   const totalPlugins = marketplaces.reduce((acc, m) => acc + m.plugins.length, 0);
@@ -1076,8 +971,6 @@ export function OverviewPage() {
             Aperçu de vos plugins, skills et marketplaces Claude Code.
           </p>
         </header>
-
-        <HealthBar />
 
         <GettingStartedCard />
 
