@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
+  ArrowUpCircle,
   CheckCircle2,
   Download,
   ExternalLink,
@@ -30,6 +31,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/stores/app";
+import { withTask } from "@/stores/progress";
 import { useNotifications } from "@/stores/notifications";
 import { useSettingsDialog } from "@/stores/settingsDialog";
 import { api } from "@/lib/api";
@@ -164,7 +166,15 @@ function NeedsAttentionSection() {
   );
 
   const installMutation = useMutation({
-    mutationFn: api.installPlugin,
+    mutationFn: (plugin: Plugin) =>
+      withTask(
+        {
+          kind: "install",
+          label: "Mise à jour du plugin",
+          detail: `${plugin.name} · ${plugin.marketplaceName}`,
+        },
+        () => api.installPlugin(plugin)
+      ),
     onSuccess: (_, plugin) => {
       // The row leaves "obsolète" at once; the sweep behind `forceRefresh` is a
       // remote pass and would otherwise keep it amber for seconds.
@@ -256,7 +266,8 @@ type ActivityKind =
   | "install-mp"
   | "uninstall-mp"
   | "pr"
-  | "export";
+  | "export"
+  | "app-update";
 type ActivityLevel = "ok" | "error";
 
 interface ActivityEvent {
@@ -371,6 +382,39 @@ const ACTIVITY_PATTERNS: {
       detail: `${m[1]} — ${m[2]}`,
     }),
   },
+  // --- app self-update ---
+  //
+  // The in-place swap is the only one that really "raises the version": the
+  // installer fallback exits the process before it can log anything else, so
+  // both its own line and the failure path are matched too. All three come out
+  // of `app_updater` / `app_apply_update` (see `src-tauri/src/app_updater.rs`).
+  {
+    re: /app_updater: (\S+) -> (\S+) applied in place/,
+    build: (m) => ({
+      kind: "app-update",
+      level: "ok",
+      message: "SkillManager mis à jour",
+      detail: `${m[1]} → ${m[2]}`,
+    }),
+  },
+  {
+    re: /app_apply_update failed: (\S+) -> (\S+): (.+)/,
+    build: (m) => ({
+      kind: "app-update",
+      level: "error",
+      message: "Échec de la mise à jour de SkillManager",
+      detail: `${m[1]} → ${m[2]} — ${m[3]}`,
+    }),
+  },
+  {
+    re: /app_updater: installer spawned \((.+)\)/,
+    build: (m) => ({
+      kind: "app-update",
+      level: "ok",
+      message: "Installateur SkillManager lancé",
+      detail: m[1].split(/[\\/]/).pop() || m[1],
+    }),
+  },
   // --- usage-audit Excel export ---
   {
     re: /\busage_audit\.export ok: (.+)/,
@@ -391,6 +435,7 @@ const ACTIVITY_ICONS: Record<ActivityKind, React.ComponentType<{ className?: str
   "uninstall-mp": Trash2,
   pr: GitPullRequest,
   export: FileSpreadsheet,
+  "app-update": ArrowUpCircle,
 };
 
 const ACTIVITY_OK_COLORS: Record<ActivityKind, string> = {
@@ -400,6 +445,7 @@ const ACTIVITY_OK_COLORS: Record<ActivityKind, string> = {
   "uninstall-mp": "text-muted-foreground",
   pr: "text-violet-500",
   export: "text-teal-500",
+  "app-update": "text-emerald-500",
 };
 
 const TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)/;

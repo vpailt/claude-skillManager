@@ -1,21 +1,24 @@
 import { ArrowUpCircle, CheckCircle2, Download, FileText, RotateCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { UpdateProgressBar } from "@/components/UpdateProgressBar";
 import { dismissUpdate, restartNow, startUpdate } from "@/hooks/useAppUpdateEvents";
 import { useAppUpdate } from "@/stores/appUpdate";
 import { useReleaseNotes } from "@/stores/releaseNotes";
 
 /**
- * Full-width bar above the sidebar and the page. One element, three faces, in
- * strict priority order:
+ * Full-width bar above the sidebar and the page. It exists to offer an
+ * *action*, and it has two faces, in strict priority order:
  *
- * 1. **installing** — the user pressed "Installer": phase label + a real
- *    download bar, fed by `app-update-progress`. No dismiss button here; the
- *    swap is under way and hiding it would only hide the outcome.
- * 2. **staged** — the binary is on disk. Nothing left to do but restart, so the
+ * 1. **staged** — the binary is on disk. Nothing left to do but restart, so the
  *    bar says exactly that and offers the button.
- * 3. **available** — a release exists and nothing has been downloaded yet (the
+ * 2. **available** — a release exists and nothing has been downloaded yet (the
  *    backend never downloads on its own). Install, read the notes, or dismiss.
+ *
+ * The third face — the download itself — moved to the status bar
+ * (`components/StatusBar.tsx`), which is where every other long-running
+ * operation now reports. Two progress bars for the same download, one at each
+ * end of the window, is not information twice over; it is the same information
+ * competing with itself. There is nothing to act on while it runs anyway, so
+ * this bar simply steps aside until the swap lands and turns it into `staged`.
  *
  * Dismissal hides the offer outright until a newer release appears or the app
  * restarts — there is no sidebar pill for this state, only for `staged`. It is
@@ -26,7 +29,6 @@ export function UpdateBanner() {
   const available = useAppUpdate((s) => s.available);
   const staged = useAppUpdate((s) => s.staged);
   const installing = useAppUpdate((s) => s.installing);
-  const progress = useAppUpdate((s) => s.progress);
   const installError = useAppUpdate((s) => s.installError);
   const dismissedVersion = useAppUpdate((s) => s.dismissedVersion);
   const openNotes = useReleaseNotes((s) => s.setOpen);
@@ -34,13 +36,8 @@ export function UpdateBanner() {
   const shell =
     "flex items-center gap-3 border-b border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-800 dark:text-emerald-200";
 
-  if (installing) {
-    return (
-      <div className={shell}>
-        <UpdateProgressBar progress={progress} layout="row" />
-      </div>
-    );
-  }
+  // The status bar has it while it runs.
+  if (installing) return null;
 
   if (staged) {
     return (

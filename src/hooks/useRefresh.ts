@@ -8,9 +8,14 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/api";
 import type { RefreshMode } from "@/lib/types";
 import { useApp } from "@/stores/app";
+import { useProgress } from "@/stores/progress";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("refresh");
+
+/** Stable id: a sweep is a singleton (a process-wide mutex makes sure of it),
+ *  so re-beginning under the same id restarts the bar rather than stacking. */
+const REFRESH_TASK = "refresh";
 
 /** Set by {@link forceRefresh} and consumed by the very next `queryFn` run.
  *
@@ -102,10 +107,46 @@ export function useRefresh() {
     }
   }, [query.error]);
 
-  // Rust commands can stream progress via the "refresh-progress" event.
+  // A sweep is the slowest thing the app does — up to the 75 s budget — and
+  // until now it was a spinning icon in the sidebar and nothing else. Give the
+  // status bar a task for its whole duration; the event below fills in what it
+  // is currently reading.
+  const isFetching = query.isFetching;
+  useEffect(() => {
+    if (!isFetching) {
+      useProgress.getState().end(REFRESH_TASK);
+      return;
+    }
+    useProgress.getState().begin({
+      id: REFRESH_TASK,
+      kind: "refresh",
+      label: "Rafraîchissement",
+      detail: "lecture de l'installation locale",
+    });
+    // No cleanup that ends the task: the effect re-runs when `isFetching`
+    // flips, and the branch above is what closes it. Ending it here as well
+    // would clear the task on any unrelated re-render of this hook.
+  }, [isFetching]);
+
+  // Rust commands stream progress via the "refresh-progress" event. The payload
+  // is the backend's own wording (`auto-update: <mp>` / `fetching: <mp>`);
+  // translate it here rather than in Rust, which has no business holding UI
+  // strings.
   useEffect(() => {
     const unlisten = listen<string>("refresh-progress", (e) => {
       log.debug(e.payload);
+      // Split on the first separator only — `split(": ", 2)` would drop
+      // anything past a second one instead of keeping it in the name.
+      const cut = e.payload.indexOf(": ");
+      const stage = cut < 0 ? "" : e.payload.slice(0, cut);
+      const name = cut < 0 ? "" : e.payload.slice(cut + 2);
+      const detail =
+        stage === "auto-update"
+          ? `mise à jour de ${name}`
+          : stage === "fetching"
+            ? `lecture de ${name}`
+            : e.payload;
+      useProgress.getState().update(REFRESH_TASK, { detail });
     });
     return () => {
       unlisten.then((fn) => fn());

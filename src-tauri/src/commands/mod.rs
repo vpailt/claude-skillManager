@@ -2587,8 +2587,19 @@ pub async fn app_apply_update(app: AppHandle, info: AppUpdateInfo) -> Result<Sta
         info.latest_version.as_deref().unwrap_or("?")
     );
     let version = info.latest_version.clone().unwrap_or_default();
-    let mut on_progress = progress_emitter(app.clone(), version);
-    let staged = app_updater::apply_update(&info, &mut on_progress)?;
+    let mut on_progress = progress_emitter(app.clone(), version.clone());
+    // Logged, not just returned: the dashboard's "Activité récente" is built by
+    // reading the log file back, and a version bump that failed is exactly the
+    // kind of thing someone comes looking for there. The success side is
+    // `app_updater`'s own "applied in place" line.
+    let staged = app_updater::apply_update(&info, &mut on_progress).inspect_err(|e| {
+        tracing::error!(
+            "app_apply_update failed: {} -> {}: {}",
+            info.current_version,
+            if version.is_empty() { "?" } else { &version },
+            e
+        );
+    })?;
     // The pending release is no longer pending; a window rebuilt after this
     // must not be handed an offer that has already been taken.
     update_poller::clear_available();

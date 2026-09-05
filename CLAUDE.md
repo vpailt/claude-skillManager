@@ -568,15 +568,31 @@ falling through published a release whose entire diff was a version bump.
   invalidation ignores `staleTime`, and both `["refresh"]` and `["tracked-prs"]`
   are mounted at App level, so it turned every visit to the dashboard into a
   full sweep. Use `refetchQueries({ stale: true })`.
-- `hooks/useForgeStatus.ts` + `components/ForgeStatus.tsx` — the one place the
-  three connection probes (`github-auth`, `github-rate`, `gitea-status`) are
-  declared, and the one place they are rendered. Five components used to mount
-  them with their own options; a query key with mixed staleness refetches on the
-  most aggressive observer's mount, so every dashboard visit cost a GitHub
-  `/user`, a `/rate_limit` and one Gitea `/user` per instance — the last of them
-  VPN-gated. The block lives in the **sidebar**, not on the dashboard: it is
-  chrome, identical on every page, and it now survives the bar being collapsed
-  to icons (a status dot on the icon), which the plain-text version did not.
+- `hooks/useForgeStatus.ts` — the one place the three connection probes
+  (`github-auth`, `github-rate`, `gitea-status`) are declared. Five components
+  used to mount them with their own options; a query key with mixed staleness
+  refetches on the most aggressive observer's mount, so every dashboard visit
+  cost a GitHub `/user`, a `/rate_limit` and one Gitea `/user` per instance —
+  the last of them VPN-gated. It is rendered in exactly one place, and that
+  place is now `components/StatusBar.tsx` — it was a strip on the dashboard,
+  then a block in the sidebar, and each move was made for the same reason: it
+  is chrome, identical on every page, read only when something needs fixing.
+  The status bar is the first host that is neither in the way of the content
+  nor hostage to the sidebar being collapsed.
+- `components/StatusBar.tsx` + `stores/progress.ts` — the permanent bar across
+  the bottom. It carries the running version (clicking it opens the release
+  notes), the forge connection segments (GitHub / Gitea mark, green connected,
+  red not), and **the one progress slot in the app**. Anything slow registers a
+  task in `stores/progress.ts` and the bar renders the winner on priority
+  (`publish` > install/uninstall/marketplace > audit/tracking > `refresh`),
+  counting the rest as `+N` so its height never moves. The self-update is the
+  one thing *not* mirrored into that store: it already has `stores/appUpdate.ts`
+  fed by backend events that outlive the window, and the bar reads it directly.
+  Two queries are derived from `useIsFetching` rather than wrapped
+  (`usage-audit`, `tracked-prs`) — they are owned by their pages and a task
+  wrapper would have to be threaded through every call site. `withTask()` is
+  the wrapper for everything else, and it works outside React, which is what
+  matters: install/uninstall live in `mutationFn`s, not in components.
 - `hooks/usePrPolling.ts` — gated by `ui.prPollingEnabled` in settings; min interval 15s.
   Its `["tracked-prs"]` timer is additionally gated on `useTrackingView` being
   active. "Invalidate-only, so it is free while you're elsewhere" was wrong:
@@ -601,18 +617,21 @@ falling through published a release whose entire diff was a version bump.
   click, and the `app-update-progress` listener drops events that arrive while
   it is false, since event delivery is not ordered against the command's own
   response and a trailing tick would otherwise freeze the bar.
-  `components/UpdateBanner.tsx` is the top bar: one element, three faces, in
-  priority order — installing (phase label + progress bar, no dismiss), staged
-  (restart button), available (Installer / Notes de version / dismiss).
-  Dismissal applies to the "available" face only and hides it outright — the
-  sidebar pill covers `staged`, never `available` — so it goes through
-  `dismissUpdate()`, which records it in Rust as well as in the store.
-  `components/UpdateProgressBar.tsx` is the one rendering of the installing
-  state, shared by the banner and the Settings card; keep it that way, the two
-  copies it replaced had already drifted. It is deliberately **not** an
-  `aria-live` region (ticks arrive every 120 ms) — the named `role="progressbar"`
-  plus `aria-valuetext` is what carries the value. `App.tsx` is a flex
-  **column** for the bar, so don't turn the root back into a row.
+  `components/UpdateBanner.tsx` is the top bar, and it exists to offer an
+  *action*: staged (restart button) or available (Installer / Notes de version /
+  dismiss). While the download runs it renders **nothing** — the status bar has
+  the phase, the bar and the byte counter, like every other long-running
+  operation. Two progress bars for the same download, one at each end of the
+  window, is the same information competing with itself, and there is nothing to
+  act on while it runs. Dismissal applies to the "available" face only and hides
+  it outright — the sidebar pill covers `staged`, never `available` — so it goes
+  through `dismissUpdate()`, which records it in Rust as well as in the store.
+  `components/UpdateProgressBar.tsx` is what is left of that face: the Settings
+  card's stacked rendering. It is deliberately **not** an `aria-live` region
+  (ticks arrive every 120 ms) — the named `role="progressbar"` plus
+  `aria-valuetext` is what carries the value, and the status bar's own bar
+  follows the same rule. `App.tsx` is a flex **column** for the banner *and* the
+  status bar, so don't turn the root back into a row.
 - `components/ReleaseNotesDialog.tsx` + `stores/releaseNotes.ts` — the "Notes de
   mise à jour" panel, opened from Settings → À propos and from the banner. Reads
   `app_release_notes` (the release *history*, newest first) and renders bodies

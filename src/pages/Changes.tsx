@@ -28,6 +28,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { DiffViewToggle, FileDiff } from "@/components/FileDiff";
 import { useBulkRunner, type BulkOp } from "@/hooks/useBulkRunner";
+import { useProgress } from "@/stores/progress";
 import { api } from "@/lib/api";
 import { usePendingChanges, type ChangeGroup } from "@/lib/changes";
 import { openExternal } from "@/lib/utils";
@@ -82,6 +83,7 @@ export function ChangesPage() {
     invalidate: [["refresh"], ["pending-prs"], ["pr-history"]],
     summaryTitle: "Publication",
     notify: true,
+    taskKind: "publish",
   });
 
   // A single skill pushed from the Skills tab: scroll to it and mark it out.
@@ -171,9 +173,25 @@ export function ChangesPage() {
   const prepare = async () => {
     setPreparing(true);
     setPrepareError(null);
+    // Preparing reads the plugin's whole remote tree once per group and diffs
+    // every ticked skill against it — seconds per group over a VPN-gated Gitea,
+    // with nothing on screen but a disabled button until now.
+    const progress = useProgress.getState();
+    const taskId = progress.begin({
+      kind: "publish",
+      label: "Préparation des PR",
+      detail: `0/${selectedGroups.length}`,
+      pct: 0,
+    });
     try {
       const built: Record<string, AdminDraft> = {};
       for (const g of selectedGroups) {
+        useProgress.getState().update(taskId, {
+          detail: `${Object.keys(built).length + 1}/${selectedGroups.length} · ${g.plugin.name}`,
+          pct: Math.round(
+            (Object.keys(built).length / selectedGroups.length) * 100
+          ),
+        });
         const chosen = g.items.filter((i) => ticked.has(i.folder));
         const cfg = settingsFor(g.key);
         built[g.key] = await api.adminPrepareUploadSkills({
@@ -197,6 +215,7 @@ export function ChangesPage() {
     } catch (e) {
       setPrepareError(errMsg(e));
     } finally {
+      useProgress.getState().end(taskId);
       setPreparing(false);
     }
   };

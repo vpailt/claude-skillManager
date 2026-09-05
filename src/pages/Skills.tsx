@@ -64,6 +64,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useApp } from "@/stores/app";
+import { withTask } from "@/stores/progress";
 import { useNotifications } from "@/stores/notifications";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -858,7 +859,15 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
   });
 
   const uninstall = useMutation({
-    mutationFn: () => api.uninstallMarketplaceCascade(marketplace.name),
+    mutationFn: () =>
+      withTask(
+        {
+          kind: "marketplace",
+          label: "Désinstallation du marketplace",
+          detail: marketplace.name,
+        },
+        () => api.uninstallMarketplaceCascade(marketplace.name)
+      ),
     onSuccess: () => {
       forceRefresh(qc);
       qc.invalidateQueries({ queryKey: ["app-settings"] });
@@ -1116,7 +1125,14 @@ function PluginDetail({
       if (mp && !mp.installed) {
         await installMarketplace.mutateAsync(mp);
       }
-      return api.installPlugin(p);
+      return withTask(
+        {
+          kind: "install",
+          label: "Installation du plugin",
+          detail: `${p.name} · ${p.marketplaceName}`,
+        },
+        () => api.installPlugin(p)
+      );
     },
     onSuccess: (_, p) => {
       markInstalled(p);
@@ -1131,7 +1147,15 @@ function PluginDetail({
       }),
   });
   const uninstallMutation = useMutation({
-    mutationFn: api.uninstallPlugin,
+    mutationFn: (p: Plugin) =>
+      withTask(
+        {
+          kind: "uninstall",
+          label: "Désinstallation du plugin",
+          detail: `${p.name} · ${p.marketplaceName}`,
+        },
+        () => api.uninstallPlugin(p)
+      ),
     onSuccess: (_, p) => {
       markUninstalled(p);
       forceRefresh(qc);
@@ -1153,7 +1177,15 @@ function PluginDetail({
       plugin: string;
       marketplace: string;
       value: boolean;
-    }) => api.setPluginEnabled(pl, marketplace, value),
+    }) =>
+      withTask(
+        {
+          kind: "install",
+          label: value ? "Activation du plugin" : "Désactivation du plugin",
+          detail: `${pl} · ${marketplace}`,
+        },
+        () => api.setPluginEnabled(pl, marketplace, value)
+      ),
     onSuccess: (_, vars) => {
       markEnabled(vars.marketplace, vars.plugin, vars.value);
       forceRefresh(qc);
@@ -1931,12 +1963,12 @@ export function SkillsPage() {
         <Button
           size="sm"
           variant="ghost"
-          className="h-7 gap-1 px-2 text-xs"
+          className="h-7 shrink-0 gap-1 px-2 text-xs"
           onClick={() => setAddOpen(true)}
           title="Ajouter un marketplace depuis une URL Git"
         >
           <Plus className="h-3.5 w-3.5" />
-          Ajouter
+          Ajouter une Marketplace
         </Button>
       </div>
 

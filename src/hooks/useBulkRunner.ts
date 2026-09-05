@@ -11,6 +11,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNotifications } from "@/stores/notifications";
+import { useProgress, type TaskKind } from "@/stores/progress";
 import { forceRefresh } from "@/hooks/useRefresh";
 import { createLogger } from "@/lib/logger";
 
@@ -39,12 +40,20 @@ export interface BulkRunnerOptions {
   summaryTitle?: string;
   /** Set false to skip the summary toast (the caller shows its own). */
   notify?: boolean;
+  /** How the status bar files this batch. A batch is a user gesture, so the
+   *  default outranks the sweep it will trigger at the end. */
+  taskKind?: TaskKind;
 }
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function useBulkRunner<T = unknown>(options: BulkRunnerOptions = {}) {
-  const { invalidate = [], summaryTitle = "Opérations", notify = true } = options;
+  const {
+    invalidate = [],
+    summaryTitle = "Opérations",
+    notify = true,
+    taskKind = "install",
+  } = options;
   const qc = useQueryClient();
   const push = useNotifications((s) => s.push);
 
@@ -79,10 +88,24 @@ export function useBulkRunner<T = unknown>(options: BulkRunnerOptions = {}) {
       setDone(0);
       setTotal(ops.length);
 
+      // One status-bar task for the whole batch — the ops are sequential and
+      // counted, so this is the rare case where a real percentage exists.
+      const progress = useProgress.getState();
+      const taskId = progress.begin({
+        kind: taskKind,
+        label: summaryTitle,
+        detail: `0/${ops.length}`,
+        pct: 0,
+      });
+
       const collected: BulkOpResult<T>[] = [];
       for (const op of ops) {
         if (cancelRef.current) break;
         setCurrent(op.label);
+        useProgress.getState().update(taskId, {
+          detail: `${collected.length + 1}/${ops.length} · ${op.label}`,
+          pct: Math.round((collected.length / ops.length) * 100),
+        });
         try {
           const value = await op.run();
           collected.push({ id: op.id, label: op.label, ok: true, value });
@@ -101,6 +124,7 @@ export function useBulkRunner<T = unknown>(options: BulkRunnerOptions = {}) {
 
       setCurrent(null);
       setRunning(false);
+      useProgress.getState().end(taskId);
 
       for (const key of invalidateRef.current) {
         // The refresh query goes through `forceRefresh`, never a plain
@@ -137,7 +161,7 @@ export function useBulkRunner<T = unknown>(options: BulkRunnerOptions = {}) {
 
       return collected;
     },
-    [qc, push, summaryTitle, notify]
+    [qc, push, summaryTitle, notify, taskKind]
   );
 
   return { running, total, done, current, results, run, cancel, reset };

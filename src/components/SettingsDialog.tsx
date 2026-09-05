@@ -900,7 +900,7 @@ export function SettingsDialog() {
 
                 {installing && (
                   <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 p-2.5 text-xs text-emerald-700 dark:text-emerald-300">
-                    <UpdateProgressBar progress={progress} layout="stacked" />
+                    <UpdateProgressBar progress={progress} />
                   </div>
                 )}
 

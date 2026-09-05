@@ -12,6 +12,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { forceRefresh } from "@/hooks/useRefresh";
 import { useNotifications } from "@/stores/notifications";
+import { withTask } from "@/stores/progress";
 import type { Marketplace } from "@/lib/types";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -42,7 +43,19 @@ export function useInstallMarketplace() {
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
   return useMutation({
-    mutationFn: installMarketplaceOnce,
+    // The task wraps the mutation, not `installMarketplaceOnce` itself: the
+    // bulk runner drives that helper directly and already puts one task on the
+    // bar for the whole batch. Wrapping the helper would have every item of a
+    // batch open a second, shorter-lived task on top of it.
+    mutationFn: (mp: Marketplace) =>
+      withTask(
+        {
+          kind: "marketplace",
+          label: "Installation du marketplace",
+          detail: mp.name,
+        },
+        () => installMarketplaceOnce(mp)
+      ),
     onSuccess: (_, mp) => {
       // Forced: we just changed what is on disk, so the sweep that answers this
       // must be a real one — a reused result would not know about it.

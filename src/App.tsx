@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { Sidebar } from "@/components/Sidebar";
 import { NotificationStack } from "@/components/NotificationStack";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { StatusBar } from "@/components/StatusBar";
 import { useRefresh } from "@/hooks/useRefresh";
 import { usePrPolling } from "@/hooks/usePrPolling";
 import { useTrayEvents } from "@/hooks/useTrayEvents";
@@ -205,6 +206,10 @@ export default function App() {
           </Suspense>
         </main>
       </div>
+      {/* Permanent status bar: version, forge connections, progress. Outside
+          the row above so it spans the sidebar too, and `shrink-0` so the
+          scrollable page never eats into it. */}
+      <StatusBar />
       {/* No fallback: both mount hidden and render nothing until opened. */}
       <Suspense fallback={null}>
         {paletteOpen && (

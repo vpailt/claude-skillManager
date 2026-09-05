@@ -1,5 +1,3 @@
-import { Download } from "lucide-react";
-import { cn } from "@/lib/utils";
 import type { UpdateProgress } from "@/lib/types";
 
 const PHASE_LABEL = {
@@ -14,15 +12,16 @@ function mb(bytes: number): string {
 
 interface Props {
   progress: UpdateProgress | null;
-  /** Inline (banner) or stacked (Settings card). */
-  layout: "row" | "stacked";
 }
 
 /**
- * The one rendering of "an update is being installed", shared by the top banner
- * and the Settings card — they show the same three fields of the same store
- * slice, and keeping two copies is how they drifted (one gated the percentage
- * on the download phase, the other labelled "Vérification… 100 %").
+ * The Settings card's rendering of "an update is being installed".
+ *
+ * It used to be shared with the top banner in an inline variant; the banner no
+ * longer draws the download at all (the status bar does), so only the stacked
+ * form survives. The status bar deliberately does not reuse this one: it is a
+ * 24 px strip with its own type scale and a slot it shares with every other
+ * running task, not a card.
  *
  * Accessibility: the container is **not** an `aria-live` region. Progress ticks
  * arrive every 120 ms, and a live region would have a screen reader read the
@@ -30,7 +29,7 @@ interface Props {
  * `role="progressbar"` is what carries the value, and `aria-valuetext` is what
  * makes it say something useful when the size is unknown.
  */
-export function UpdateProgressBar({ progress, layout }: Props) {
+export function UpdateProgressBar({ progress }: Props) {
   const phase = progress?.phase ?? "downloading";
   const total = progress?.total ?? 0;
   const done = progress?.downloaded ?? 0;
@@ -43,10 +42,7 @@ export function UpdateProgressBar({ progress, layout }: Props) {
 
   const bar = (
     <div
-      className={cn(
-        "h-1.5 overflow-hidden rounded-full bg-emerald-500/20",
-        layout === "row" ? "min-w-0 flex-1" : "w-full"
-      )}
+      className="h-1.5 w-full overflow-hidden rounded-full bg-emerald-500/20"
       role="progressbar"
       aria-label="Progression de l'installation de la mise à jour"
       aria-valuenow={pct ?? undefined}
@@ -64,19 +60,6 @@ export function UpdateProgressBar({ progress, layout }: Props) {
       />
     </div>
   );
-
-  if (layout === "row") {
-    return (
-      <>
-        <Download className="h-4 w-4 shrink-0 animate-pulse" />
-        <span className="shrink-0">{label}</span>
-        {bar}
-        {counter && (
-          <span className="shrink-0 text-xs tabular-nums opacity-80">{counter}</span>
-        )}
-      </>
-    );
-  }
 
   return (
     <div className="space-y-1.5">

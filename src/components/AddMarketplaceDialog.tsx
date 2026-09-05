@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useNotifications } from "@/stores/notifications";
 import { useSettingsDialog } from "@/stores/settingsDialog";
+import { withTask } from "@/stores/progress";
 import { forceRefresh } from "@/hooks/useRefresh";
 import type { Provider } from "@/lib/types";
 
@@ -174,7 +175,15 @@ export function AddMarketplaceDialog({
       });
       // Install it right away — download it locally and make it visible to
       // Claude Code, no separate "Installer" step.
-      await api.installMarketplace(cfgName, parsedRepo, branch, true, provider, baseUrl);
+      await withTask(
+        {
+          kind: "marketplace",
+          label: "Installation du marketplace",
+          detail: cfgName,
+        },
+        () =>
+          api.installMarketplace(cfgName, parsedRepo, branch, true, provider, baseUrl)
+      );
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["app-settings"] });

@@ -21,9 +21,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/stores/ui";
 import { useIsFetching, useQueryClient } from "@tanstack/react-query";
-import { ForgeStatus } from "@/components/ForgeStatus";
 import { HelpDialog } from "@/components/HelpDialog";
-import { useAppVersion } from "@/hooks/useAppVersion";
 import { useHelpDialog } from "@/stores/helpDialog";
 import { useSettingsDialog } from "@/stores/settingsDialog";
 import { useTrackingView } from "@/stores/trackingView";
@@ -95,7 +93,6 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const helpOpen = useHelpDialog((s) => s.open);
   const setHelpOpen = useHelpDialog((s) => s.setOpen);
   const openSettings = useSettingsDialog((s) => s.openTo);
-  const version = useAppVersion();
   const staged = useAppUpdate((s) => s.staged);
   const cycleTheme = () => {
     const idx = THEME_CYCLE.indexOf(theme);
@@ -239,13 +236,10 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
         })}
       </nav>
 
-      {/* Forge connection status. Moved off the dashboard, where it was a
-          full-width strip competing with the content, and merged with the
-          plain-text block that used to sit here — one rendering, clickable,
-          and present when the bar is collapsed to icons. */}
-      <Separator />
-      <ForgeStatus collapsed={collapsed} />
-
+      {/* Forge connection status used to sit here. It is now a segment of the
+          status bar (`components/StatusBar.tsx`), which is visible on every
+          page *and* independent of this bar being collapsed to icons — the two
+          reasons it was moved out of the dashboard in the first place. */}
       <Separator />
 
       {/* Utilities cluster: Settings, Help, Theme, Collapse */}
@@ -325,8 +319,9 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
       )}
       {!collapsed && (
         <div className="px-3 pb-2 text-center text-xs text-muted-foreground/60">
+          {/* The version moved to the status bar, where it is readable with the
+              bar collapsed and doubles as the way into the release notes. */}
           <div>Conçu par @vpailt</div>
-          {version && <div>v{version}</div>}
         </div>
       )}
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
