@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
+import { withTask } from "@/stores/progress";
 import { cn } from "@/lib/utils";
 import { useNotifications } from "@/stores/notifications";
 import type { PluginUsage } from "@/lib/types";
@@ -134,7 +135,17 @@ export function UsageAuditPage() {
         filters: [{ name: "Excel", extensions: ["xlsx"] }],
       });
       if (!path) return null;
-      return api.usageExportXlsx(path, fromIso, toIso);
+      // The task opens *after* the save dialog, not around it: the dialog is
+      // modal and waits on the user, and a progress line ticking while someone
+      // picks a folder says the app is busy when it is not.
+      return withTask(
+        {
+          kind: "audit",
+          label: "Export de l'audit",
+          detail: path.split(/[\\/]/).pop() ?? "",
+        },
+        () => api.usageExportXlsx(path, fromIso, toIso)
+      );
     },
     onSuccess: (path) => {
       if (!path) return;

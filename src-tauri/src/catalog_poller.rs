@@ -30,6 +30,16 @@ use crate::models::InstallState;
 /// Emitted after every successful sweep so an open UI refreshes its view.
 pub const EVENT: &str = "catalog-changed";
 
+/// Emitted around each background sweep, payload `true` at the start and
+/// `false` at the end, so the status bar can show it running.
+///
+/// The sweep already emits `refresh-progress` from inside `sweep_remote`, but
+/// that only says what it is *currently* reading — there is no first or last
+/// event to open and close a progress line with, and a tick that finds nothing
+/// to change emits no `catalog-changed` either. Without this pair, background
+/// work was invisible unless it happened to alter something.
+pub const EVENT_SWEEPING: &str = "catalog-sweeping";
+
 /// Floor on the interval. The sweep is an N+1 across the forge (registry, push
 /// rights, a manifest read and a git tree per plugin) and is quota-limited —
 /// a tighter loop buys nothing and burns rate limit.
@@ -81,7 +91,14 @@ fn worker(app: AppHandle) {
             std::thread::sleep(Duration::from_secs(DISABLED_POLL_SECS));
             continue;
         }
-        match tick(&app) {
+        if let Err(e) = app.emit(EVENT_SWEEPING, true) {
+            tracing::debug!("catalog_poller: emit sweeping failed: {e}");
+        }
+        let ticked = tick(&app);
+        if let Err(e) = app.emit(EVENT_SWEEPING, false) {
+            tracing::debug!("catalog_poller: emit sweeping failed: {e}");
+        }
+        match ticked {
             Some(counts) => {
                 // Emit only — the taskbar badge stays the frontend's to write.
                 // It decorates the taskbar *button*, which does not exist while

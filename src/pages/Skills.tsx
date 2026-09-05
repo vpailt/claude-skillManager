@@ -887,7 +887,15 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
   });
 
   const deleteCompletely = useMutation({
-    mutationFn: () => api.deleteMarketplaceCompletely(marketplace.name),
+    mutationFn: () =>
+      withTask(
+        {
+          kind: "marketplace",
+          label: "Suppression du marketplace",
+          detail: marketplace.name,
+        },
+        () => api.deleteMarketplaceCompletely(marketplace.name)
+      ),
     onSuccess: () => {
       forceRefresh(qc);
       qc.invalidateQueries({ queryKey: ["app-settings"] });
@@ -1762,7 +1770,14 @@ export function SkillsPage() {
   const deleteSkill = useMutation({
     mutationFn: async (entry: SkillEntry) => {
       const folder = entry.folder as string;
-      const tracked = await api.deleteSkillLocal(folder);
+      const tracked = await withTask(
+        {
+          kind: "uninstall",
+          label: "Suppression de la compétence",
+          detail: entry.name,
+        },
+        () => api.deleteSkillLocal(folder)
+      );
       return { entry, folder, tracked };
     },
     onSuccess: ({ entry, folder, tracked }) => {

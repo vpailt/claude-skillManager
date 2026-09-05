@@ -496,6 +496,12 @@ falling through published a release whose entire diff was a version bump.
   the window is *destroyed* — so upstream detection did not slow down, it stopped.
   Emits `catalog-changed`; raises the native toast itself when no window was visible.
   It deliberately does **not** write the taskbar badge (see `taskbar.rs`).
+  It also brackets every tick with `catalog-sweeping` (`true` then `false`), which
+  is what puts the background sweep on the status bar. Neither of the events it
+  already had could do that job: `refresh-progress` says what the sweep is
+  reading but has no first or last tick to open and close a line with, and a
+  tick that changes nothing emits no `catalog-changed` at all — so background
+  work was invisible unless it happened to alter something.
 - `claude_watch.rs` — watches `~/.claude/plugins/` and `~/.claude/` (non-recursively)
   so a `/plugin install` run from a terminal shows up in ~1 s instead of waiting for
   a window focus. Emits `claude-state-changed` and interprets nothing; the sweep does
@@ -590,7 +596,12 @@ falling through published a release whose entire diff was a version bump.
   fed by backend events that outlive the window, and the bar reads it directly.
   Two queries are derived from `useIsFetching` rather than wrapped
   (`usage-audit`, `tracked-prs`) — they are owned by their pages and a task
-  wrapper would have to be threaded through every call site. `withTask()` is
+  wrapper would have to be threaded through every call site. The background
+  sweep gets its **own** task id rather than sharing the foreground one: the two
+  can overlap (a background sweep yields to a foreground one instead of blocking
+  it), and one ending would otherwise wipe the other off the bar. `useRefresh`
+  clears it on unmount too — tray mode destroys the window mid-sweep and the
+  closing `false` then lands on nobody. `withTask()` is
   the wrapper for everything else, and it works outside React, which is what
   matters: install/uninstall live in `mutationFn`s, not in components.
 - `hooks/usePrPolling.ts` — gated by `ui.prPollingEnabled` in settings; min interval 15s.

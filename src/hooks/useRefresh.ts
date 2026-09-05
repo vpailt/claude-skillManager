@@ -17,6 +17,12 @@ const log = createLogger("refresh");
  *  so re-beginning under the same id restarts the bar rather than stacking. */
 const REFRESH_TASK = "refresh";
 
+/** The Rust `catalog_poller`'s own sweep, which nothing in the frontend
+ *  triggers. It gets its own id rather than sharing `REFRESH_TASK`: the two can
+ *  overlap (the poller yields to a foreground sweep rather than blocking it),
+ *  and one ending would otherwise wipe the other's line off the bar. */
+const BACKGROUND_TASK = "catalog-sweep";
+
 /** Set by {@link forceRefresh} and consumed by the very next `queryFn` run.
  *
  *  TanStack has nowhere to carry a per-invocation argument, and the distinction
@@ -146,10 +152,40 @@ export function useRefresh() {
           : stage === "fetching"
             ? `lecture de ${name}`
             : e.payload;
+      // Whichever of the two is open takes it; updating an id with no task is
+      // a no-op, so no branch is needed to tell them apart.
       useProgress.getState().update(REFRESH_TASK, { detail });
+      useProgress.getState().update(BACKGROUND_TASK, { detail });
     });
     return () => {
       unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // The background catalogue sweep (`catalog_poller`) announces itself, because
+  // nothing else can: it is a Rust thread on a timer, it may find nothing to
+  // change — in which case no `catalog-changed` follows — and the network work
+  // it does is exactly as slow as the refresh the user presses themselves.
+  useEffect(() => {
+    const unlisten = listen<boolean>("catalog-sweeping", (e) => {
+      const progress = useProgress.getState();
+      if (e.payload) {
+        progress.begin({
+          id: BACKGROUND_TASK,
+          kind: "refresh",
+          label: "Balayage automatique",
+          detail: "recherche de mises à jour",
+        });
+      } else {
+        progress.end(BACKGROUND_TASK);
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+      // The window can be destroyed mid-sweep (tray mode), and the `false` that
+      // would have closed this lands on nobody. Clear it on unmount so a
+      // rebuilt window does not inherit a task that can never end.
+      useProgress.getState().end(BACKGROUND_TASK);
     };
   }, []);
 
