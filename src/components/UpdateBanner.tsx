@@ -5,8 +5,10 @@ import { useAppUpdate } from "@/stores/appUpdate";
 import { useReleaseNotes } from "@/stores/releaseNotes";
 
 /**
- * Full-width bar above the sidebar and the page. It exists to offer an
- * *action*, and it has two faces, in strict priority order:
+ * A sub-window stacked above the page, in the same gutter and with the same
+ * rounded corner — the sidebar and the status bar run past it, since those two
+ * are the chrome. It exists to offer an *action*, and it has two faces, in
+ * strict priority order:
  *
  * 1. **staged** — the binary is on disk. Nothing left to do but restart, so the
  *    bar says exactly that and offers the button.
@@ -33,8 +35,10 @@ export function UpdateBanner() {
   const dismissedVersion = useAppUpdate((s) => s.dismissedVersion);
   const openNotes = useReleaseNotes((s) => s.setOpen);
 
+  // A sub-window like the page below it — same corner, same gutter — rather
+  // than a full-width band welded to the top of the window.
   const shell =
-    "flex items-center gap-3 border-b border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-800 dark:text-emerald-200";
+    "flex shrink-0 items-center gap-3 rounded-panel border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-800 dark:text-emerald-200";
 
   // The status bar has it while it runs.
   if (installing) return null;

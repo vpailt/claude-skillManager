@@ -225,6 +225,10 @@ pub struct UiPrefs {
     pub theme: String,
     #[serde(default)]
     pub sidebar_collapsed: bool,
+    /// Width of the expanded sidebar, in pixels. A collapse leaves it alone, so
+    /// re-opening the bar returns it to the width the user dragged it to.
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: u32,
     /// Start the app hidden in the tray instead of opening the window.
     #[serde(default)]
     pub start_minimized: bool,
@@ -282,6 +286,10 @@ fn default_catalog_interval_minutes() -> u32 {
     30
 }
 
+fn default_sidebar_width() -> u32 {
+    240
+}
+
 fn default_close_to_tray() -> bool {
     true
 }
@@ -298,6 +306,7 @@ impl Default for UiPrefs {
             density: default_ui_density(),
             theme: default_theme(),
             sidebar_collapsed: false,
+            sidebar_width: default_sidebar_width(),
             start_minimized: false,
             close_to_tray: true,
             release_ui_on_tray: true,
@@ -377,6 +386,7 @@ const PROP_POLLING_INTERVAL: &str = "polling.interval.seconds";
 const PROP_UI_THEME: &str = "ui.theme";
 const PROP_UI_DENSITY: &str = "ui.density";
 const PROP_UI_SIDEBAR: &str = "ui.sidebar.collapsed";
+const PROP_UI_SIDEBAR_WIDTH: &str = "ui.sidebar.width";
 const PROP_UI_START_MINIMIZED: &str = "ui.tray.start.minimized";
 const PROP_UI_CLOSE_TO_TRAY: &str = "ui.tray.close.to.tray";
 const PROP_UI_RELEASE_UI_ON_TRAY: &str = "ui.tray.release.ui";
@@ -418,6 +428,8 @@ fn settings_from_properties_and_marketplaces(
             density: props.get_or(PROP_UI_DENSITY, &default_ui_density()),
             theme: props.get_or(PROP_UI_THEME, &default_theme()),
             sidebar_collapsed: props.get_bool(PROP_UI_SIDEBAR, false),
+            sidebar_width: props
+                .get_u32(PROP_UI_SIDEBAR_WIDTH, default_sidebar_width()),
             start_minimized: props.get_bool(PROP_UI_START_MINIMIZED, false),
             close_to_tray: props.get_bool(PROP_UI_CLOSE_TO_TRAY, true),
             release_ui_on_tray: props.get_bool(PROP_UI_RELEASE_UI_ON_TRAY, true),
@@ -444,6 +456,7 @@ fn settings_to_properties(s: &Settings) -> Properties {
     p.set(PROP_UI_THEME, &s.ui.theme);
     p.set(PROP_UI_DENSITY, &s.ui.density);
     p.set_bool(PROP_UI_SIDEBAR, s.ui.sidebar_collapsed);
+    p.set_u32(PROP_UI_SIDEBAR_WIDTH, s.ui.sidebar_width);
     p.set_bool(PROP_UI_START_MINIMIZED, s.ui.start_minimized);
     p.set_bool(PROP_UI_CLOSE_TO_TRAY, s.ui.close_to_tray);
     p.set_bool(PROP_UI_RELEASE_UI_ON_TRAY, s.ui.release_ui_on_tray);

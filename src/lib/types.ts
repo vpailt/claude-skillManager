@@ -187,6 +187,12 @@ export interface UiPrefs {
   density: UiDensity;
   theme: ThemePref;
   sidebarCollapsed: boolean;
+  /**
+   * Width of the expanded sidebar, in pixels. Untouched by a collapse, so
+   * re-opening the bar returns it to the width the user dragged it to rather
+   * than to the default.
+   */
+  sidebarWidth: number;
   startMinimized: boolean;
   closeToTray: boolean;
   /**

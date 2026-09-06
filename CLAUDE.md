@@ -571,6 +571,37 @@ falling through published a release whose entire diff was a version bump.
 
 ### React frontend (`src/`)
 
+#### The shell: one chrome, panels floating on it
+
+The window is **two surfaces, not a grid of bordered regions**, and every layout
+decision follows from that:
+
+- `--chrome` is the châssis. The sidebar, the status bar and the gutters between
+  panels are the same continuous sheet, and it is the only surface that touches
+  the window edge. The sidebar draws no right border and the status bar no top
+  border — they read as one because they *are* one.
+- `--background` is a sub-window laid on top: the page, each half of a split,
+  the update banner. `.panel` (in `styles.css`) is that surface — background,
+  a seam-weight `--panel-border`, `--radius-panel`, and `overflow: hidden`,
+  which is what makes the rounded corner actually clip. Every menu and tooltip
+  inside a page goes through a Radix portal, so nothing that needs to escape a
+  panel is rendered inside one.
+- `--gutter` (the `p-gutter` / `gap-gutter` / `w-gutter` utilities) is the space
+  between two sub-windows and between one and the window edge. `App.tsx` holds
+  it in a **single place** — the padding on the column right of the sidebar —
+  so nothing else in the tree hard-codes the value.
+
+`<main>` in `App.tsx` is deliberately **not** a panel: a page is one sub-window,
+but a split page is two side by side in the same gutter, so the panel is drawn
+by what the route renders. Each page root carries `panel`; `ResizableSplit` puts
+it on **both halves** instead, and its handle draws no rule at rest — the
+separator between two sub-windows is chrome showing through. A new page must
+therefore carry `panel` on its root, or it will render as bare chrome.
+
+Dark is a neutral near-black with the chrome *darker* than the panels on it —
+that contrast, not a heavy border, is what gives a sub-window its edge. A trace
+of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey.
+
 - `lib/api.ts` — typed wrappers around `invoke()`. Add a new wrapper here whenever you
   add a Tauri command; don't call `invoke()` directly from components.
 - `lib/types.ts` — TS mirror of Rust models. Keep field casing consistent
@@ -603,8 +634,21 @@ falling through published a release whose entire diff was a version bump.
   is chrome, identical on every page, read only when something needs fixing.
   The status bar is the first host that is neither in the way of the content
   nor hostage to the sidebar being collapsed.
+- `components/Sidebar.tsx` — the nav bar, and the only resizable piece of the
+  chrome. Width is free between `SNAP_WIDTH` (180) and `MAX_WIDTH` (380), and
+  **the handle is the collapse control**: drag under `COLLAPSE_THRESHOLD` (140)
+  and releasing folds the bar to icons. The 40 px between the two is a snap zone
+  that resolves *upwards* — you cross it deliberately to collapse, you never
+  drift into a 150 px bar whose labels are all ellipses. The drag is held in
+  local state and written to the store once, on release, so a resize is one
+  `localStorage` write rather than one per pointer move; the rendering reads
+  `shownCollapsed` / `shownWidth`, not the store, or the bar would not follow
+  the pointer. Collapsing leaves `sidebarWidth` **alone** (`ui.sidebar.width` in
+  `config.properties`), so re-opening returns to the chosen width, not the
+  default.
 - `components/StatusBar.tsx` + `stores/progress.ts` — the permanent bar across
-  the bottom (36 px). It carries the running version (clicking it opens the
+  the bottom (36 px), on the same chrome as the sidebar and with no border of
+  its own. It carries the running version (clicking it opens the
   release notes), the forge connection segments (GitHub / Gitea mark, green
   connected, red not), **the one progress slot in the app** — on the right, next
   to `components/NotificationCenter.tsx`, and the one element allowed to give
@@ -662,8 +706,11 @@ falling through published a release whose entire diff was a version bump.
   card's stacked rendering. It is deliberately **not** an `aria-live` region
   (ticks arrive every 120 ms) — the named `role="progressbar"` plus
   `aria-valuetext` is what carries the value, and the status bar's own bar
-  follows the same rule. `App.tsx` is a flex **column** for the banner *and* the
-  status bar, so don't turn the root back into a row.
+  follows the same rule. The banner is a **sub-window stacked above the page**,
+  inside the gutter column — not a full-width band across the top: the sidebar
+  and the status bar run past it, since those two are the chrome. `App.tsx` is
+  still a flex **column** at the root, for the row and the status bar below it,
+  so don't turn the root back into a row.
 - `components/ReleaseNotesDialog.tsx` + `stores/releaseNotes.ts` — the "Notes de
   mise à jour" panel, opened from Settings → À propos and from the banner. Reads
   `app_release_notes` (the release *history*, newest first) and renders bodies

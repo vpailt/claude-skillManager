@@ -71,7 +71,9 @@ const OrgSyncDialog = lazy(() =>
 
 function PageFallback() {
   return (
-    <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
+    // A panel too: a lazy page arriving a beat later must not flash the bare
+    // chrome where the sub-window is about to be.
+    <div className="panel flex h-full w-full items-center justify-center text-sm text-muted-foreground">
       Chargement…
     </div>
   );
@@ -194,35 +196,53 @@ export default function App() {
   }, []);
 
   return (
-    // Column, not row: the update banner spans the full width above both the
-    // sidebar and the page, and `min-h-0` keeps the row below it scrollable
-    // instead of pushing the layout past the viewport when the banner shows.
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
-      <UpdateBanner />
+    // The window is one continuous chrome surface — sidebar and status bar are
+    // the same sheet, with no border between them — and everything else is a
+    // sub-window laid on it, separated by a gutter rather than by a rule.
+    // Column, not row: the status bar spans the sidebar too, and `min-h-0`
+    // keeps the row above it scrollable instead of pushing the layout past the
+    // viewport.
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-chrome text-foreground">
       <div className="flex min-h-0 flex-1">
         <Sidebar onOpenPalette={() => setPaletteOpen(true)} />
-        <main className="flex min-w-0 flex-1 overflow-hidden">
-          <Suspense fallback={<PageFallback />}>
-            <Routes>
-              <Route path="/" element={<OverviewPage />} />
-              <Route path="/skills" element={<SkillsPage />} />
-              {/* Anciens menus Plugins / Skills V2 fusionnés dans /skills */}
-              <Route path="/plugins" element={<Navigate to="/skills" replace />} />
-              <Route
-                path="/skills-v2"
-                element={<Navigate to="/skills" replace />}
-              />
-              <Route path="/changes" element={<ChangesPage />} />
-              <Route path="/tracking" element={<AdminPage />} />
-              {/* Ancien onglet Administration, réduit au suivi des PR */}
-              <Route path="/admin" element={<Navigate to="/tracking" replace />} />
-              <Route path="/audit" element={<UsageAuditPage />} />
-              <Route path="/activity" element={<ActivityPage />} />
-              <Route path="/logs" element={<LogsPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </Suspense>
-        </main>
+        {/* The gutter lives here: padding on this column is what holds the page
+            off the sidebar, the window edge and the status bar. The update
+            banner is a sub-window of its own, stacked above the page. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-gutter p-gutter">
+          <UpdateBanner />
+          {/* Not a panel itself: a page is one sub-window, but a split page is
+              two, side by side in the same gutter (see `ResizableSplit`). The
+              panel is therefore drawn by what the route renders, never here —
+              otherwise a split would sit framed inside a second frame. */}
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <Suspense fallback={<PageFallback />}>
+              <Routes>
+                <Route path="/" element={<OverviewPage />} />
+                <Route path="/skills" element={<SkillsPage />} />
+                {/* Anciens menus Plugins / Skills V2 fusionnés dans /skills */}
+                <Route
+                  path="/plugins"
+                  element={<Navigate to="/skills" replace />}
+                />
+                <Route
+                  path="/skills-v2"
+                  element={<Navigate to="/skills" replace />}
+                />
+                <Route path="/changes" element={<ChangesPage />} />
+                <Route path="/tracking" element={<AdminPage />} />
+                {/* Ancien onglet Administration, réduit au suivi des PR */}
+                <Route
+                  path="/admin"
+                  element={<Navigate to="/tracking" replace />}
+                />
+                <Route path="/audit" element={<UsageAuditPage />} />
+                <Route path="/activity" element={<ActivityPage />} />
+                <Route path="/logs" element={<LogsPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
+          </main>
+        </div>
       </div>
       {/* Permanent status bar: version, forge connections, progress. Outside
           the row above so it spans the sidebar too, and `shrink-0` so the

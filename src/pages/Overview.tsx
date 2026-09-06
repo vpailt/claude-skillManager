@@ -808,7 +808,7 @@ export function OverviewPage() {
     (localOnly?.plugins.length ?? 0);
 
   return (
-    <div className="h-full w-full overflow-auto">
+    <div className="panel h-full w-full overflow-auto">
       <div className="flex w-full flex-col p-6">
         <header className="mb-4">
           <div className="flex items-center gap-2">

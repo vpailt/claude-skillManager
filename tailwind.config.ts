@@ -12,6 +12,8 @@ export default {
         ring: "hsl(var(--ring))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
+        // The châssis the sub-windows float on: sidebar, status bar, gutters.
+        chrome: "hsl(var(--chrome))",
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
@@ -41,6 +43,13 @@ export default {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+        // Corner of a sub-window — see `.panel` in styles.css.
+        panel: "var(--radius-panel)",
+      },
+      spacing: {
+        // The space between two sub-windows, and between one and the window
+        // edge. Named so the shell never hard-codes it.
+        gutter: "var(--gutter)",
       },
     },
   },

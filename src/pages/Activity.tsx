@@ -167,7 +167,7 @@ export function ActivityPage() {
     });
 
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
+    <div className="panel flex h-full min-h-0 w-full min-w-0 flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
         <History className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="shrink-0 text-sm font-semibold">Activité récente</h2>

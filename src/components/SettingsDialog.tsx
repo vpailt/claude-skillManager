@@ -77,6 +77,7 @@ const DEFAULT_UI: UiPrefs = {
   density: "comfortable",
   theme: "auto",
   sidebarCollapsed: false,
+  sidebarWidth: 240,
   startMinimized: false,
   closeToTray: true,
   releaseUiOnTray: true,

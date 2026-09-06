@@ -170,7 +170,7 @@ export function UsageAuditPage() {
   const top3 = data?.topPlugins.slice(0, 3) ?? [];
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+    <div className="panel flex min-w-0 flex-1 flex-col overflow-hidden">
       {/* Header */}
       <div className="flex flex-wrap items-end justify-between gap-3 border-b px-6 py-4">
         <div className="min-w-0">

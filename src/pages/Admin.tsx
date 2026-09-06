@@ -285,7 +285,7 @@ function TrackingSection() {
 
 export function AdminPage() {
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="panel flex h-full min-h-0 flex-col">
       <header className="shrink-0 border-b p-4">
         <div className="flex items-center gap-2">
           <Radar className="h-5 w-5 text-primary" />

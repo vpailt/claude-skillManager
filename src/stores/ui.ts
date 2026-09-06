@@ -1,5 +1,9 @@
 import { create } from "zustand";
 import type { UiPrefs } from "@/lib/types";
+import { api } from "@/lib/api";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("ui-prefs");
 
 const STORAGE_KEY = "skillmanager.ui-prefs";
 
@@ -9,6 +13,7 @@ export const DEFAULT_UI: UiPrefs = {
   density: "comfortable",
   theme: "auto",
   sidebarCollapsed: false,
+  sidebarWidth: 240,
   startMinimized: false,
   closeToTray: true,
   releaseUiOnTray: true,
@@ -27,6 +32,7 @@ interface UiState {
   ui: UiPrefs;
   setUi: (u: UiPrefs) => void;
   patch: (partial: Partial<UiPrefs>) => void;
+  patchPersisted: (partial: Partial<UiPrefs>) => void;
 }
 
 function applyTheme(theme: UiPrefs["theme"]) {
@@ -79,5 +85,18 @@ export const useUi = create<UiState>((set, get) => ({
   patch: (partial) => {
     const next = { ...get().ui, ...partial };
     get().setUi(next);
+  },
+  // `localStorage` alone is not enough for a preference the user sets from the
+  // chrome rather than from the Settings dialog: `App.tsx` re-seeds this store
+  // from `config.properties` on every mount, and tray mode destroys the window
+  // on every close — so the sidebar's width and collapsed state would be reset
+  // by the ordinary way of using the app, not merely by a restart. The write is
+  // fire-and-forget: the store (and the UI) has already moved, and
+  // `properties::write_atomic` skips a byte-identical rewrite.
+  patchPersisted: (partial) => {
+    get().patch(partial);
+    void api
+      .settingsSetUi(get().ui)
+      .catch((e) => log.warn("settingsSetUi failed", e));
   },
 }));

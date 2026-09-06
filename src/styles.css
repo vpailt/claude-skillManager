@@ -3,47 +3,93 @@
 @tailwind utilities;
 
 @layer base {
+  /*
+   * Two surfaces, and the distinction is the whole layout:
+   *
+   * - `--chrome` is the châssis. The sidebar, the status bar and the gutters
+   *   between panels are all the same continuous sheet, and it is the only
+   *   surface that touches the window edge. Nothing draws a border on it —
+   *   the sidebar and the status bar read as one because they *are* one.
+   * - `--background` is a sub-window laid on top of it: the page, each half of
+   *   a split, the update banner. Dialogs and popovers keep it too, being
+   *   floating panels of the same family.
+   *
+   * `--card` sits one step above the panel it is on, so a Card inside a page
+   * still reads as raised rather than dissolving into it.
+   */
   :root {
+    --chrome: 240 6% 92%;
+    /* The panel edge is a seam, not a frame: what separates a sub-window from
+       the chrome is the change of surface, and a full-strength border on top of
+       that reads as a box drawn around every page. */
+    --panel-border: 240 6% 86%;
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
     --primary: 238 76% 60%;
     --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
+    --secondary: 240 5% 96%;
     --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 46%;
+    --accent: 240 5% 94%;
     --accent-foreground: 222.2 47.4% 11.2%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
+    --border: 240 6% 88%;
+    --input: 240 6% 85%;
     --ring: 238 76% 60%;
     --radius: 0.5rem;
+    /* Corner of a sub-window, and the space that separates two of them. Both
+       are read from JS nowhere — change them here and the whole shell follows. */
+    --radius-panel: 0.7rem;
+    --gutter: 0.375rem;
   }
+  /*
+   * Dark is a neutral near-black, not the blue-slate the shadcn default ships:
+   * the chrome is darker than the panels sitting on it, which is what gives the
+   * sub-windows their edge without a heavy border. A trace of hue (4 %) is kept
+   * so the indigo accent doesn't sit on a dead grey.
+   */
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 47% 8%;
-    --card-foreground: 210 40% 98%;
+    --chrome: 240 4% 9%;
+    --panel-border: 240 4% 16%;
+    --background: 240 4% 12%;
+    --foreground: 210 10% 90%;
+    --card: 240 4% 15%;
+    --card-foreground: 210 10% 90%;
     --primary: 238 76% 65%;
     --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --secondary: 240 4% 19%;
+    --secondary-foreground: 210 10% 90%;
+    --muted: 240 4% 17%;
+    --muted-foreground: 240 5% 63%;
+    --accent: 240 4% 20%;
+    --accent-foreground: 210 10% 90%;
     --destructive: 0 62.8% 50.6%;
     --destructive-foreground: 210 40% 98%;
-    /* Brighter than the page (4.9% L) so borders — dividers, cards, inputs and
+    /* Brighter than the panel (12 % L) so borders — dividers, cards, inputs and
        outline buttons — stay legible in dark mode. `input` is pushed further so
        interactive controls read as crisp outlines. */
-    --border: 217.2 32.6% 27%;
-    --input: 217.2 32.6% 34%;
+    --border: 240 4% 24%;
+    --input: 240 4% 31%;
     --ring: 238 76% 65%;
+  }
+}
+
+@layer components {
+  /*
+   * A sub-window: the page, each half of a split, the update banner. `overflow:
+   * hidden` is what makes the rounded corner actually clip its content — every
+   * menu and tooltip inside a page goes through a Radix portal, so nothing that
+   * needs to escape the panel is rendered inside it.
+   */
+  .panel {
+    background-color: hsl(var(--background));
+    border: 1px solid hsl(var(--panel-border));
+    border-radius: var(--radius-panel);
+    overflow: hidden;
   }
 }
 
@@ -72,18 +118,24 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
 .compact .space-y-3 > * + * { margin-top: 0.5rem; }
 .compact .space-y-4 > * + * { margin-top: 0.625rem; }
 
-/* Resizable panel handle */
+/* Resizable panel handle. Between two sub-windows the separator is the gutter
+   itself — chrome showing through — so the handle draws nothing at rest and
+   only marks itself while it is being pointed at or dragged. */
 .PanelResizeHandleOuter { position: relative; outline: none; }
 .PanelResizeHandleOuter[data-panel-resize-handle-enabled="true"]:hover .PanelResizeHandleInner,
 .PanelResizeHandleOuter[data-resize-handle-active] .PanelResizeHandleInner {
-  background-color: hsl(var(--primary) / 0.4);
+  background-color: hsl(var(--primary) / 0.5);
 }
 .PanelResizeHandleInner {
-  background-color: hsl(var(--border));
+  background-color: transparent;
+  border-radius: 9999px;
   transition: background-color 150ms;
 }
+.PanelResizeHandleOuter[data-panel-group-direction="horizontal"] {
+  width: var(--gutter);
+}
 .PanelResizeHandleOuter[data-panel-group-direction="horizontal"] .PanelResizeHandleInner {
-  width: 4px; height: 100%; margin-inline: -1px;
+  width: 3px; height: 100%; margin-inline: auto;
 }
 
 /* Radix ScrollArea wraps children in a <div style="display:table;min-width:100%"> so

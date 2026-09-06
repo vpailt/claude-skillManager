@@ -214,7 +214,10 @@ export function StatusBar() {
     // this element and opens *upwards*, out of the bar. Clipping the footer
     // clipped the panel to nothing — the bell answered the click and nothing
     // appeared. Overflow is handled by the two inner groups instead.
-    <footer className="flex h-9 shrink-0 items-stretch gap-0 border-t bg-card/60 text-muted-foreground">
+    // No border and no surface of its own: this bar and the sidebar are the
+    // same sheet of chrome, and what separates it from the page is the gutter
+    // above it, not a rule.
+    <footer className="flex h-9 shrink-0 items-stretch gap-0 bg-chrome text-muted-foreground">
       {/* Everything on the left in one clipping group. The segments inside are
           `shrink-0`, so this group is the last thing to give way — after the
           progress slot, and never at the expense of the bell. */}
