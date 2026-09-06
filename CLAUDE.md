@@ -797,6 +797,12 @@ of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey.
   plugin alone, never its skills, since the two take different actions. The page
   owns the ordered visible-row list (`setOrdered`) for shift-click, and prunes the
   selection against *every* key so a filter change never silently drops ticks.
+  The only filter left on that tree is the install-state one: the tree's own
+  search box is gone, finding a skill being the title bar's job now
+  (`components/SearchBox.tsx`, which matches a skill's description too — that is
+  what makes it a replacement rather than a subset). The one thing that went
+  with it is *filtering the tree by text and bulk-acting on the result*, since
+  the title bar's search selects a single row rather than narrowing the tree.
 - `delete_skill_local` (`commands/mod.rs` → `local_scanner::delete_skill_folder`) —
   removes a skill folder from disk. `classify_skill_folder` is the guard: the path
   comes from the frontend, and `starts_with(cache_root)` alone would also accept a

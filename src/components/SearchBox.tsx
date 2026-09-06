@@ -39,6 +39,12 @@ interface Item {
   label: string;
   /** Where it lives — "plugin · marketplace". Greyed, next to the label. */
   hint?: string;
+  /**
+   * Matched on but never shown — a skill's description, so looking for what a
+   * skill *does* works, not only for what it is called. The Skills tree's own
+   * search box did that, and this field is what lets this one replace it.
+   */
+  search?: string;
   run: (ctx: RunContext) => void;
 }
 
@@ -156,6 +162,7 @@ export function SearchBox() {
             group: "skill",
             label: s.name,
             hint: `${p.name} · ${m.name}`,
+            search: s.description ?? undefined,
             run: (c) => {
               c.select({
                 kind: "skill",
@@ -181,7 +188,8 @@ export function SearchBox() {
       .filter(
         (it) =>
           it.label.toLowerCase().includes(needle) ||
-          it.hint?.toLowerCase().includes(needle)
+          it.hint?.toLowerCase().includes(needle) ||
+          it.search?.toLowerCase().includes(needle)
       )
       .slice(0, MAX_RESULTS);
   }, [items, q]);

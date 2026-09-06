@@ -26,7 +26,6 @@ import {
   Plus,
   Power,
   PowerOff,
-  Search,
   Sparkles,
   Trash2,
   UploadCloud,
@@ -45,7 +44,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogClose,
@@ -1735,7 +1733,6 @@ export function SkillsPage() {
   const findSkill = useApp((s) => s.findSkill);
 
   const [selection, setSelection] = useState<Selection>(null);
-  const [query, setQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [showDescription, setShowDescription] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
@@ -1874,23 +1871,15 @@ export function SkillsPage() {
     return out;
   }, [marketplaces, localOnly]);
 
-  const filtersActive = query.trim() !== "" || stateFilter !== "all";
+  const filtersActive = stateFilter !== "all";
 
   const skillVisible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return (s: Skill, pluginName: string): boolean => {
-      if (q) {
-        const hit =
-          s.name.toLowerCase().includes(q) ||
-          (s.description ?? "").toLowerCase().includes(q) ||
-          pluginName.toLowerCase().includes(q);
-        if (!hit) return false;
-      }
+    return (s: Skill): boolean => {
       if (stateFilter === "installed" && !skillInstalled(s)) return false;
       if (stateFilter === "not_installed" && skillInstalled(s)) return false;
       return true;
     };
-  }, [query, stateFilter]);
+  }, [stateFilter]);
 
   // Build the filtered tree: marketplaces → plugins → visible skills.
   const tree = useMemo(() => {
@@ -1899,9 +1888,7 @@ export function SkillsPage() {
         const plugins = m.plugins
           .map((plugin) => ({
             plugin,
-            visibleSkills: plugin.skills.filter((s) =>
-              skillVisible(s, plugin.name)
-            ),
+            visibleSkills: plugin.skills.filter(skillVisible),
           }))
           .filter(
             ({ visibleSkills }) => !filtersActive || visibleSkills.length > 0
@@ -1918,7 +1905,7 @@ export function SkillsPage() {
       for (const p of m.plugins) {
         for (const s of p.skills) {
           total += 1;
-          if (skillVisible(s, p.name)) visible += 1;
+          if (skillVisible(s)) visible += 1;
         }
       }
     }
@@ -1996,15 +1983,12 @@ export function SkillsPage() {
           selectedFolder={selectedArchivedFolder}
           onSelect={(s) => setSelection({ kind: "archived", value: s })}
         />
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Rechercher un plugin ou une compétence…"
-            className="h-8 pl-9 text-xs"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
+        {/* The tree's own search box used to sit here. Finding a skill by name
+            is the title bar's job now (`components/SearchBox.tsx`), which
+            reaches every marketplace, plugin and skill from any page — this
+            one only worked once you were already here. What is left is the
+            state filter, which is a different question: not "where is X" but
+            "show me only what is / isn't installed". */}
         <div className="flex flex-wrap items-center gap-1">
           <Filter className="h-3 w-3 text-muted-foreground" />
           {(Object.keys(STATE_FILTER_LABELS) as StateFilter[]).map((k) => (
