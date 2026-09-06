@@ -9,8 +9,8 @@
 //    text block in the sidebar; the sidebar won, and it now lands here — same
 //    single `useForgeStatus` declaration, one rendering, present on every page
 //    whatever the sidebar is doing.
-// 3. **A progress slot**, at the middle of the window. New. Everything slow in
-//    this app (a sweep, an install, a PR upload, a self-update) used to run
+// 3. **A progress slot**, on the right next to the bell. New. Everything slow
+//    in this app (a sweep, an install, a PR upload, a self-update) used to run
 //    behind a spinning icon at best, with no indication of what it was doing or
 //    how far along it was.
 // 4. **The notification bell**, at the right end. Toasts expire after eight
@@ -54,10 +54,9 @@ function Segment({
   className?: string;
 }) {
   const shell = cn(
-    // `shrink-0`: the progress slot is positioned, not in the flow, so nothing
-    // competes with these for width — and a compressed segment clipped the
-    // host name it exists to show. A window narrow enough to overflow clips the
-    // *left* end instead (see the footer's two containers), never the bell.
+    // `shrink-0`: a compressed segment clipped the host name it exists to
+    // show. Progress, on the right, is what gives way when width runs short —
+    // and past that the left group clips, never the bell.
     "flex h-full shrink-0 items-center gap-1.5 px-2.5 text-xs leading-none text-muted-foreground",
     onClick && "transition-colors hover:bg-accent hover:text-accent-foreground",
     className
@@ -211,10 +210,10 @@ export function StatusBar() {
   const forgeShown = !loading && (github.known || gitea.length > 0);
 
   return (
-    <footer className="relative flex h-9 shrink-0 items-stretch gap-0 overflow-hidden border-t bg-card/60 text-muted-foreground">
+    <footer className="flex h-9 shrink-0 items-stretch gap-0 overflow-hidden border-t bg-card/60 text-muted-foreground">
       {/* Everything on the left in one clipping group. The segments inside are
-          `shrink-0`, so this is what gives way on a narrow window — the bell,
-          outside it, stays reachable. */}
+          `shrink-0`, so this group is the last thing to give way — after the
+          progress slot, and never at the expense of the bell. */}
       <div className="flex min-w-0 items-stretch overflow-hidden">
         {/* Version — the one place it is always readable, sidebar collapsed or
             not. Clicking it opens the release history, which is the only
@@ -314,20 +313,18 @@ export function StatusBar() {
         {forgeShown && <div className="my-1.5 w-px bg-border" />}
       </div>
 
-      {/* Progress sits at the middle of the *window*, not of the space left
-          over — which is why it is positioned rather than placed in the flow:
-          a flex or grid centre would drift right by half the width of the
-          segments on the left. It is inert (`pointer-events-none`), so on a
-          window narrow enough for the two to meet it can overlap without ever
-          swallowing a click on a segment beneath it. */}
-      <div className="pointer-events-none absolute inset-y-0 left-1/2 flex max-w-[40%] -translate-x-1/2 items-stretch overflow-hidden">
-        <ProgressSlot />
-      </div>
-
-      {/* The bell closes the bar on the right. */}
-      <div className="ml-auto flex shrink-0 items-stretch">
-        <div className="my-1.5 w-px bg-border" />
-        <NotificationCenter open={bellOpen} onOpenChange={setBellOpen} />
+      {/* Progress and the bell close the bar on the right, in that order.
+          Progress is the one thing here allowed to give way (`min-w-0` and its
+          own clip): its label and detail are as long as whatever is running,
+          and it must never push the bell off the edge. */}
+      <div className="ml-auto flex min-w-0 items-stretch">
+        <div className="flex min-w-0 items-stretch overflow-hidden">
+          <ProgressSlot />
+        </div>
+        <div className="my-1.5 w-px shrink-0 bg-border" />
+        <div className="flex shrink-0 items-stretch">
+          <NotificationCenter open={bellOpen} onOpenChange={setBellOpen} />
+        </div>
       </div>
     </footer>
   );

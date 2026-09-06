@@ -589,10 +589,10 @@ falling through published a release whose entire diff was a version bump.
 - `components/StatusBar.tsx` + `stores/progress.ts` — the permanent bar across
   the bottom (36 px). It carries the running version (clicking it opens the
   release notes), the forge connection segments (GitHub / Gitea mark, green
-  connected, red not), **the one progress slot in the app** — positioned, not
-  placed in the flow, so it sits at the middle of the *window* rather than of
-  the space left over, and inert so a narrow window can overlap without
-  swallowing a click — and `components/NotificationCenter.tsx` at the right end. Anything slow registers a
+  connected, red not), **the one progress slot in the app** — on the right, next
+  to `components/NotificationCenter.tsx`, and the one element allowed to give
+  way when width runs short, since its label is as long as whatever is running
+  and it must never push the bell off the edge. Anything slow registers a
   task in `stores/progress.ts` and the bar renders the winner on priority
   (`publish` > install/uninstall/marketplace > audit/tracking > `refresh`),
   counting the rest as `+N` so its height never moves. The self-update is the
