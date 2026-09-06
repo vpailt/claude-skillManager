@@ -103,10 +103,10 @@ const NAV: NavGroup[] = [
       },
       {
         to: "/activity",
-        label: "Activité récente",
+        label: "Activités récentes",
         subtitle: "Ce que l'app a fait",
         tooltip:
-          "Activité récente — installations, désinstallations, PR, exports et mises à jour, horodatés, filtrables, avec vidage de l'historique. La version complète de la carte du dashboard.",
+          "Activités récentes — installations, désinstallations, PR, exports et mises à jour, horodatés, filtrables, avec vidage de l'historique. La version complète de la carte du dashboard.",
         icon: History,
       },
       {
@@ -289,11 +289,11 @@ export function Sidebar() {
           title bar, theme and density to Paramètres → Apparence — what is left
           here is navigation plus the one action frequent enough to deserve a
           permanent button, spinner included. */}
-      {/* Height, not padding: 3rem is the page header's floor (`PAGE_HEADER`)
-          and the gutter is what holds that header off the top of the window, so
-          the rule below this block and the one under the header are the same
-          line across the window. */}
-      <div className="flex h-[calc(3rem+var(--gutter))] shrink-0 items-center px-2">
+      {/* Height, not padding: 3rem is the page header's floor (`PAGE_HEADER`),
+          the gutter is what holds that header off the top of the window, and
+          the pixel back is the header's own bottom rule — the separator under
+          this block has to land *on* that rule, not one pixel below it. */}
+      <div className="flex h-[calc(3rem+var(--gutter)-1px)] shrink-0 items-center px-2">
         <button
           type="button"
           title={

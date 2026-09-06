@@ -1,6 +1,6 @@
 /**
  * The one table header style, shared by every page that lists rows read from
- * disk: Logs, Activité récente, Audit d'utilisation.
+ * disk: Logs, Activités récentes, Audit d'utilisation.
  *
  * Sticky, because a header that scrolls away names the columns only for the
  * first screenful — and `z-20` so it sits *above* a `ScrollFade`'s top gradient

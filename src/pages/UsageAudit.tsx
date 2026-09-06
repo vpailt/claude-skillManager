@@ -154,7 +154,7 @@ export function UsageAuditPage() {
     onSuccess: (path) => {
       if (!path) return;
       // The export writes a "usage_audit.export ok:" log line — refresh the
-      // dashboard's "Activité récente" so it shows up.
+      // dashboard's "Activités récentes" so it shows up.
       qc.invalidateQueries({ queryKey: ["log-tail"] });
       push({
         kind: "success",

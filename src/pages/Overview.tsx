@@ -302,7 +302,7 @@ function RecentActivitySection() {
           click target is the summary, not a word above it. */}
       <div className="mb-3 flex items-center gap-2 self-start">
         <History className="h-4 w-4 text-muted-foreground" />
-        <h2 className="text-lg font-semibold">Activité récente</h2>
+        <h2 className="text-lg font-semibold">Activités récentes</h2>
       </div>
       <Card
         role="button"
@@ -905,7 +905,7 @@ export function OverviewPage() {
           <MarketplaceTrackingSection />
         </div>
 
-        {/* Skills les plus utilisés (gauche) + Activité récente (droite) */}
+        {/* Skills les plus utilisés (gauche) + Activités récentes (droite) */}
         <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch">
           <TopSkillsSection />
           <RecentActivitySection />

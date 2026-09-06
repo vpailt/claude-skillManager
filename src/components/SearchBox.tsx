@@ -76,7 +76,7 @@ const PAGES: Item[] = [
     label: "Audit d'utilisation",
     run: (c) => c.navigate("/audit"),
   },
-  { group: "nav", label: "Activité récente", run: (c) => c.navigate("/activity") },
+  { group: "nav", label: "Activités récentes", run: (c) => c.navigate("/activity") },
   { group: "nav", label: "Logs", run: (c) => c.navigate("/logs") },
   // Settings is a dialog, not a route, so it runs its own opener rather than
   // pretending to be a "/settings" path that does not exist.

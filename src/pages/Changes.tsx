@@ -31,9 +31,9 @@ import { DiffViewToggle, FileDiff } from "@/components/FileDiff";
 import { useBulkRunner, type BulkOp } from "@/hooks/useBulkRunner";
 import { useProgress } from "@/stores/progress";
 import { api } from "@/lib/api";
-import { PAGE_HEADER } from "@/lib/headerStyles";
+import { PAGE_HEADER, PAGE_FOOTER } from "@/lib/headerStyles";
 import { usePendingChanges, type ChangeGroup } from "@/lib/changes";
-import { openExternal } from "@/lib/utils";
+import { cn, openExternal } from "@/lib/utils";
 import { useSkillSync } from "@/stores/skillSync";
 import type { AdminDraft, BumpLevel, SkillSyncStatus, UploadResult } from "@/lib/types";
 
@@ -511,7 +511,7 @@ export function ChangesPage() {
         </ScrollArea>
       </ScrollFade>
 
-      <div className="space-y-2 border-t bg-card px-4 py-2">
+      <div className={cn(PAGE_FOOTER, "bg-card")}>
         {prepareError && (
           <div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

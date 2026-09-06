@@ -1,4 +1,4 @@
-// Traçabilité → Activité récente.
+// Traçabilité → Activités récentes.
 //
 // The dashboard's card shows the five most recent events; this is the same
 // list, unabridged, with absolute timestamps and filters. Both read the log
@@ -180,7 +180,7 @@ export function ActivityPage() {
     <div className="panel flex h-full min-h-0 w-full min-w-0 flex-col">
       <div className={PAGE_HEADER}>
         <History className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <h2 className="shrink-0 text-sm font-semibold">Activité récente</h2>
+        <h2 className="shrink-0 text-sm font-semibold">Activités récentes</h2>
         <Badge variant="outline" className="shrink-0">
           {shown.length}
           {shown.length !== events.length && ` / ${events.length}`}

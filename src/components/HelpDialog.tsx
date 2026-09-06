@@ -213,7 +213,7 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
                       Excel. Reconstruit depuis les transcripts de session
                       locaux — aucune télémétrie, rien ne sort de la machine.
                     </TabRow>
-                    <TabRow icon={History} name="Activité récente">
+                    <TabRow icon={History} name="Activités récentes">
                       Installations, désinstallations, PR, exports et mises à
                       jour, horodatés et filtrables. Lue depuis les fichiers de
                       log : ce que la page montre est ce qu'un rapport de bug
