@@ -54,9 +54,14 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * Shared rather than repeated, and deliberately absent from the cards that lead
  * nowhere: a hover is a promise of a click, and the ones that make it here all
  * keep it.
+ *
+ * The fill is `accent` at full strength, not the `accent/40` the counter cells
+ * use. The same 40 % reads on a cell because its two neighbours stay put and
+ * give the eye a reference; across a whole card there is nothing to compare it
+ * to, and two points of lightness simply go unseen.
  */
 const CLICKABLE_CARD =
-  "cursor-pointer transition-colors hover:border-primary/50 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  "cursor-pointer transition-colors hover:border-primary/50 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 function relativeTime(ms: number): string {
   const diff = Date.now() - ms;
@@ -850,8 +855,13 @@ export function OverviewPage() {
 
         <GettingStartedCard />
 
-        {/* Indicateurs (pleine largeur, en haut) */}
-        <Card>
+        {/* Indicateurs (pleine largeur, en haut). The card is not itself a
+            target — each counter leads somewhere different — so the violet
+            outline is tied to a *cell* being hovered (`has-[button:hover]`)
+            rather than to the card. Hovering the gap between two counters
+            therefore lights nothing, which is correct: there is nothing to
+            click there. */}
+        <Card className="transition-colors has-[button:hover]:border-primary/50">
           <CardContent className="grid grid-cols-3 divide-x divide-border p-0">
             <CounterCell
               icon={Globe}
