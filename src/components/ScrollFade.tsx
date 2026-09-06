@@ -18,6 +18,15 @@ import { cn } from "@/lib/utils";
  * By default the component owns the scrolling (`overflow-y-auto` on its inner
  * div). Wrapping something that scrolls on its own — a Radix `ScrollArea`, say —
  * is the `wraps` mode: the fade then watches that element's viewport instead.
+ *
+ * **`wraps` needs a parent of definite height.** A Radix viewport sizes itself
+ * with `height: 100%`, which resolves against a flex or grid item whose size the
+ * layout settles (`flex-1` in a column, `h-full` under a sized parent) and
+ * against nothing at all under a `max-h-…` box: there, the viewport takes the
+ * height of its content, the Root clips it, and *nothing scrolls*. Both dialogs
+ * hit exactly that when a wrapper came between them and their grid parent. When
+ * the height is a `max-h`, do not use `wraps` — let this component own the
+ * scrolling and pass the same `max-h-…` through `innerClassName`.
  */
 export function ScrollFade({
   children,

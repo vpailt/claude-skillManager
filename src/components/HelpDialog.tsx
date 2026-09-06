@@ -6,7 +6,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { ScrollFade } from "@/components/ScrollFade";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -149,8 +148,11 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
             </button>
           ))}
         </div>
-        <ScrollFade className="max-h-[65vh]" wraps>
-          <ScrollArea className="max-h-[65vh]">
+        {/* Same reason as the release notes: a Radix viewport sizes itself with
+            `height: 100%`, which resolves only against a parent of definite
+            height — behind a wrapper it has none, and nothing scrolls. So the
+            fade owns the scrolling here. */}
+        <ScrollFade className="max-h-[65vh]" innerClassName="max-h-[65vh]">
           <div className="space-y-6 px-6 py-5 text-sm" role="tabpanel">
             {tab === "overview" && (
               <>
@@ -490,7 +492,6 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
               </>
             )}
           </div>
-          </ScrollArea>
         </ScrollFade>
       </DialogContent>
     </Dialog>

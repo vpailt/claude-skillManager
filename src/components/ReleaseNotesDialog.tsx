@@ -15,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { ScrollFade } from "@/components/ScrollFade";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -219,9 +218,13 @@ export function ReleaseNotesDialog() {
             prochain démarrage.
           </DialogDescription>
         </DialogHeader>
-        <ScrollFade className="max-h-[70vh]" wraps>
-          <ScrollArea className="max-h-[70vh]">
-            <div className="space-y-2 px-6 py-5">
+        {/* ScrollFade owns the scrolling here rather than wrapping a Radix
+            ScrollArea. The Radix viewport sizes itself with `height: 100%`,
+            which only resolves against a parent of definite height: as a direct
+            grid item of DialogContent it had one, but behind a wrapper it does
+            not, and the list simply overflowed with nothing to scroll. */}
+        <ScrollFade className="max-h-[70vh]" innerClassName="max-h-[70vh]">
+          <div className="space-y-2 px-6 py-5">
             {q.isPending && (
               <p className="text-sm text-muted-foreground">Chargement…</p>
             )}
@@ -249,8 +252,7 @@ export function ReleaseNotesDialog() {
                 defaultOpen={i === 0 || i === currentIndex}
               />
             ))}
-            </div>
-          </ScrollArea>
+          </div>
         </ScrollFade>
       </DialogContent>
     </Dialog>
