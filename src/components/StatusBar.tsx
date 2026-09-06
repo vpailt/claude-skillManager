@@ -54,7 +54,11 @@ function Segment({
   className?: string;
 }) {
   const shell = cn(
-    "flex h-full items-center gap-1.5 px-2.5 text-xs leading-none text-muted-foreground",
+    // `shrink-0`: the progress slot is positioned, not in the flow, so nothing
+    // competes with these for width — and a compressed segment clipped the
+    // host name it exists to show. A window narrow enough to overflow clips the
+    // *left* end instead (see the footer's two containers), never the bell.
+    "flex h-full shrink-0 items-center gap-1.5 px-2.5 text-xs leading-none text-muted-foreground",
     onClick && "transition-colors hover:bg-accent hover:text-accent-foreground",
     className
   );
@@ -207,100 +211,108 @@ export function StatusBar() {
   const forgeShown = !loading && (github.known || gitea.length > 0);
 
   return (
-    <footer className="relative flex h-9 shrink-0 items-stretch gap-0 border-t bg-card/60 text-muted-foreground">
-      {/* Version — the one place it is always readable, sidebar collapsed or
-          not. Clicking it opens the release history, which is the only
-          question anyone has when they read a version number. */}
-      <Segment
-        title={
-          staged
-            ? `SkillManager ${version ?? "?"} — la version ${staged.version} est installée, redémarrez pour l'utiliser`
-            : available
-              ? `SkillManager ${version ?? "?"} — la version ${available.version} est disponible`
-              : `SkillManager ${version ?? "?"} — voir les notes de version`
-        }
-        onClick={() => openNotes(true)}
-      >
-        <span className="font-medium text-foreground">v{version ?? "…"}</span>
-        {staged && (
-          <span className="rounded-full bg-emerald-500/15 px-1.5 font-medium text-emerald-600 dark:text-emerald-400">
-            {staged.version} prête
-          </span>
-        )}
-        {!staged && available && (
-          <span className="rounded-full bg-emerald-500/15 px-1.5 font-medium text-emerald-600 dark:text-emerald-400">
-            {available.version} dispo
-          </span>
-        )}
-      </Segment>
-
-      <div className="my-1.5 w-px bg-border" />
-
-      {/* Forge connection. Green connected, red not — the icon carries it, so
-          the state survives the window being narrow enough to clip the text. */}
-      {!loading && github.known && (
+    <footer className="relative flex h-9 shrink-0 items-stretch gap-0 overflow-hidden border-t bg-card/60 text-muted-foreground">
+      {/* Everything on the left in one clipping group. The segments inside are
+          `shrink-0`, so this is what gives way on a narrow window — the bell,
+          outside it, stays reachable. */}
+      <div className="flex min-w-0 items-stretch overflow-hidden">
+        {/* Version — the one place it is always readable, sidebar collapsed or
+            not. Clicking it opens the release history, which is the only
+            question anyone has when they read a version number. */}
         <Segment
           title={
-            github.ok
-              ? `GitHub : connecté en tant que @${github.user}${
-                  github.remaining >= 0
-                    ? ` · quota ${github.remaining}/${github.limit}`
-                    : ""
-                }`
-              : "GitHub : aucun token valide — ouvrir les paramètres"
+            staged
+              ? `SkillManager ${version ?? "?"} — la version ${staged.version} est installée, redémarrez pour l'utiliser`
+              : available
+                ? `SkillManager ${version ?? "?"} — la version ${available.version} est disponible`
+                : `SkillManager ${version ?? "?"} — voir les notes de version`
           }
-          onClick={() => openSettingsTo("connexions")}
+          onClick={() => openNotes(true)}
         >
-          <Github
-            className={cn(
-              "h-4 w-4 shrink-0",
-              github.ok ? "text-emerald-500" : "text-red-500"
-            )}
-          />
-          <span className="max-w-[10rem] truncate">
-            {github.ok ? `@${github.user}` : "GitHub non connecté"}
-          </span>
-          {github.lowQuota && (
-            <span
-              className="text-amber-500"
-              title="Quota d'appels à l'API GitHub bientôt épuisé — il se réinitialise au début de l'heure suivante"
-            >
-              quota {github.remaining}/{github.limit}
+          <span className="font-medium text-foreground">v{version ?? "…"}</span>
+          {staged && (
+            <span className="rounded-full bg-emerald-500/15 px-1.5 font-medium text-emerald-600 dark:text-emerald-400">
+              {staged.version} prête
+            </span>
+          )}
+          {!staged && available && (
+            <span className="rounded-full bg-emerald-500/15 px-1.5 font-medium text-emerald-600 dark:text-emerald-400">
+              {available.version} dispo
             </span>
           )}
         </Segment>
-      )}
 
-      {!loading &&
-        gitea.map((g) => (
+        <div className="my-1.5 w-px bg-border" />
+
+        {/* Forge connection. Green connected, red not — the icon carries it, so
+            the state survives the window being narrow enough to clip the text. */}
+        {!loading && github.known && (
           <Segment
-            key={g.baseUrl}
             title={
-              g.ok
-                ? `Gitea ${g.host} : connecté en tant que @${g.user}${
-                    g.insecureTls ? " (vérification TLS désactivée)" : ""
+              github.ok
+                ? `GitHub : connecté en tant que @${github.user}${
+                    github.remaining >= 0
+                      ? ` · quota ${github.remaining}/${github.limit}`
+                      : ""
                   }`
-                : `Gitea ${g.host} : ${
-                    g.hasToken ? "authentification échouée" : "aucun token"
-                  } — VPN GlobalProtect + token requis`
+                : "GitHub : aucun token valide — ouvrir les paramètres"
             }
-            onClick={() => openSettingsTo("connexions", "gitea")}
+            onClick={() => openSettingsTo("connexions")}
           >
-            <GiteaIcon
+            <Github
               className={cn(
                 "h-4 w-4 shrink-0",
-                g.ok ? "text-emerald-500" : "text-red-500"
+                github.ok ? "text-emerald-500" : "text-red-500"
               )}
             />
-            <span className="max-w-[12rem] truncate">
-              {g.ok ? `@${g.user}` : g.host}
+            <span className="whitespace-nowrap">
+              {github.ok ? `@${github.user}` : "GitHub non connecté"}
             </span>
+            {github.lowQuota && (
+              <span
+                className="text-amber-500"
+                title="Quota d'appels à l'API GitHub bientôt épuisé — il se réinitialise au début de l'heure suivante"
+              >
+                quota {github.remaining}/{github.limit}
+              </span>
+            )}
           </Segment>
-        ))}
+        )}
 
-      {/* Closing delimiter, mirroring the one before the forge block, so the
-          connections read as a group rather than as a run of items. */}
-      {forgeShown && <div className="my-1.5 w-px bg-border" />}
+        {!loading &&
+          gitea.map((g) => (
+            <Segment
+              key={g.baseUrl}
+              title={
+                g.ok
+                  ? `Gitea ${g.host} : connecté en tant que @${g.user}${
+                      g.insecureTls ? " (vérification TLS désactivée)" : ""
+                    }`
+                  : `Gitea ${g.host} : ${
+                      g.hasToken ? "authentification échouée" : "aucun token"
+                    } — VPN GlobalProtect + token requis`
+              }
+              onClick={() => openSettingsTo("connexions", "gitea")}
+            >
+              <GiteaIcon
+                className={cn(
+                  "h-4 w-4 shrink-0",
+                  g.ok ? "text-emerald-500" : "text-red-500"
+                )}
+              />
+              {/* No `max-w` here: `git.almaviacx.local` is 19 characters and the
+                  whole point of the segment is to say *which* instance is down.
+                  `whitespace-nowrap` keeps it on one line in a 36 px bar. */}
+              <span className="whitespace-nowrap">
+                {g.ok ? `@${g.user}` : g.host}
+              </span>
+            </Segment>
+          ))}
+
+        {/* Closing delimiter, mirroring the one before the forge block, so the
+            connections read as a group rather than as a run of items. */}
+        {forgeShown && <div className="my-1.5 w-px bg-border" />}
+      </div>
 
       {/* Progress sits at the middle of the *window*, not of the space left
           over — which is why it is positioned rather than placed in the flow:
@@ -313,7 +325,7 @@ export function StatusBar() {
       </div>
 
       {/* The bell closes the bar on the right. */}
-      <div className="ml-auto flex items-stretch">
+      <div className="ml-auto flex shrink-0 items-stretch">
         <div className="my-1.5 w-px bg-border" />
         <NotificationCenter open={bellOpen} onOpenChange={setBellOpen} />
       </div>

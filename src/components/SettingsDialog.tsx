@@ -491,6 +491,10 @@ export function SettingsDialog() {
                   </span>
                   <Badge variant="outline">{appVersion ?? "…"}</Badge>
                 </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="w-32 text-muted-foreground">Auteur</span>
+                  <span className="italic">By @vpailt</span>
+                </div>
                 <p className="text-xs text-muted-foreground">
                   Vérifiez les mises à jour depuis{" "}
                   <button
