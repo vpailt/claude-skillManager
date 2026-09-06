@@ -35,6 +35,20 @@ import type { LogFileInfo } from "@/lib/types";
 
 const READ_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Column headers, shared by both tables. Sticky, because a header that scrolls
+ * away names the columns only for the first screenful — and `z-20` so it sits
+ * *above* the ScrollFade's top gradient rather than being faded out by it.
+ *
+ * The bottom rule is an inset shadow, not a `border`: with `border-collapse`, a
+ * sticky header's own border is left behind by the scroll and the row underneath
+ * shows through where it should be.
+ */
+const TH_ROW =
+  "sticky top-0 z-20 bg-background font-sans text-[11px] uppercase tracking-wide text-muted-foreground";
+const TH =
+  "px-2 py-1.5 text-left font-medium shadow-[inset_0_-1px_0_hsl(var(--border))]";
+
 const LEVELS = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"] as const;
 type Level = (typeof LEVELS)[number];
 
@@ -580,6 +594,14 @@ export function LogsPage() {
             </p>
           ) : (
             <table className="w-full border-collapse font-mono text-xs">
+              <thead className={TH_ROW}>
+                <tr>
+                  <th className={cn(TH, "w-32")}>Horodatage</th>
+                  <th className={cn(TH, "w-16")}>Niveau</th>
+                  <th className={cn(TH, "w-56")}>Source</th>
+                  <th className={TH}>Message</th>
+                </tr>
+              </thead>
               <tbody>
                 {shown.map((l, i) => (
                   <tr
@@ -619,6 +641,15 @@ export function LogsPage() {
           </p>
         ) : (
           <table className="w-full border-collapse font-mono text-xs">
+            <thead className={TH_ROW}>
+              <tr>
+                <th className={cn(TH, "w-24")}>Heure</th>
+                <th className={cn(TH, "w-14")}>Méthode</th>
+                <th className={cn(TH, "w-16")}>Statut</th>
+                <th className={cn(TH, "w-44")}>Hôte</th>
+                <th className={TH}>Chemin</th>
+              </tr>
+            </thead>
             <tbody>
               {shownCalls.map((c, i) => (
                 <tr
