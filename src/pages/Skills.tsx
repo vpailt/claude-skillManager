@@ -42,7 +42,6 @@ import {
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -927,68 +926,72 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
       }),
   });
 
-  return (
-    <Card className="m-4">
-      <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="min-w-0 truncate">{marketplace.name}</CardTitle>
-          <div className="flex shrink-0 items-center gap-2">
-            {marketplace.installed ? (
-              <Badge variant="success">installé</Badge>
+  const actions = (
+    <>
+      {marketplace.installed ? (
+        <Badge variant="success" className="shrink-0">
+          installé
+        </Badge>
+      ) : (
+        marketplace.sourceRepo && (
+          <Button
+            size="sm"
+            className="h-8 shrink-0 px-2 text-xs"
+            onClick={() => install.mutate(marketplace)}
+            disabled={install.isPending}
+            title="Télécharger ce marketplace localement (le rend visible par Claude Code)"
+          >
+            {install.isPending ? (
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
             ) : (
-              marketplace.sourceRepo && (
-                <Button
-                  size="sm"
-                  onClick={() => install.mutate(marketplace)}
-                  disabled={install.isPending}
-                  title="Télécharger ce marketplace localement (le rend visible par Claude Code)"
-                >
-                  {install.isPending ? (
-                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                  ) : (
-                    <Download className="mr-1 h-3 w-3" />
-                  )}
-                  Installer
-                </Button>
-              )
+              <Download className="mr-1 h-3 w-3" />
             )}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 w-8 p-0"
-                  title="Plus d'actions"
-                  aria-label={`Plus d'actions pour ${marketplace.name}`}
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>{marketplace.name}</DropdownMenuLabel>
-                {marketplace.installed && (
-                  <DropdownMenuItem
-                    onSelect={() => setConfirmMode("uninstall")}
-                    title="Supprime les fichiers locaux mais garde ce marketplace dans la liste."
-                  >
-                    <PackageMinus className="h-4 w-4" />
-                    Désinstaller (garder dans la liste)
-                  </DropdownMenuItem>
-                )}
-                {marketplace.installed && <DropdownMenuSeparator />}
-                <DropdownMenuItem
-                  destructive
-                  onSelect={() => setConfirmMode("delete")}
-                >
-                  <Trash2 className="h-4 w-4" />
-                  {marketplace.installed
-                    ? "Supprimer définitivement (fichiers + liste)"
-                    : "Retirer de la liste"}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
+            Installer
+          </Button>
+        )
+      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8 shrink-0"
+            title="Plus d'actions"
+            aria-label={`Plus d'actions pour ${marketplace.name}`}
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuLabel>{marketplace.name}</DropdownMenuLabel>
+          {marketplace.installed && (
+            <DropdownMenuItem
+              onSelect={() => setConfirmMode("uninstall")}
+              title="Supprime les fichiers locaux mais garde ce marketplace dans la liste."
+            >
+              <PackageMinus className="h-4 w-4" />
+              Désinstaller (garder dans la liste)
+            </DropdownMenuItem>
+          )}
+          {marketplace.installed && <DropdownMenuSeparator />}
+          <DropdownMenuItem
+            destructive
+            onSelect={() => setConfirmMode("delete")}
+          >
+            <Trash2 className="h-4 w-4" />
+            {marketplace.installed
+              ? "Supprimer définitivement (fichiers + liste)"
+              : "Retirer de la liste"}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
+  );
+
+  return (
+    <DetailShell title={marketplace.name} actions={actions}>
+    <Card className="m-4">
+      <CardHeader className="pb-2">
         <CardDescription>
           {marketplace.sourceRepo ||
             marketplace.sourcePath ||
@@ -1111,6 +1114,7 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
         </DialogContent>
       </Dialog>
     </Card>
+    </DetailShell>
   );
 }
 
@@ -1218,35 +1222,35 @@ function PluginDetail({
       }),
   });
 
+  const actions = (
+    <>
+      <Badge variant={stateVariant(plugin.installState)} className="shrink-0">
+        {STATE_LABEL[plugin.installState]}
+      </Badge>
+      {plugin.remoteContentChanged && (
+        <Badge
+          variant="outline"
+          className="shrink-0"
+          title="Le dépôt distant a changé depuis l'installation, sans que la version du manifeste soit incrémentée"
+        >
+          contenu distant modifié
+        </Badge>
+      )}
+      {readiness(plugin) && (
+        <Badge variant={readiness(plugin)!.variant} className="shrink-0">
+          {readiness(plugin)!.label}
+        </Badge>
+      )}
+    </>
+  );
+
   return (
+    <DetailShell title={plugin.name} actions={actions}>
     <Card className="m-4">
-      <CardHeader>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <CardTitle>{plugin.name}</CardTitle>
-            <CardDescription>
-              {plugin.description || "Aucune description"}
-            </CardDescription>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-1">
-            <Badge variant={stateVariant(plugin.installState)}>
-              {STATE_LABEL[plugin.installState]}
-            </Badge>
-            {plugin.remoteContentChanged && (
-              <Badge
-                variant="outline"
-                title="Le dépôt distant a changé depuis l'installation, sans que la version du manifeste soit incrémentée"
-              >
-                contenu distant modifié
-              </Badge>
-            )}
-            {readiness(plugin) && (
-              <Badge variant={readiness(plugin)!.variant}>
-                {readiness(plugin)!.label}
-              </Badge>
-            )}
-          </div>
-        </div>
+      <CardHeader className="pb-2">
+        <CardDescription>
+          {plugin.description || "Aucune description"}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
         <div className="flex flex-wrap items-center gap-2">
@@ -1340,6 +1344,7 @@ function PluginDetail({
         )}
       </CardContent>
     </Card>
+    </DetailShell>
   );
 }
 
@@ -1365,6 +1370,60 @@ const DETAIL_BANNER: Partial<
     action: "Pousser la suppression",
   },
 };
+
+/**
+ * The right-hand panel's title bar — the same bar as the tree's on the left,
+ * `PAGE_HEADER` and all, so the two halves of the split share one top rule
+ * rather than one starting a dozen pixels below the other.
+ *
+ * Sticky, because this half scrolls: a SKILL.md is long enough that scrolling
+ * used to leave the reader in front of an unnamed page of markdown. `z-20` puts
+ * it over the `ScrollFade`'s top gradient (`z-10`), which would otherwise fade
+ * the title it is meant to keep readable.
+ */
+const DETAIL_HEADER = cn(PAGE_HEADER, "sticky top-0 z-20 bg-background");
+
+/**
+ * A detail panel that is a card under a title bar: the marketplace and plugin
+ * panels. Their name and their actions used to live in the card's own header,
+ * which started 16 px lower than the tree's title bar beside it — the two
+ * halves of the split read as two windows rather than one.
+ */
+function DetailShell({
+  title,
+  actions,
+  children,
+}: {
+  title: string;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex h-full min-w-0 flex-col">
+      <header className={DETAIL_HEADER}>
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold">
+          {title}
+        </h1>
+        {actions}
+      </header>
+      {children}
+    </div>
+  );
+}
+
+/** Opening a skill's folder in VS Code, from wherever the menu offering it
+ *  happens to be — the skill panel and the file panel offer the same one. */
+async function openFolderInVsCode(entry: SkillEntry) {
+  try {
+    await api.openInVsCode(entry.folder as string);
+  } catch (e) {
+    useNotifications.getState().push({
+      kind: "error",
+      title: "Échec de l'ouverture dans VS Code",
+      body: errMsg(e),
+    });
+  }
+}
 
 // ---------- Detail: skill + file (mirrors the Skills tab) ----------
 
@@ -1401,11 +1460,8 @@ function SkillDetailView({
   });
   return (
     <div className="flex h-full min-w-0 flex-col">
-      {/* Sticky: the title says *which* skill the panel below belongs to, and a
-          SKILL.md is long enough that scrolling used to leave the reader with
-          an unnamed page of markdown. Only the body moves. */}
-      <header className="sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b bg-background px-6 py-4">
-        <h1 className="min-w-0 flex-1 truncate text-xl font-semibold">
+      <header className={DETAIL_HEADER}>
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold">
           {entry.name}
         </h1>
         {entry.version && (
@@ -1413,52 +1469,35 @@ function SkillDetailView({
             v{entry.version}
           </Badge>
         )}
-        {/* VS Code is a button of its own — opening the folder is what one
-            actually does from here. Delete stays behind the menu: a destructive
-            action one stray click from the title is worse placed than one
-            behind a menu. */}
+        {/* Both actions fold into the overflow menu: neither is what one came
+            to this panel to read, and one of them deletes a folder — a
+            destructive action one stray click from the title is worse placed
+            than one behind a menu. */}
         {entry.folder && (
-          <>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 shrink-0 px-2 text-xs"
-              title="Ouvrir le dossier du skill dans VS Code"
-              onClick={async () => {
-                try {
-                  await api.openInVsCode(entry.folder as string);
-                } catch (e) {
-                  useNotifications.getState().push({
-                    kind: "error",
-                    title: "Échec de l'ouverture dans VS Code",
-                    body: errMsg(e),
-                  });
-                }
-              }}
-            >
-              <Code2 className="mr-1 h-3 w-3" />
-              VS Code
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="h-8 w-8 shrink-0"
-                  aria-label="Autres actions"
-                  title="Autres actions sur cette compétence"
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem destructive onSelect={onDelete}>
-                  <Trash2 className="h-4 w-4" />
-                  Supprimer en local
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 shrink-0"
+                aria-label="Autres actions"
+                title="Autres actions sur cette compétence"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => openFolderInVsCode(entry)}>
+                <Code2 className="h-4 w-4" />
+                Ouvrir dans VS Code
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem destructive onSelect={onDelete}>
+                <Trash2 className="h-4 w-4" />
+                Supprimer en local
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </header>
 
@@ -1561,35 +1600,33 @@ function FileDetailView({
   const isMarkdown = /\.(md|markdown)$/i.test(fileName);
   return (
     <div className="flex h-full min-w-0 flex-col">
-      <header className="sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b bg-background px-6 py-4">
-        <FileText className="h-5 w-5 shrink-0 text-violet-400/80" />
+      <header className={DETAIL_HEADER}>
+        <FileText className="h-4 w-4 shrink-0 text-violet-400/80" />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-lg font-semibold">{fileName}</h1>
+          <h1 className="truncate text-sm font-semibold">{fileName}</h1>
           <div className="truncate text-xs text-muted-foreground">
             {entry.name} · {relativePath}
           </div>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 shrink-0 px-2 text-xs"
-          aria-label="Ouvrir dans VS Code"
-          title="Ouvrir le dossier du skill dans VS Code"
-          onClick={async () => {
-            try {
-              await api.openInVsCode(entry.folder as string);
-            } catch (e) {
-              useNotifications.getState().push({
-                kind: "error",
-                title: "Échec de l'ouverture dans VS Code",
-                body: errMsg(e),
-              });
-            }
-          }}
-        >
-          <Code2 className="mr-1 h-3 w-3" />
-          VS Code
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8 shrink-0"
+              aria-label="Autres actions"
+              title="Autres actions sur ce fichier"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => openFolderInVsCode(entry)}>
+              <Code2 className="h-4 w-4" />
+              Ouvrir dans VS Code
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </header>
 
       <div className="min-w-0 flex-1 p-6">
