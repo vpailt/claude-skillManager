@@ -23,6 +23,7 @@ use crate::models::{Marketplace, Plugin, Skill, SkillSync};
 use crate::org_sync;
 use crate::pending_prs::{self, PendingPR};
 use crate::plugin_state;
+use crate::notification_history;
 use crate::pr_history::{self, PRRecord};
 use crate::token_store;
 use crate::skill_watch::{MissingLocal, SkillInput, SkillState, SkillWatch};
@@ -1724,6 +1725,35 @@ pub async fn admin_bump_version(version: String, level: String) -> String {
 #[tauri::command]
 pub async fn admin_build_skill_md(name: String, description: String, body: String) -> Vec<u8> {
     admin::build_skill_md(&name, &description, &body)
+}
+
+// ---------- Notification history (the status bar's bell) ----------
+
+#[tauri::command]
+pub async fn notifications_list() -> Vec<notification_history::StoredNotification> {
+    notification_history::load_all()
+}
+
+/// Record a notification the frontend just raised.
+///
+/// Called for its side effect only, and the frontend does not await it: failing
+/// to persist a toast must never break the operation that raised it, which is
+/// usually the one the user actually asked for.
+#[tauri::command]
+pub async fn notifications_push(
+    entry: notification_history::StoredNotification,
+) -> Result<()> {
+    notification_history::add(entry)
+}
+
+#[tauri::command]
+pub async fn notifications_remove(id: String) -> Result<()> {
+    notification_history::remove(&id)
+}
+
+#[tauri::command]
+pub async fn notifications_clear() -> Result<()> {
+    notification_history::clear_all()
 }
 
 // ---------- PR history & pending ----------

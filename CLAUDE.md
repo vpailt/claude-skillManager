@@ -106,6 +106,7 @@ SkillManager/
 │   ├── gitea.json             ← registered Gitea instances (tokens stay in the vault;
 │   │                             the internal AlmaviaCX host defaults to
 │   │                             `insecureTls: true` — internal CA)
+│   ├── notifications.json     ← the bell's notification history (50 max)
 │   ├── pr_history.json        ← rolling list of admin-opened PRs
 │   ├── pending_prs.json       ← PR drafts awaiting merge
 │   ├── skill_baselines.json   ← per-skill-folder sync references (`skill_watch.rs`)
@@ -662,7 +663,17 @@ falling through published a release whose entire diff was a version bump.
   the one that forgets (`dismissHistory`). `unread` badges the bell and is
   cleared by opening the panel. `components/NotificationCenter.tsx` renders it
   hand-rolled rather than as a `DropdownMenu`: every row carries its own ×, and
-  a menu closes on any item activation.
+  a menu closes on any item activation. The history is **persisted** by
+  `notification_history.rs` (`config/notifications.json`) and read back by
+  `hydrate()` on mount — memory-only undid most of the point, since the store
+  dies with the webview and tray mode destroys that on every close, so the list
+  was wiped by the ordinary way of using the app rather than by a restart.
+  Writes follow the store instead of gating it: a failed write leaves an entry
+  that reappears next launch, which beats a panel that does not answer a click.
+  `onClick` is deliberately not persisted — it is a closure, and rebuilding one
+  from a stored payload would have the panel offer an action that no longer does
+  what it said. `unread` is not persisted either: a badge counts what arrived
+  while you were not looking *this session*.
 - `pages/` — one file per top-level tab (Overview, Skills, Changes, Suivi
   marketplace, Audit; Settings is a dialog). `pages/Admin.tsx` is the "Suivi
   marketplace" tab, on route `/tracking` (`/admin` redirects to it); it holds
@@ -715,7 +726,7 @@ falling through published a release whose entire diff was a version bump.
 - `serde` derives use `rename_all = "camelCase"` so the Rust → TS boundary doesn't need
   manual translation.
 - App-state files (`config.properties`, `logging.properties`, `marketplaces.json`,
-  `gitea.json`, `pr_history.json`, `pending_prs.json`, `skill_baselines.json`,
+  `gitea.json`, `notifications.json`, `pr_history.json`, `pending_prs.json`, `skill_baselines.json`,
   `skill_new.json`, `skill_deleted.json`, `plugin_versions.json`,
   `usage_index.json`, `logs/`) sit under
   `<exe_dir>/`. Never write

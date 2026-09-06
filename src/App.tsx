@@ -87,6 +87,14 @@ export default function App() {
   // Self-update: reflect what the Rust updater did (or couldn't do) in the UI.
   useAppUpdateEvents();
 
+  // Read the persisted notification history back. Tray mode destroys the
+  // webview on every close, so this runs on far more than app launches — it is
+  // what makes the bell's list survive the ordinary way of using the app.
+  const hydrateNotifications = useNotifications((s) => s.hydrate);
+  useEffect(() => {
+    void hydrateNotifications();
+  }, [hydrateNotifications]);
+
   // Track window visibility so notifications can prefer native toasts when
   // the window is hidden in the tray.
   const setWindowHidden = useNotifications((s) => s.setWindowHidden);

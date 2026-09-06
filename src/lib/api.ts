@@ -28,6 +28,7 @@ import type {
   SettingsPaths,
   SkillSyncState,
   StagedUpdate,
+  StoredNotification,
   SyncReport,
   TrackedPr,
   UiPrefs,
@@ -196,6 +197,16 @@ export const api = {
     invoke<number[]>("admin_build_skill_md", { name, description, body }),
 
   // --- PR history ---
+  // Notification history — the status bar's bell. Persisted in Rust so it
+  // survives the webview being destroyed, which tray mode does on every close.
+  notificationsList: () =>
+    invoke<StoredNotification[]>("notifications_list"),
+  notificationsPush: (entry: StoredNotification) =>
+    invoke<void>("notifications_push", { entry }),
+  notificationsRemove: (id: string) =>
+    invoke<void>("notifications_remove", { id }),
+  notificationsClear: () => invoke<void>("notifications_clear"),
+
   prHistoryList: () => invoke<PRRecord[]>("pr_history_list"),
   prHistoryRemove: (repo: string, number: number) =>
     invoke<void>("pr_history_remove", { repo, number }),

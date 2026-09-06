@@ -5,6 +5,7 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import { createLogger } from "@/lib/logger";
+import { api } from "@/lib/api";
 
 const log = createLogger("notifications");
 
@@ -75,6 +76,8 @@ interface State {
   clearHistory: () => void;
   /** The panel was opened: the badge goes back to zero. */
   markRead: () => void;
+  /** Read the persisted list back at startup. */
+  hydrate: () => Promise<void>;
 }
 
 let permissionChecked = false;
@@ -130,6 +133,18 @@ export const useNotifications = create<State>((set, get) => ({
     setTimeout(() => {
       set((s) => ({ items: s.items.filter((it) => it.id !== id) }));
     }, 8000);
+    // Fire-and-forget: the notification is already on screen and in the store,
+    // and failing to write it to disk must not break the operation that raised
+    // it — which is usually the one the user actually asked for.
+    void api
+      .notificationsPush({
+        id,
+        kind: n.kind,
+        title: n.title,
+        body: n.body ?? null,
+        createdAt: entry.createdAt,
+      })
+      .catch((e) => log.warn("could not persist notification", e));
 
     const state = get();
     const askedNative = opts?.native ?? state.windowHidden;
@@ -148,8 +163,48 @@ export const useNotifications = create<State>((set, get) => ({
   dismiss: (id) =>
     set((s) => ({ items: s.items.filter((it) => it.id !== id) })),
   clear: () => set({ items: [] }),
-  dismissHistory: (id) =>
-    set((s) => ({ history: s.history.filter((it) => it.id !== id) })),
-  clearHistory: () => set({ history: [] }),
+  // The disk write follows the store, it does not gate it: the panel must react
+  // to the click at once, and a failed write leaves an entry that comes back on
+  // the next launch — an annoyance, not a loss.
+  dismissHistory: (id) => {
+    set((s) => ({ history: s.history.filter((it) => it.id !== id) }));
+    void api
+      .notificationsRemove(id)
+      .catch((e) => log.warn("could not forget notification", e));
+  },
+  clearHistory: () => {
+    set({ history: [] });
+    void api
+      .notificationsClear()
+      .catch((e) => log.warn("could not clear notifications", e));
+  },
   markRead: () => set({ unread: 0 }),
+  // Called once at startup. `unread` stays at zero on purpose: a badge counts
+  // what arrived while you were not looking *this session*, and reopening the
+  // app to a count of everything since last week would only train the user to
+  // ignore it.
+  hydrate: async () => {
+    try {
+      const stored = await api.notificationsList();
+      set((s) => {
+        // Anything pushed while this was in flight wins — it is newer, and it
+        // has already been written to the same file.
+        const seen = new Set(s.history.map((it) => it.id));
+        const restored = stored
+          .filter((it) => !seen.has(it.id))
+          .map((it) => ({
+            id: it.id,
+            kind: it.kind,
+            title: it.title,
+            body: it.body ?? undefined,
+            createdAt: it.createdAt,
+          }));
+        return {
+          history: [...s.history, ...restored].slice(0, HISTORY_MAX),
+        };
+      });
+    } catch (e) {
+      log.warn("could not read the notification history", e);
+    }
+  },
 }));

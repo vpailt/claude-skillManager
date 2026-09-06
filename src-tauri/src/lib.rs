@@ -21,6 +21,7 @@ pub mod logger;
 pub mod marketplace_installer;
 pub mod marketplace_remote;
 pub mod models;
+pub mod notification_history;
 pub mod notification_setup;
 pub mod org_sync;
 pub mod pending_prs;
@@ -203,6 +204,10 @@ pub fn run() {
             admin_diff,
             admin_bump_version,
             admin_build_skill_md,
+            notifications_list,
+            notifications_push,
+            notifications_remove,
+            notifications_clear,
             pr_history_list,
             pr_history_remove,
             pr_history_clear,

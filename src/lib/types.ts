@@ -549,6 +549,18 @@ export interface AppUpdateInfo {
 }
 
 /** An update already written onto skillmanager.exe; live at the next launch. */
+/** Mirror of `notification_history::StoredNotification`. One notification as it
+ *  is kept on disk — the bell's list. `onClick` has no counterpart here: it is
+ *  a closure, so a restored entry is text and nothing else. */
+export interface StoredNotification {
+  id: string;
+  kind: "info" | "success" | "warning" | "error";
+  title: string;
+  body?: string | null;
+  /** Epoch milliseconds, same clock as `Date.now()`. */
+  createdAt: number;
+}
+
 export interface StagedUpdate {
   version: string;
   runningVersion: string;
