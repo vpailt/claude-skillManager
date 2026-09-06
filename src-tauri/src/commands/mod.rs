@@ -2282,6 +2282,23 @@ pub async fn logging_read_all(max_bytes: Option<usize>) -> Result<String> {
         .map_err(crate::error::Error::from)
 }
 
+/// Zip the whole `logs/` directory into the user's Downloads folder.
+///
+/// Downloads resolved through Tauri's path resolver, not `%USERPROFILE%\
+/// Downloads`: the folder is relocatable, and a hard-coded path would write
+/// somewhere the user does not look. The archive holds the files whole, unlike
+/// the page, which reads them under a byte budget — an export is what gets sent
+/// with a bug report.
+#[tauri::command]
+pub async fn logging_export_zip(app: AppHandle) -> Result<String> {
+    let dir = app
+        .path()
+        .download_dir()
+        .map_err(|e| crate::error::Error::Other(format!("dossier Téléchargements introuvable: {e}")))?;
+    let path = logger::export_zip(&dir)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// Read one of them. An empty name means the newest, which is what the page
 /// opens on.
 #[tauri::command]

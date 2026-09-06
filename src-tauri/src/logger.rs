@@ -287,6 +287,61 @@ pub fn read_all(max_bytes: usize) -> std::io::Result<String> {
     Ok(chunks.join("\n"))
 }
 
+/// Zip every log file into `dest_dir`, and say where it landed.
+///
+/// Whole files, not the truncated text the page shows: this is what gets
+/// attached to a bug report, and a report missing the part before the byte
+/// budget is the one that fails to explain anything. The name carries the
+/// current time, and an existing file is never overwritten — exporting twice in
+/// the same second yields `…-2.zip` rather than silently replacing the first.
+pub fn export_zip(dest_dir: &Path) -> crate::error::Result<PathBuf> {
+    let files = list_files();
+    if files.is_empty() {
+        return Err(crate::error::Error::Invalid(
+            "aucun fichier de log à exporter".into(),
+        ));
+    }
+    fs::create_dir_all(dest_dir)?;
+
+    let stamp = crate::installer::now_iso()
+        .replace(':', "")
+        .replace('-', "")
+        .replace('.', "-");
+    let base = format!("{LOG_PREFIX}-logs-{stamp}");
+    let mut dest = dest_dir.join(format!("{base}.zip"));
+    let mut n = 2;
+    while dest.exists() {
+        dest = dest_dir.join(format!("{base}-{n}.zip"));
+        n += 1;
+    }
+
+    let file = fs::File::create(&dest)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts: zip::write::FileOptions<'_, ()> =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let dir = config::logs_dir();
+    let mut written = 0usize;
+    for f in &files {
+        let path = dir.join(&f.name);
+        // A file that vanished under us (rotation, or a manual purge mid-export)
+        // is skipped rather than failing the whole archive.
+        let Ok(bytes) = fs::read(&path) else {
+            tracing::warn!("logger: export skipped unreadable {}", f.name);
+            continue;
+        };
+        zip.start_file(&f.name, opts)?;
+        std::io::Write::write_all(&mut zip, &bytes)?;
+        written += 1;
+    }
+    zip.finish()?;
+    tracing::info!(
+        "logger: exported {} log file(s) to {}",
+        written,
+        dest.display()
+    );
+    Ok(dest)
+}
+
 pub fn read_file(name: &str, max_bytes: usize) -> std::io::Result<String> {
     if name.is_empty() {
         return tail(max_bytes);

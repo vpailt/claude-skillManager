@@ -23,14 +23,15 @@
 // rather than dropped — a stack trace is exactly what someone opening this page
 // came for.
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { FileText, Globe, RefreshCw, Search } from "lucide-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Download, FileText, Globe, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollFade } from "@/components/ScrollFade";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, openExternal } from "@/lib/utils";
+import { useNotifications } from "@/stores/notifications";
 import type { LogFileInfo } from "@/lib/types";
 
 const READ_BYTES = 8 * 1024 * 1024;
@@ -321,6 +322,26 @@ export function LogsPage() {
     staleTime: 30_000,
   });
 
+  const push = useNotifications((s) => s.push);
+  const exportMutation = useMutation({
+    mutationFn: api.loggingExportZip,
+    onSuccess: (path) =>
+      push({
+        kind: "success",
+        title: "Logs exportés",
+        body: path,
+        // The archive is the point, so hand over the folder it is in rather
+        // than only naming a path the user then has to go and find.
+        onClick: () => openExternal(path.replace(/[\\/][^\\/]+$/, "")),
+      }),
+    onError: (e) =>
+      push({
+        kind: "error",
+        title: "Export impossible",
+        body: String(e),
+      }),
+  });
+
   const content = useQuery({
     queryKey: ["log-all"],
     queryFn: () => api.loggingReadAll(READ_BYTES),
@@ -448,6 +469,26 @@ export function LogsPage() {
             className={cn("mr-1 h-3 w-3", content.isFetching && "animate-spin")}
           />
           Recharger
+        </Button>
+
+        {/* The archive holds the files *whole*, unlike this page, which reads
+            them under a byte budget — an export is what gets attached to a bug
+            report, and one missing the part before the cut explains nothing. */}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 shrink-0 px-2 text-xs"
+          onClick={() => exportMutation.mutate()}
+          disabled={exportMutation.isPending || list.length === 0}
+          title="Créer une archive zip de tous les fichiers de log dans le dossier Téléchargements"
+        >
+          <Download
+            className={cn(
+              "mr-1 h-3 w-3",
+              exportMutation.isPending && "animate-pulse"
+            )}
+          />
+          {exportMutation.isPending ? "Export…" : "Exporter"}
         </Button>
       </div>
 

@@ -279,21 +279,26 @@ function RecentActivitySection() {
 
   return (
     <section className="flex flex-col">
-      {/* The heading is the way in: this card shows five events, the page it
-          opens shows every one of them with filters and absolute timestamps. */}
-      <button
-        type="button"
-        onClick={() => navigate("/activity")}
-        title="Ouvrir l'activité complète — tous les événements, horodatés et filtrables"
-        className="group mb-3 flex items-center gap-2 self-start rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
+      {/* The heading only names the card. The way in is the card itself — a
+          five-event summary whose whole point is the page behind it, so the
+          click target is the summary, not a word above it. */}
+      <div className="mb-3 flex items-center gap-2 self-start">
         <History className="h-4 w-4 text-muted-foreground" />
-        <h2 className="text-lg font-semibold group-hover:underline">
-          Activité récente
-        </h2>
-        <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-      </button>
-      <Card className="flex-1">
+        <h2 className="text-lg font-semibold">Activité récente</h2>
+      </div>
+      <Card
+        role="button"
+        tabIndex={0}
+        onClick={() => navigate("/activity")}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            navigate("/activity");
+          }
+        }}
+        title="Ouvrir l'activité complète — tous les événements, horodatés et filtrables"
+        className="group flex-1 cursor-pointer transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
         <CardContent className="py-3">
           {logTail.isLoading && events.length === 0 ? (
             <p className="px-2 py-2 text-sm text-muted-foreground">Chargement…</p>
@@ -313,10 +318,16 @@ function RecentActivitySection() {
                   ? {
                       role: "button" as const,
                       tabIndex: 0,
-                      onClick: () => openExternal(ev.url!),
+                      // Stopped, or the card underneath would navigate away
+                      // instead of opening the PR this row points at.
+                      onClick: (e: React.MouseEvent) => {
+                        e.stopPropagation();
+                        openExternal(ev.url!);
+                      },
                       onKeyDown: (e: React.KeyboardEvent) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
+                          e.stopPropagation();
                           openExternal(ev.url!);
                         }
                       },
