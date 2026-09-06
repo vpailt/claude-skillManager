@@ -621,9 +621,11 @@ carry `panel` on its root, or it will render as bare chrome.
 Dark is a neutral near-black with the chrome *darker* than the panels on it —
 that contrast, not a heavy border, is what gives a sub-window its edge. A trace
 of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey. The same
-reasoning sets `--border` low (18 % L, near `--panel-border`): what separates a
-card from the panel behind it is its own surface, and a brighter border outlined
-every card on the dashboard until the page read as a wireframe. `--input` stays
+reasoning makes `--border` *be* `--panel-border` in dark mode (`--border:
+var(--panel-border)`, not a copied value): what separates a card from the panel
+behind it is its own surface, and any brighter border outlined every card on the
+dashboard until the page read as a wireframe. Light keeps its own, slightly
+firmer value — on white surfaces the seam has nothing else to do the work. `--input` stays
 far brighter, and the scrollbar thumb follows *it* rather than `--border` — both
 are controls, and a control has the opposite requirement to a seam.
 
