@@ -63,6 +63,7 @@ fn scan_skill_folder(
             .cloned()
             .unwrap_or_else(|| folder.file_name().unwrap_or_default().to_string_lossy().into()),
         description: fm.get("description").cloned().unwrap_or_default(),
+        version: fm.get("version").cloned().filter(|v| !v.trim().is_empty()),
         folder: Some(folder.to_path_buf()),
         watch_folder: Some(folder.to_path_buf()),
         skill_md_path: Some(skill_md),
@@ -540,6 +541,7 @@ pub fn scan_user_skills() -> Vec<UserSkill> {
                 .unwrap_or_else(|| entry.file_name().unwrap_or_default().to_string_lossy().into()),
             folder: entry,
             description: fm.get("description").cloned().unwrap_or_default(),
+            version: fm.get("version").cloned().filter(|v| !v.trim().is_empty()),
         });
     }
     out
@@ -990,6 +992,7 @@ pub fn build_local_only_marketplace() -> Marketplace {
         let plugin_skill = Skill {
             name: s.name.clone(),
             description: s.description.clone(),
+            version: s.version.clone(),
             folder: Some(s.folder.clone()),
             watch_folder: Some(s.folder.clone()),
             skill_md_path: if skill_md.exists() { Some(skill_md) } else { None },

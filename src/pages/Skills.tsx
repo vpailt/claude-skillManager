@@ -449,6 +449,18 @@ function SkillTreeRow({
               aria-label={syncBadge.title}
             />
           )}
+          {/* The skill's own version, read from its SKILL.md frontmatter —
+              same slot and same weight as a plugin's, since it answers the
+              same question one level down. A plugin release usually touches
+              one skill out of twenty, so the two numbers rarely agree. */}
+          {entry.version && (
+            <span
+              className="shrink-0 text-xs text-muted-foreground"
+              title={`Version de la compétence : ${entry.version}`}
+            >
+              {entry.version}
+            </span>
+          )}
           {!entry.folder && entry.remotePresent && syncStatus !== "deleted" && (
             <Badge variant="outline" className="shrink-0 text-xs">
               non installé
@@ -1390,41 +1402,52 @@ function SkillDetailView({
     <div className="flex h-full min-w-0 flex-col">
       <header className="flex items-center gap-3 border-b px-6 py-4">
         <h1 className="flex-1 truncate text-xl font-semibold">{entry.name}</h1>
-        {entry.folder && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-8 gap-1.5 px-2 text-xs"
-            aria-label="Ouvrir dans VS Code"
-            title="Ouvrir le dossier de ce skill dans VS Code"
-            onClick={async () => {
-              try {
-                await api.openInVsCode(entry.folder as string);
-              } catch (e) {
-                useNotifications.getState().push({
-                  kind: "error",
-                  title: "Échec de l'ouverture dans VS Code",
-                  body: errMsg(e),
-                });
-              }
-            }}
-          >
-            <Code2 className="h-4 w-4" />
-            VS Code
-          </Button>
+        {entry.version && (
+          <Badge variant="outline" className="shrink-0 font-mono text-xs">
+            v{entry.version}
+          </Badge>
         )}
+        {/* Open-in-VS-Code and Delete fold into an overflow menu: neither is
+            the thing you came to this panel to do, and one of them deletes a
+            folder — a destructive action one stray click away from the title
+            is worse placed than one behind a menu. */}
         {entry.folder && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-8 gap-1.5 px-2 text-xs text-destructive"
-            aria-label="Supprimer en local"
-            title="Supprimer ce dossier de skill sur cette machine"
-            onClick={onDelete}
-          >
-            <Trash2 className="h-4 w-4" />
-            Supprimer
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 shrink-0"
+                aria-label="Autres actions"
+                title="Autres actions sur cette compétence"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onSelect={async () => {
+                  try {
+                    await api.openInVsCode(entry.folder as string);
+                  } catch (e) {
+                    useNotifications.getState().push({
+                      kind: "error",
+                      title: "Échec de l'ouverture dans VS Code",
+                      body: errMsg(e),
+                    });
+                  }
+                }}
+              >
+                <Code2 className="h-4 w-4" />
+                Ouvrir dans VS Code
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem destructive onSelect={onDelete}>
+                <Trash2 className="h-4 w-4" />
+                Supprimer en local
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </header>
 

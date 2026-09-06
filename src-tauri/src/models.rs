@@ -88,6 +88,14 @@ pub struct Skill {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// `version:` from the SKILL.md frontmatter, when the author put one there.
+    ///
+    /// A skill's own version, not its plugin's: the two move independently —
+    /// a plugin release usually touches one skill out of twenty. Absent for a
+    /// skill the disk does not hold, since the remote listing reads the tree
+    /// and never opens the files.
+    #[serde(default)]
+    pub version: Option<String>,
     #[serde(default)]
     pub folder: Option<PathBuf>,
     /// The path [`crate::skill_watch`] keys this skill's sync status on.
@@ -203,6 +211,9 @@ pub struct UserSkill {
     pub folder: PathBuf,
     #[serde(default)]
     pub description: String,
+    /// `version:` from the frontmatter, like [`Skill::version`].
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

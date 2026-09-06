@@ -31,6 +31,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ScrollFade } from "@/components/ScrollFade";
+import { StatTile } from "@/components/StatTile";
+import { TH, TH_ROW } from "@/lib/tableStyles";
 import { api } from "@/lib/api";
 import { withTask } from "@/stores/progress";
 import { cn } from "@/lib/utils";
@@ -241,10 +243,36 @@ export function UsageAuditPage() {
 
           {data && (
             <>
-              <div className="text-xs text-muted-foreground">
-                {data.totalEvents} invocation(s) sur la période · généré à
-                partir des sessions locales
+              {/* Counters first, like the Logs page's API tab: the totals are
+                  the answer to "how much was used", and they were a line of
+                  small grey text under the filters. */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <StatTile
+                  label="Invocations"
+                  value={data.totalEvents}
+                  hint="sur la période"
+                />
+                <StatTile
+                  label="Skills invoqués"
+                  value={data.skills.length}
+                  tone="muted"
+                />
+                <StatTile
+                  label="Plugins utilisés"
+                  value={data.topPlugins.length}
+                  tone="muted"
+                />
+                <StatTile
+                  label="Plugins jamais utilisés"
+                  value={data.unusedPlugins.length}
+                  tone={data.unusedPlugins.length > 0 ? "danger" : "muted"}
+                  hint="installés, non invoqués"
+                />
               </div>
+              <p className="text-[11px] text-muted-foreground/70">
+                Reconstruit depuis les transcripts de session locaux — rien ne
+                sort de la machine.
+              </p>
 
               {/* 1. Top 3 plugins */}
               <section className="space-y-3">
@@ -297,23 +325,25 @@ export function UsageAuditPage() {
                     Aucun skill invoqué sur la période.
                   </p>
                 ) : (
-                  <Card>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                            <th className="px-4 py-2 font-medium">Skill</th>
-                            <th className="px-4 py-2 text-right font-medium">
+                  // Same table as Logs and Activité récente — shared header
+                  // style, sticky, no Card around it: three pages listing rows
+                  // read from disk should not each invent their own.
+                  <div className="overflow-x-auto rounded-md border">
+                      <table className="w-full border-collapse text-sm">
+                        <thead className={TH_ROW}>
+                          <tr>
+                            <th className={TH}>Skill</th>
+                            <th className={cn(TH, "w-32 text-right")}>
                               Utilisations
                             </th>
-                            <th className="px-4 py-2 font-medium">Projets</th>
+                            <th className={cn(TH, "w-1/2")}>Projets</th>
                           </tr>
                         </thead>
                         <tbody>
                           {data.skills.map((s) => (
                             <tr
                               key={s.skill}
-                              className="border-b last:border-0 align-top"
+                              className="border-b border-border/40 align-top last:border-0 hover:bg-accent/30"
                             >
                               <td className="px-4 py-2">
                                 <div className="font-medium">{s.skill}</div>
@@ -386,7 +416,6 @@ export function UsageAuditPage() {
                         </tbody>
                       </table>
                     </div>
-                  </Card>
                 )}
               </section>
 

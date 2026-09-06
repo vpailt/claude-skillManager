@@ -11,6 +11,9 @@ export type InstallState =
 export interface Skill {
   name: string;
   description: string;
+  /** `version:` from the SKILL.md frontmatter — the skill's own, not its
+   *  plugin's. Absent for a skill the disk does not hold. */
+  version?: string | null;
   folder?: string | null;
   /** The path the sync watcher keys this skill's status on. Same as `folder`
    *  when installed; also set for a skill the remote has but the disk does not,

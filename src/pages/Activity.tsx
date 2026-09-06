@@ -12,13 +12,13 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, History, Search, Trash2 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { cn, openExternal } from "@/lib/utils";
 import { ScrollFade } from "@/components/ScrollFade";
+import { TH, TH_ROW } from "@/lib/tableStyles";
 import { useNotifications } from "@/stores/notifications";
 import {
   ACTIVITY_ICONS,
@@ -63,7 +63,7 @@ function Row({ ev }: { ev: ActivityEvent }) {
   const isError = ev.level === "error";
   const clickable = !!ev.url;
   return (
-    <li
+    <tr
       role={clickable ? "button" : undefined}
       tabIndex={clickable ? 0 : undefined}
       onClick={clickable ? () => openExternal(ev.url!) : undefined}
@@ -78,35 +78,43 @@ function Row({ ev }: { ev: ActivityEvent }) {
           : undefined
       }
       className={cn(
-        "flex items-center gap-3 border-b px-4 py-2 text-sm last:border-b-0",
-        clickable &&
-          "cursor-pointer transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        "border-b border-border/40 align-top",
+        clickable
+          ? "cursor-pointer transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          : "hover:bg-accent/30"
       )}
     >
-      <span className="w-40 shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">
+      <td className="w-40 whitespace-nowrap px-3 py-1.5 font-mono text-xs text-muted-foreground">
         {stamp(ev.timestamp)}
-      </span>
-      <Icon
-        className={cn(
-          "h-4 w-4 shrink-0",
-          isError ? "text-destructive" : ACTIVITY_OK_COLORS[ev.kind]
-        )}
-      />
-      <span
-        className={cn("w-56 shrink-0 font-medium", isError && "text-destructive")}
+      </td>
+      <td className="w-64 px-3 py-1.5">
+        <span className="flex items-center gap-2">
+          <Icon
+            className={cn(
+              "h-4 w-4 shrink-0",
+              isError ? "text-destructive" : ACTIVITY_OK_COLORS[ev.kind]
+            )}
+          />
+          <span className={cn("font-medium", isError && "text-destructive")}>
+            {ev.message}
+          </span>
+        </span>
+      </td>
+      <td className="w-20 px-3 py-1.5">
+        <Badge
+          variant={isError ? "destructive" : "success"}
+          className="px-1.5 py-0 text-xs"
+        >
+          {isError ? "échec" : "ok"}
+        </Badge>
+      </td>
+      <td
+        className="max-w-0 truncate px-3 py-1.5 text-muted-foreground"
+        title={ev.detail}
       >
-        {ev.message}
-      </span>
-      <Badge
-        variant={isError ? "destructive" : "success"}
-        className="shrink-0 px-1.5 py-0 text-xs"
-      >
-        {isError ? "échec" : "ok"}
-      </Badge>
-      <span className="min-w-0 flex-1 truncate text-muted-foreground" title={ev.detail}>
         {ev.detail}
-      </span>
-    </li>
+      </td>
+    </tr>
   );
 }
 
@@ -272,28 +280,36 @@ export function ActivityPage() {
         </div>
       )}
 
-      <ScrollFade className="flex-1" innerClassName="p-4">
-        <Card>
-          <CardContent className="p-0">
-            {log.isLoading ? (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                Chargement…
-              </p>
-            ) : shown.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                {events.length === 0
-                  ? "Aucun événement enregistré."
-                  : "Aucun événement ne correspond aux filtres."}
-              </p>
-            ) : (
-              <ul>
-                {shown.map((ev, i) => (
-                  <Row key={`${ev.timestamp}-${i}`} ev={ev} />
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+      {/* Same table as the Logs page, down to the sticky header: these two read
+          the same files and answer the same kind of question, and a list of
+          `<li>` with hand-aligned spans was a table pretending not to be one —
+          with no column names, which is what the header restores. */}
+      <ScrollFade className="flex-1">
+        {log.isLoading ? (
+          <p className="px-4 py-6 text-sm text-muted-foreground">Chargement…</p>
+        ) : shown.length === 0 ? (
+          <p className="px-4 py-6 text-sm text-muted-foreground">
+            {events.length === 0
+              ? "Aucun événement enregistré."
+              : "Aucun événement ne correspond aux filtres."}
+          </p>
+        ) : (
+          <table className="w-full border-collapse text-sm">
+            <thead className={TH_ROW}>
+              <tr>
+                <th className={cn(TH, "w-40")}>Horodatage</th>
+                <th className={cn(TH, "w-64")}>Événement</th>
+                <th className={cn(TH, "w-20")}>État</th>
+                <th className={TH}>Détail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((ev, i) => (
+                <Row key={`${ev.timestamp}-${i}`} ev={ev} />
+              ))}
+            </tbody>
+          </table>
+        )}
       </ScrollFade>
     </div>
   );
