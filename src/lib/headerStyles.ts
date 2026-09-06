@@ -15,7 +15,8 @@
  * its room to grow on a narrow window.
  *
  * 48 px is also what the sidebar's Rafraîchir block is sized against, so its
- * separator lands on the same line as this bar's bottom rule.
+ * separator lands on the same line as this bar's bottom rule — see the height
+ * that block carries, gutter and panel border included.
  */
 export const PAGE_HEADER =
   "flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1";
@@ -25,10 +26,15 @@ export const PAGE_HEADER =
  * Préparer / Publier row today).
  *
  * Its rule lines up with the one above the sidebar's Paramètres row, and the
- * arithmetic is that row's: a 36 px button under `py-2` is 52 px, plus the 1 px
- * separator above it = 53 px off the bottom of the window. The page column is
- * held off that bottom by the gutter, so this bar owns 53 px minus the gutter
- * and its own top rule falls exactly on the separator's line.
+ * arithmetic is that row's: a 36 px button under `py-2` is 52 px, so the
+ * separator above it starts 52 px off the bottom of the window. Two things
+ * stand between this bar and that bottom — the gutter holding the page column
+ * off it, and `.panel`'s own 1 px border — and this bar's own top rule gives one
+ * of them back, since it has to start where the separator starts rather than
+ * after it. 52 - gutter - 1 + 1, so: 52 px less the gutter.
+ *
+ * That panel border is the pixel this alignment kept losing: the page's chrome
+ * starts one pixel inside the sub-window, not at its edge.
  */
 export const PAGE_FOOTER =
-  "flex min-h-[calc(53px-var(--gutter))] shrink-0 flex-col justify-center gap-2 border-t px-4 py-1";
+  "flex min-h-[calc(52px-var(--gutter))] shrink-0 flex-col justify-center gap-2 border-t px-4 py-1";

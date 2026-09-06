@@ -289,11 +289,14 @@ export function Sidebar() {
           title bar, theme and density to Paramètres → Apparence — what is left
           here is navigation plus the one action frequent enough to deserve a
           permanent button, spinner included. */}
-      {/* Height, not padding: 3rem is the page header's floor (`PAGE_HEADER`),
-          the gutter is what holds that header off the top of the window, and
-          the pixel back is the header's own bottom rule — the separator under
-          this block has to land *on* that rule, not one pixel below it. */}
-      <div className="flex h-[calc(3rem+var(--gutter)-1px)] shrink-0 items-center px-2">
+      {/* Height, not padding. Three terms, and the third is the one that keeps
+          being forgotten: 3rem is the page header's floor (`PAGE_HEADER`), the
+          gutter holds that header off the top of the window, and `.panel`'s own
+          1 px border sits between the two — the page's chrome starts a pixel
+          inside the sub-window. The header's own bottom rule then gives one
+          pixel back — the separator has to start where that rule starts, not
+          after it — so 48 + 6 + 1 - 1: the separator lands on the rule. */}
+      <div className="flex h-[calc(3rem+var(--gutter))] shrink-0 items-center px-2">
         <button
           type="button"
           title={

@@ -239,7 +239,10 @@ export function StatusBar() {
           }
           onClick={() => openNotes(true)}
         >
-          <span className="font-medium text-foreground">v{version ?? "…"}</span>
+          {/* No `text-foreground`: the segment's grey is the bell's grey, and
+              the version is chrome like the rest of this bar, not a value being
+              reported. */}
+          <span className="font-medium">version {version ?? "…"}</span>
           {staged && (
             <span className="rounded-full bg-emerald-500/15 px-1.5 font-medium text-emerald-600 dark:text-emerald-400">
               {staged.version} prête
