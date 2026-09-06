@@ -30,6 +30,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ScrollFade } from "@/components/ScrollFade";
 import { api } from "@/lib/api";
 import { withTask } from "@/stores/progress";
 import { cn } from "@/lib/utils";
@@ -223,7 +224,8 @@ export function UsageAuditPage() {
       </div>
 
       {/* Body */}
-      <ScrollArea className="flex-1">
+      <ScrollFade className="flex-1" wraps>
+        <ScrollArea className="h-full">
         <div className="space-y-6 px-6 py-5">
           {report.isLoading && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -396,7 +398,8 @@ export function UsageAuditPage() {
             </>
           )}
         </div>
-      </ScrollArea>
+        </ScrollArea>
+      </ScrollFade>
     </div>
   );
 }

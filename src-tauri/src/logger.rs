@@ -43,8 +43,14 @@ fn level_filter(level: &str) -> EnvFilter {
     // React side sent — the file logging that `lib/logger.ts` exists to provide
     // recorded nothing at all. Diagnosing a refresh loop meant guessing at which
     // event drove it, because the one log line that says so never arrived.
-    EnvFilter::try_new(format!("skillmanager_lib={level},frontend={level}"))
-        .unwrap_or_else(|_| EnvFilter::new("skillmanager_lib=info,frontend=info"))
+    // `api` is the third target that must be named: forge calls are logged
+    // under it (see `github_client::trace_call`) so the Logs page can tell an
+    // HTTP round trip from everything else without matching on message text. A
+    // filter naming only the crate would drop every one of them.
+    EnvFilter::try_new(format!(
+        "skillmanager_lib={level},frontend={level},api={level}"
+    ))
+    .unwrap_or_else(|_| EnvFilter::new("skillmanager_lib=info,frontend=info,api=info"))
 }
 
 /// Initialise the global subscriber. Safe to call exactly once (during
@@ -248,6 +254,39 @@ pub fn list_files() -> Vec<LogFileInfo> {
 /// the frontend, and `logs_dir().join("../../secrets")` would otherwise be a
 /// perfectly ordinary path. An empty name means "the newest one", which is what
 /// the viewer opens on.
+/// Every log file, oldest first, as one text — the whole journal rather than
+/// one day of it.
+///
+/// The appender rolls daily, so a session anyone asks about usually straddles
+/// two files; picking one of them from a dropdown made the reader do the
+/// stitching. Files are read newest-first so the budget is spent on recent
+/// history, then emitted oldest-first: each file is already chronological and
+/// they do not overlap, so concatenating in that order is a sort.
+pub fn read_all(max_bytes: usize) -> std::io::Result<String> {
+    // `list_files` is newest-first.
+    let files = list_files();
+    let mut chunks: Vec<String> = Vec::new();
+    let mut budget = max_bytes;
+    for f in &files {
+        if budget == 0 {
+            break;
+        }
+        let text = read_file(&f.name, budget)?;
+        budget = budget.saturating_sub(text.len());
+        chunks.push(text);
+    }
+    chunks.reverse();
+    let truncated = chunks.len() < files.len() || budget == 0;
+    if truncated {
+        tracing::debug!(
+            "logger: read_all truncated to {} of {} file(s)",
+            chunks.len(),
+            files.len()
+        );
+    }
+    Ok(chunks.join("\n"))
+}
+
 pub fn read_file(name: &str, max_bytes: usize) -> std::io::Result<String> {
     if name.is_empty() {
         return tail(max_bytes);

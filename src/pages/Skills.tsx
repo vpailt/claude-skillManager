@@ -34,6 +34,7 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { forceRefresh } from "@/hooks/useRefresh";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ScrollFade } from "@/components/ScrollFade";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -2007,8 +2008,8 @@ export function SkillsPage() {
           {counts.visible} sur {counts.total} skills
         </p>
       </div>
-
-      <ScrollArea className="flex-1">
+      <ScrollFade className="flex-1" wraps>
+        <ScrollArea className="h-full">
         <div className="py-2">
           {tree.length === 0 && (
             <div className="flex flex-col items-center gap-2 px-4 py-10 text-center text-xs text-muted-foreground">
@@ -2059,7 +2060,8 @@ export function SkillsPage() {
             />
           ))}
         </div>
-      </ScrollArea>
+        </ScrollArea>
+      </ScrollFade>
 
       <BulkActionBar
         onPublishSkills={(folders) =>
@@ -2070,7 +2072,8 @@ export function SkillsPage() {
   );
 
   const right = (
-    <ScrollArea className="h-full">
+    <ScrollFade className="h-full" wraps>
+      <ScrollArea className="h-full">
       <DetailPanel
         selection={selection}
         localName={localName}
@@ -2082,7 +2085,8 @@ export function SkillsPage() {
         onDeleteSkill={(entry) => setDeleteTarget(entry)}
         onAddSkill={(p) => setAddSkillFor(p)}
       />
-    </ScrollArea>
+      </ScrollArea>
+    </ScrollFade>
   );
 
   return (

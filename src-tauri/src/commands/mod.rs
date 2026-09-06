@@ -2269,6 +2269,19 @@ pub async fn logging_list_files() -> Vec<logger::LogFileInfo> {
     logger::list_files()
 }
 
+/// Every log file as one text, oldest first — what the Logs page reads.
+///
+/// The rotation is a storage detail, not something a reader should have to
+/// stitch back together: a session that started before midnight lives in two
+/// files, and picking one of them from a dropdown was the reader's problem to
+/// solve. The budget is spent newest-first, so what gets dropped is old
+/// history rather than the part being looked at.
+#[tauri::command]
+pub async fn logging_read_all(max_bytes: Option<usize>) -> Result<String> {
+    logger::read_all(max_bytes.unwrap_or(8 * 1024 * 1024))
+        .map_err(crate::error::Error::from)
+}
+
 /// Read one of them. An empty name means the newest, which is what the page
 /// opens on.
 #[tauri::command]

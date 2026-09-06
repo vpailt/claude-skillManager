@@ -7,6 +7,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ScrollFade } from "@/components/ScrollFade";
 import { Badge } from "@/components/ui/badge";
 import {
   BarChart3,
@@ -148,8 +149,8 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
             </button>
           ))}
         </div>
-
-        <ScrollArea className="max-h-[65vh]">
+        <ScrollFade className="max-h-[65vh]" wraps>
+          <ScrollArea className="max-h-[65vh]">
           <div className="space-y-6 px-6 py-5 text-sm" role="tabpanel">
             {tab === "overview" && (
               <>
@@ -489,7 +490,8 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
               </>
             )}
           </div>
-        </ScrollArea>
+          </ScrollArea>
+        </ScrollFade>
       </DialogContent>
     </Dialog>
   );

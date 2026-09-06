@@ -1,9 +1,16 @@
 // Traçabilité → Logs.
 //
-// Reads the files under `<exe_dir>/logs/` — all of them, not just the current
-// one. The appender rolls daily, so the session someone is asking about is
-// usually in yesterday's file, which `logging_tail` alone could never reach;
-// that is why `logging_list_files` / `logging_read_file` exist.
+// Reads **every** file under `<exe_dir>/logs/` as one journal. The appender
+// rolls daily, so a session that started before midnight lives in two files —
+// the rotation is a storage detail, and making the reader pick a file from a
+// dropdown made it their problem. `logging_read_all` stitches them back
+// together, newest-first on the byte budget so what gets dropped is old history
+// rather than the part being looked at.
+//
+// Two tabs over the same lines: the whole journal, and the forge calls alone
+// (`target: "api"`, written by `github_client::trace_call`). The second answers
+// a question the first cannot without squinting — how much are we asking of
+// GitHub and Gitea, and how much of it is failing.
 //
 // Parsing is deliberately tolerant. A log line is
 //   <ISO timestamp>  <LEVEL> <target>: <message>
@@ -13,15 +20,16 @@
 // came for.
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileText, RefreshCw, Search } from "lucide-react";
+import { FileText, Globe, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { ScrollFade } from "@/components/ScrollFade";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { LogFileInfo } from "@/lib/types";
 
-const READ_BYTES = 4 * 1024 * 1024;
+const READ_BYTES = 8 * 1024 * 1024;
 
 const LEVELS = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"] as const;
 type Level = (typeof LEVELS)[number];
@@ -78,11 +86,79 @@ function parseLog(text: string): LogLine[] {
   return out;
 }
 
+// ============================================================
+// Forge calls
+// ============================================================
+
+/** `GET https://api.github.com/… -> 200`, or `-> failed (detail)`. */
+const API_RE = /^([A-Z]+)\s+(\S+)\s+->\s+(\d{3}|failed)(?:\s+\((.*)\))?$/;
+
+interface ApiCall {
+  ts: number | null;
+  method: string;
+  url: string;
+  host: string;
+  path: string;
+  /** Null when the request never got an answer (transport failure). */
+  status: number | null;
+  note: string;
+  raw: string;
+}
+
+function parseApiCalls(lines: LogLine[]): ApiCall[] {
+  const out: ApiCall[] = [];
+  for (const l of lines) {
+    if (l.target !== "api") continue;
+    const m = l.message.match(API_RE);
+    if (!m) continue;
+    let host = "";
+    let path = m[2];
+    try {
+      const u = new URL(m[2]);
+      host = u.host;
+      path = u.pathname + u.search;
+    } catch {
+      // Not absolute — keep the raw string as the path, host unknown.
+    }
+    out.push({
+      ts: l.ts,
+      method: m[1],
+      url: m[2],
+      host,
+      path,
+      status: m[3] === "failed" ? null : Number(m[3]),
+      note: m[4] ?? "",
+      raw: l.raw,
+    });
+  }
+  return out;
+}
+
+function startOfToday(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** Failed outright, or answered with an error status. */
+function isFailure(c: ApiCall): boolean {
+  return c.status === null || c.status >= 400;
+}
+
 function stamp(ms: number | null): string {
   if (ms === null) return "";
   return new Date(ms).toLocaleString("fr-FR", {
     day: "2-digit",
     month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function clock(ms: number | null): string {
+  if (ms === null) return "";
+  return new Date(ms).toLocaleTimeString("fr-FR", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -103,12 +179,98 @@ function localInputToMs(value: string): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+/** One headline number. No plot, so no legend and no tooltip — the label is the
+ *  whole of it, and the value wears text ink, never a series colour. */
+function Stat({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  hint?: string;
+  tone?: "danger" | "muted";
+}) {
+  return (
+    <div className="rounded-md border px-3 py-2">
+      <div
+        className={cn(
+          "text-xl font-semibold tabular-nums",
+          tone === "danger" && "text-destructive",
+          tone === "muted" && "text-muted-foreground"
+        )}
+      >
+        {value}
+      </div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      {hint && <div className="text-[11px] text-muted-foreground/70">{hint}</div>}
+    </div>
+  );
+}
+
+/**
+ * Calls per hour, today. One series, so no legend — the heading names it — and
+ * one colour, so there is no categorical palette to get wrong. Bars are anchored
+ * to the baseline with a 2 px gap and rounded tops; a non-zero hour never
+ * renders as nothing, or a single call would be invisible. The table underneath
+ * is the accessible view of the same data.
+ */
+function HourlyBars({ calls }: { calls: ApiCall[] }) {
+  const buckets = useMemo(() => {
+    const b = new Array<number>(24).fill(0);
+    const from = startOfToday();
+    for (const c of calls) {
+      if (c.ts === null || c.ts < from) continue;
+      b[new Date(c.ts).getHours()] += 1;
+    }
+    return b;
+  }, [calls]);
+
+  const max = Math.max(...buckets, 1);
+  const nowHour = new Date().getHours();
+
+  return (
+    <div>
+      <div className="flex h-20 items-end gap-[2px]" role="img"
+        aria-label={`Appels par heure aujourd'hui : ${buckets
+          .map((n, h) => `${h} h, ${n}`)
+          .join(" ; ")}`}
+      >
+        {buckets.map((n, h) => (
+          <div
+            key={h}
+            className="flex h-full flex-1 items-end"
+            title={`${String(h).padStart(2, "0")} h — ${n} appel${n > 1 ? "s" : ""}`}
+          >
+            <div
+              className={cn(
+                "w-full rounded-t-[4px] transition-[height]",
+                h === nowHour ? "bg-primary" : "bg-primary/60"
+              )}
+              style={{ height: n === 0 ? 0 : `max(2px, ${(n / max) * 100}%)` }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between border-t pt-1 text-[10px] text-muted-foreground">
+        <span>00 h</span>
+        <span>06 h</span>
+        <span>12 h</span>
+        <span>18 h</span>
+        <span>23 h</span>
+      </div>
+    </div>
+  );
+}
+
 export function LogsPage() {
-  const [file, setFile] = useState<string>("");
+  const [tab, setTab] = useState<"journal" | "api">("journal");
   const [query, setQuery] = useState("");
   const [minLevel, setMinLevel] = useState<Level>("TRACE");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [failuresOnly, setFailuresOnly] = useState(false);
 
   const files = useQuery({
     queryKey: ["log-files"],
@@ -117,20 +279,22 @@ export function LogsPage() {
   });
 
   const content = useQuery({
-    queryKey: ["log-file", file],
-    queryFn: () => api.loggingReadFile(file, READ_BYTES),
+    queryKey: ["log-all"],
+    queryFn: () => api.loggingReadAll(READ_BYTES),
     staleTime: 10_000,
   });
 
   const lines = useMemo(() => parseLog(content.data ?? ""), [content.data]);
+  const calls = useMemo(() => parseApiCalls(lines), [lines]);
+
+  const fromMs = localInputToMs(from);
+  const toMs = localInputToMs(to);
+  const q = query.trim().toLowerCase();
 
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
     // Levels are ordered most severe first, so "at least WARN" is "index <=
     // index of WARN" — the same test the backend's filter makes.
     const maxIdx = LEVELS.indexOf(minLevel);
-    const fromMs = localInputToMs(from);
-    const toMs = localInputToMs(to);
     return lines.filter((l) => {
       if (l.level && LEVELS.indexOf(l.level) > maxIdx) return false;
       if (fromMs !== null && l.ts !== null && l.ts < fromMs) return false;
@@ -138,12 +302,40 @@ export function LogsPage() {
       if (q && !l.raw.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [lines, query, minLevel, from, to]);
+  }, [lines, q, minLevel, fromMs, toMs]);
+
+  const shownCalls = useMemo(
+    () =>
+      calls.filter((c) => {
+        if (failuresOnly && !isFailure(c)) return false;
+        if (fromMs !== null && c.ts !== null && c.ts < fromMs) return false;
+        if (toMs !== null && c.ts !== null && c.ts > toMs) return false;
+        if (q && !c.raw.toLowerCase().includes(q)) return false;
+        return true;
+      }),
+    [calls, q, failuresOnly, fromMs, toMs]
+  );
+
+  const today = useMemo(() => {
+    const start = startOfToday();
+    const todays = calls.filter((c) => c.ts !== null && c.ts >= start);
+    const byHost = new Map<string, number>();
+    for (const c of todays) {
+      const key = c.host || "hôte inconnu";
+      byHost.set(key, (byHost.get(key) ?? 0) + 1);
+    }
+    return {
+      total: todays.length,
+      failed: todays.filter(isFailure).length,
+      cached: todays.filter((c) => c.status === 304).length,
+      hosts: [...byHost.entries()].sort((a, b) => b[1] - a[1]),
+    };
+  }, [calls]);
 
   const list: LogFileInfo[] = files.data ?? [];
-  // "" is the backend's "newest file"; name it after whatever that turns out to
-  // be so the selector never reads as empty.
-  const currentName = file || list[0]?.name || "";
+  const totalSize = list.reduce((a, f) => a + f.size, 0);
+
+  const filtersOn = Boolean(from || to || query) || minLevel !== "TRACE" || failuresOnly;
 
   return (
     <div className="panel flex h-full min-h-0 w-full min-w-0 flex-col">
@@ -151,23 +343,44 @@ export function LogsPage() {
         <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="shrink-0 text-sm font-semibold">Logs</h2>
 
-        <select
-          value={currentName}
-          onChange={(e) => setFile(e.target.value)}
-          className="h-8 shrink-0 rounded-md border bg-background px-2 text-xs"
-          title="Fichier de log à afficher"
-        >
-          {list.length === 0 && <option value="">Aucun fichier</option>}
-          {list.map((f) => (
-            <option key={f.name} value={f.name}>
-              {f.name} · {kb(f.size)}
-            </option>
+        <div role="tablist" className="ml-2 flex shrink-0 items-center gap-1">
+          {(
+            [
+              ["journal", "Journal"],
+              ["api", "Appels API"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              onClick={() => setTab(id)}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-xs transition-colors",
+                tab === id
+                  ? "bg-primary/10 font-medium text-primary"
+                  : "text-muted-foreground hover:bg-accent"
+              )}
+            >
+              {label}
+              {id === "api" && calls.length > 0 && (
+                <span className="ml-1.5 tabular-nums opacity-70">
+                  {calls.length}
+                </span>
+              )}
+            </button>
           ))}
-        </select>
+        </div>
+
+        <Badge variant="outline" className="shrink-0" title="Tous les fichiers de log réunis">
+          {list.length} fichier{list.length > 1 ? "s" : ""} · {kb(totalSize)}
+        </Badge>
 
         <Badge variant="outline" className="shrink-0">
-          {shown.length}
-          {shown.length !== lines.length && ` / ${lines.length}`} ligne(s)
+          {tab === "journal"
+            ? `${shown.length}${shown.length !== lines.length ? ` / ${lines.length}` : ""} ligne(s)`
+            : `${shownCalls.length}${shownCalls.length !== calls.length ? ` / ${calls.length}` : ""} appel(s)`}
         </Badge>
 
         <Button
@@ -179,7 +392,7 @@ export function LogsPage() {
             void content.refetch();
           }}
           disabled={content.isFetching}
-          title="Relire le fichier depuis le disque"
+          title="Relire les fichiers depuis le disque"
         >
           <RefreshCw
             className={cn("mr-1 h-3 w-3", content.isFetching && "animate-spin")}
@@ -192,32 +405,52 @@ export function LogsPage() {
         <div className="relative w-64">
           <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Rechercher dans les lignes…"
+            placeholder={
+              tab === "journal"
+                ? "Rechercher dans les lignes…"
+                : "Rechercher un hôte, un chemin…"
+            }
             className="h-8 pl-9 text-xs"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
 
-        <div className="flex items-center gap-1">
-          <span className="text-xs text-muted-foreground">Niveau min.</span>
-          {LEVELS.map((lv) => (
-            <button
-              key={lv}
-              type="button"
-              onClick={() => setMinLevel(lv)}
-              className={cn(
-                "rounded-md border px-2 py-1 font-mono text-[11px] transition-colors",
-                minLevel === lv
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-accent"
-              )}
-              title={`Afficher ${lv} et plus grave`}
-            >
-              {lv}
-            </button>
-          ))}
-        </div>
+        {tab === "journal" ? (
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">Niveau min.</span>
+            {LEVELS.map((lv) => (
+              <button
+                key={lv}
+                type="button"
+                onClick={() => setMinLevel(lv)}
+                className={cn(
+                  "rounded-md border px-2 py-1 font-mono text-[11px] transition-colors",
+                  minLevel === lv
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-accent"
+                )}
+                title={`Afficher ${lv} et plus grave`}
+              >
+                {lv}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setFailuresOnly((v) => !v)}
+            className={cn(
+              "rounded-md border px-2 py-1 text-[11px] transition-colors",
+              failuresOnly
+                ? "border-destructive bg-destructive/10 text-destructive"
+                : "text-muted-foreground hover:bg-accent"
+            )}
+            title="N'afficher que les appels en échec (statut ≥ 400, ou sans réponse)"
+          >
+            Échecs uniquement
+          </button>
+        )}
 
         <label className="flex items-center gap-1 text-xs text-muted-foreground">
           Du
@@ -237,7 +470,7 @@ export function LogsPage() {
             className="h-8 rounded-md border bg-background px-2 text-xs"
           />
         </label>
-        {(from || to || query || minLevel !== "TRACE") && (
+        {filtersOn && (
           <button
             type="button"
             onClick={() => {
@@ -245,6 +478,7 @@ export function LogsPage() {
               setTo("");
               setQuery("");
               setMinLevel("TRACE");
+              setFailuresOnly(false);
             }}
             className="text-xs text-muted-foreground underline-offset-2 hover:underline"
           >
@@ -253,53 +487,141 @@ export function LogsPage() {
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      {tab === "api" && (
+        <div className="border-b px-4 py-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Stat
+              label="Appels aujourd'hui"
+              value={today.total}
+              hint={
+                today.hosts.length > 0
+                  ? today.hosts.map(([h, n]) => `${h} : ${n}`).join(" · ")
+                  : undefined
+              }
+            />
+            <Stat
+              label="En échec"
+              value={today.failed}
+              tone={today.failed > 0 ? "danger" : "muted"}
+              hint="statut ≥ 400 ou sans réponse"
+            />
+            <Stat
+              label="Servis par le cache"
+              value={today.cached}
+              tone="muted"
+              hint="304 — quota dépensé, corps non transféré"
+            />
+            <Stat
+              label="Total chargé"
+              value={calls.length}
+              tone="muted"
+              hint="toutes dates du journal"
+            />
+          </div>
+          <div className="mt-3">
+            <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <Globe className="h-3.5 w-3.5" />
+              Appels par heure, aujourd'hui
+            </div>
+            <HourlyBars calls={calls} />
+          </div>
+        </div>
+      )}
+
+      <ScrollFade className="min-h-0 flex-1">
         {content.isLoading ? (
           <p className="px-4 py-6 text-sm text-muted-foreground">Chargement…</p>
         ) : content.error ? (
           <p className="px-4 py-6 text-sm text-destructive">
             Lecture impossible : {String(content.error)}
           </p>
-        ) : shown.length === 0 ? (
+        ) : tab === "journal" ? (
+          shown.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-muted-foreground">
+              {lines.length === 0
+                ? "Aucun log enregistré."
+                : "Aucune ligne ne correspond aux filtres."}
+            </p>
+          ) : (
+            <table className="w-full border-collapse font-mono text-xs">
+              <tbody>
+                {shown.map((l, i) => (
+                  <tr
+                    key={i}
+                    className="border-b border-border/40 align-top hover:bg-accent/40"
+                  >
+                    <td className="w-32 whitespace-nowrap px-3 py-1 text-muted-foreground">
+                      {stamp(l.ts)}
+                    </td>
+                    <td
+                      className={cn(
+                        "w-16 px-1 py-1 font-semibold",
+                        l.level ? LEVEL_STYLES[l.level] : "text-muted-foreground"
+                      )}
+                    >
+                      {l.level ?? ""}
+                    </td>
+                    <td
+                      className="w-56 truncate px-2 py-1 text-muted-foreground"
+                      title={l.target}
+                    >
+                      {l.target}
+                    </td>
+                    <td className="whitespace-pre-wrap break-all px-2 py-1">
+                      {l.message}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        ) : shownCalls.length === 0 ? (
           <p className="px-4 py-6 text-sm text-muted-foreground">
-            {lines.length === 0
-              ? "Ce fichier est vide."
-              : "Aucune ligne ne correspond aux filtres."}
+            {calls.length === 0
+              ? "Aucun appel aux forges dans le journal chargé."
+              : "Aucun appel ne correspond aux filtres."}
           </p>
         ) : (
           <table className="w-full border-collapse font-mono text-xs">
             <tbody>
-              {shown.map((l, i) => (
+              {shownCalls.map((c, i) => (
                 <tr
                   key={i}
                   className="border-b border-border/40 align-top hover:bg-accent/40"
                 >
-                  <td className="w-32 whitespace-nowrap px-3 py-1 text-muted-foreground">
-                    {stamp(l.ts)}
+                  <td className="w-24 whitespace-nowrap px-3 py-1 text-muted-foreground">
+                    {clock(c.ts)}
+                  </td>
+                  <td className="w-14 px-1 py-1 font-semibold text-muted-foreground">
+                    {c.method}
                   </td>
                   <td
                     className={cn(
-                      "w-16 px-1 py-1 font-semibold",
-                      l.level ? LEVEL_STYLES[l.level] : "text-muted-foreground"
+                      "w-16 px-1 py-1 font-semibold tabular-nums",
+                      c.status === null || c.status >= 400
+                        ? "text-destructive"
+                        : c.status === 304
+                          ? "text-muted-foreground"
+                          : "text-emerald-600 dark:text-emerald-400"
                     )}
                   >
-                    {l.level ?? ""}
+                    {c.status ?? "échec"}
                   </td>
-                  <td
-                    className="w-56 truncate px-2 py-1 text-muted-foreground"
-                    title={l.target}
-                  >
-                    {l.target}
+                  <td className="w-44 truncate px-2 py-1 text-muted-foreground" title={c.host}>
+                    {c.host}
                   </td>
-                  <td className="whitespace-pre-wrap break-all px-2 py-1">
-                    {l.message}
+                  <td className="break-all px-2 py-1" title={c.note || undefined}>
+                    {c.path}
+                    {c.note && (
+                      <span className="ml-2 text-muted-foreground">({c.note})</span>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-      </div>
+      </ScrollFade>
     </div>
   );
 }

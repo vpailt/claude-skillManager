@@ -1,6 +1,13 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Download, ExternalLink, FileText, RefreshCw } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  FileText,
+  RefreshCw,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -9,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ScrollFade } from "@/components/ScrollFade";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SkillMarkdown } from "@/components/SkillMarkdown";
@@ -117,6 +125,14 @@ function ReleaseEntry({
               </Button>
             )}
             <div className="ml-auto flex items-center gap-2">
+              {/* Said out loud rather than left as an absence: an entry with no
+                  button reads as one that failed to offer it. */}
+              {current && (
+                <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Version installée
+                </span>
+              )}
               {!current && !release.installable && (
                 <span className="text-xs text-muted-foreground">
                   Pas de binaire autonome — installation impossible depuis ici
@@ -203,8 +219,9 @@ export function ReleaseNotesDialog() {
             prochain démarrage.
           </DialogDescription>
         </DialogHeader>
-        <ScrollArea className="max-h-[70vh]">
-          <div className="space-y-2 px-6 py-5">
+        <ScrollFade className="max-h-[70vh]" wraps>
+          <ScrollArea className="max-h-[70vh]">
+            <div className="space-y-2 px-6 py-5">
             {q.isPending && (
               <p className="text-sm text-muted-foreground">Chargement…</p>
             )}
@@ -232,8 +249,9 @@ export function ReleaseNotesDialog() {
                 defaultOpen={i === 0 || i === currentIndex}
               />
             ))}
-          </div>
-        </ScrollArea>
+            </div>
+          </ScrollArea>
+        </ScrollFade>
       </DialogContent>
     </Dialog>
   );

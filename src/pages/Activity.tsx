@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { cn, openExternal } from "@/lib/utils";
+import { ScrollFade } from "@/components/ScrollFade";
 import { useNotifications } from "@/stores/notifications";
 import {
   ACTIVITY_ICONS,
@@ -271,7 +272,7 @@ export function ActivityPage() {
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-auto p-4">
+      <ScrollFade className="flex-1" innerClassName="p-4">
         <Card>
           <CardContent className="p-0">
             {log.isLoading ? (
@@ -293,7 +294,7 @@ export function ActivityPage() {
             )}
           </CardContent>
         </Card>
-      </div>
+      </ScrollFade>
     </div>
   );
 }

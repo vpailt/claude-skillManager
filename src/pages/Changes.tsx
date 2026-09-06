@@ -25,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ScrollFade } from "@/components/ScrollFade";
 import { Textarea } from "@/components/ui/textarea";
 import { DiffViewToggle, FileDiff } from "@/components/FileDiff";
 import { useBulkRunner, type BulkOp } from "@/hooks/useBulkRunner";
@@ -260,7 +261,8 @@ export function ChangesPage() {
         )}
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollFade className="flex-1" wraps>
+        <ScrollArea className="h-full">
         <div className="space-y-4 p-4">
           {groups.length === 0 && (
             <div className="flex flex-col items-center gap-2 px-4 py-16 text-center text-sm text-muted-foreground">
@@ -505,7 +507,8 @@ export function ChangesPage() {
             );
           })}
         </div>
-      </ScrollArea>
+        </ScrollArea>
+      </ScrollFade>
 
       <div className="space-y-2 border-t bg-card px-4 py-2">
         {prepareError && (

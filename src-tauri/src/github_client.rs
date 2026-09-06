@@ -555,6 +555,9 @@ impl GitHubClient {
             Err(e) => {
                 let detail = crate::error::chain(&e);
                 self.note_transport_failure(&detail);
+                // No status to report — `check` never sees this one, so the
+                // call log would otherwise show only the requests that worked.
+                self.trace_call("GET", what, 0, &detail);
                 tracing::debug!("{what}: {detail}");
                 Err(Error::Http(e))
             }
@@ -606,12 +609,39 @@ impl GitHubClient {
     }
 
     fn request(&self, method: reqwest::Method, url: &str) -> reqwest::blocking::RequestBuilder {
-        let url = if url.starts_with("http") {
+        self.client.request(method, self.absolute(url))
+    }
+
+    /// A path against this client's API base, or an already-absolute URL left
+    /// alone. Shared by `request` and the call log, so both name the same thing.
+    fn absolute(&self, url: &str) -> String {
+        if url.starts_with("http") {
             url.to_string()
         } else {
             format!("{}{url}", self.api_base)
+        }
+    }
+
+    /// One line per forge round trip, under the `api` target.
+    ///
+    /// A dedicated target rather than a message prefix: the Logs page's "Appels
+    /// API" tab selects on it, and a message convention would be one careless
+    /// edit away from being wrong. `logger::level_filter` names `api`
+    /// explicitly — without that, none of this would reach the file.
+    ///
+    /// `status` is the HTTP status, or `0` when the request never got an answer
+    /// (transport failure, or a host the circuit breaker has written off).
+    fn trace_call(&self, method: &str, url: &str, status: u16, note: &str) {
+        let outcome = if status == 0 {
+            "failed".to_string()
+        } else {
+            status.to_string()
         };
-        self.client.request(method, url)
+        if note.is_empty() {
+            tracing::info!(target: "api", "{method} {} -> {outcome}", self.absolute(url));
+        } else {
+            tracing::info!(target: "api", "{method} {} -> {outcome} ({note})", self.absolute(url));
+        }
     }
 
     /// `GET` a JSON endpoint through the ETag cache.
@@ -655,7 +685,11 @@ impl GitHubClient {
         if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
             // Only reachable when we sent `If-None-Match`, i.e. `cached` is Some.
             if let Some(c) = cached {
-                tracing::trace!("GET {path} -> 304 (served from ETag cache)");
+                // Logged like any other call: a 304 is a round trip that spent
+                // quota and time, and a tab counting API calls that silently
+                // dropped them would under-report exactly the ones the ETag
+                // cache exists to make cheap.
+                self.trace_call("GET", path, 304, "ETag cache");
                 return Ok(c.body);
             }
         }
@@ -695,6 +729,11 @@ impl GitHubClient {
     /// GitHub.
     fn check(&self, resp: Response, method: &str, url: &str) -> Result<Response> {
         let status = resp.status();
+        // Every answered request funnels through here, reads and writes alike,
+        // which makes it the one place that knows the method, the URL and the
+        // status together. Hence the call log lives here rather than at each of
+        // the twenty-odd `.send()` sites.
+        self.trace_call(method, url, status.as_u16(), "");
         if status.is_client_error() || status.is_server_error() {
             let text = resp.text().unwrap_or_default();
             let parsed = serde_json::from_str::<Value>(&text).ok();

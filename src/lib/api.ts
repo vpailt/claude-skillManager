@@ -71,6 +71,10 @@ export const api = {
   /** `name` empty means the newest file — what the Logs page opens on. */
   loggingReadFile: (name: string, maxBytes?: number) =>
     invoke<string>("logging_read_file", { name, maxBytes: maxBytes ?? null }),
+  /** Every log file as one chronological text — the rotation is not the
+   *  reader's problem. Budget spent newest-first. */
+  loggingReadAll: (maxBytes?: number) =>
+    invoke<string>("logging_read_all", { maxBytes: maxBytes ?? null }),
   loggingLog: (level: LogLevel, target: string, message: string) =>
     invoke<void>("logging_log", { level, target, message }),
 

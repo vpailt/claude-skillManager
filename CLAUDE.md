@@ -601,6 +601,16 @@ not a grid of bordered regions**. Every layout decision follows from that:
   it in a **single place** — the padding on the column right of the sidebar —
   so nothing else in the tree hard-codes the value.
 
+**A panel that is cut off says so.** `components/ScrollFade.tsx` wraps a
+scrollable area and fades its content out over the last ~28 px while there is
+more beyond it, top and bottom. It is an *overlay*, never a `mask-image`: a mask
+fades the final rows permanently, including once the reader has scrolled to them
+and they are the answer being looked for. `wraps` mode leaves the scrolling to a
+child (a Radix `ScrollArea`, whose viewport it then watches); otherwise it owns
+the `overflow-y-auto` itself. Every long surface goes through it — both halves of
+Skills, Changes, Activity, Logs, Audit, the dashboard, and the Help / Release
+notes / Settings dialogs.
+
 `<main>` in `App.tsx` is deliberately **not** a panel — the panel is drawn by
 what the route renders, so a page can decide its own surface. Every page root
 carries `panel`, split pages included: the two halves of a `ResizableSplit` are
@@ -808,12 +818,22 @@ of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey.
   five-row card, so the two cannot label the same event differently. Note the
   consequence the Activity page states out loud before acting: "vider
   l'historique" is `logging_purge`, i.e. it deletes the logs — there is nothing
-  else to clear. The Logs page needs `logging_list_files` / `logging_read_file`
-  because `logging_tail` only ever reaches the *current* file, and the appender
-  rolls daily: the session being asked about is usually in yesterday's. Its
-  parser keeps lines that match no pattern (a panic backtrace, a multi-line
-  message) and attaches them to the entry above, since a stack trace is exactly
-  what someone opening that page came for.
+  else to clear. The Logs page reads **every file as one journal**
+  (`logging_read_all`): `logging_tail` only ever reaches the current file, the
+  appender rolls daily, and making the reader pick a file from a dropdown made
+  the rotation their problem — a session that started before midnight lives in
+  two. The byte budget is spent newest-first, so what is dropped is old history
+  rather than what is being read. Its parser keeps lines that match no pattern
+  (a panic backtrace, a multi-line message) and attaches them to the entry
+  above, since a stack trace is exactly what someone opening that page came for.
+  It has a second tab, **Appels API**, over the same lines: `github_client`
+  writes one `tracing::info!` per forge round trip under the dedicated `api`
+  target (`trace_call`, called from `check` — the one place that knows method,
+  URL and status together — plus the 304 and transport-failure paths `check`
+  never sees). `logger::level_filter` must name `api` or none of it reaches the
+  file. The tab counts today's calls, failures and cache hits, and plots them by
+  hour: one series, so one colour and no legend, and the call list underneath is
+  the same data as a table.
 - `stores/treeSelection.ts` + the `RowCheckbox` in `pages/Skills.tsx` — multi-selection
   in the tree, feeding `components/BulkActionBar.tsx`. Keys are `mp:`/`pl:`/`sk:`
   prefixed, and a **skill is keyed on its folder, the same key the sync watcher

@@ -33,6 +33,7 @@ import { useNotifications } from "@/stores/notifications";
 import { useSettingsDialog } from "@/stores/settingsDialog";
 import { api } from "@/lib/api";
 import { cn, openExternal } from "@/lib/utils";
+import { ScrollFade } from "@/components/ScrollFade";
 import type { Plugin } from "@/lib/types";
 import { useAppVersion } from "@/hooks/useAppVersion";
 import { useForgeStatus } from "@/hooks/useForgeStatus";
@@ -808,7 +809,7 @@ export function OverviewPage() {
     (localOnly?.plugins.length ?? 0);
 
   return (
-    <div className="panel h-full w-full overflow-auto">
+    <ScrollFade className="panel h-full w-full">
       <div className="flex w-full flex-col p-6">
         <header className="mb-4">
           <div className="flex items-center gap-2">
@@ -883,6 +884,6 @@ export function OverviewPage() {
           <AcxMarketplaceCard />
         </section>
       </div>
-    </div>
+    </ScrollFade>
   );
 }

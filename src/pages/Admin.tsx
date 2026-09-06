@@ -16,6 +16,7 @@ import { openExternal, shortDate } from "@/lib/utils";
 import { useApp } from "@/stores/app";
 import { useTrackingView } from "@/stores/trackingView";
 import type { TrackedPr } from "@/lib/types";
+import { ScrollFade } from "@/components/ScrollFade";
 
 // ============================================================
 // Marketplace PR tracking ("Suivi Marketplace")
@@ -299,11 +300,11 @@ export function AdminPage() {
         </p>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <ScrollFade className="flex-1">
         <div className="p-4">
           <TrackingSection />
         </div>
-      </div>
+      </ScrollFade>
     </div>
   );
 }

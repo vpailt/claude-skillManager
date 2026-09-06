@@ -58,6 +58,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ScrollFade } from "@/components/ScrollFade";
 import { useNotifications } from "@/stores/notifications";
 import { setFrontendLogLevel } from "@/lib/logger";
 import { useAppVersion } from "@/hooks/useAppVersion";
@@ -1404,9 +1405,11 @@ export function SettingsDialog() {
                   {SECTION_TITLE[section]}
                 </h2>
               </div>
-              <ScrollArea className="flex-1">
-                <div className="space-y-6 p-6">{renderSection()}</div>
-              </ScrollArea>
+              <ScrollFade className="flex-1" wraps>
+                <ScrollArea className="h-full">
+                  <div className="space-y-6 p-6">{renderSection()}</div>
+                </ScrollArea>
+              </ScrollFade>
             </div>
           </div>
         </DialogContent>
