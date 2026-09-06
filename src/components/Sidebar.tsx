@@ -281,25 +281,14 @@ export function Sidebar() {
           )}
         />
       </div>
-      {/* Brand */}
-      <div className="flex items-center gap-2 px-3 py-4">
-        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground">
-          <Sparkles className="h-4 w-4" />
-        </div>
-        {!shownCollapsed && (
-          <div className="min-w-0 leading-tight">
-            <div className="truncate text-sm font-semibold">SkillManager</div>
-            <div className="text-xs text-muted-foreground">Claude Code</div>
-          </div>
-        )}
-      </div>
+      {/* The brand block used to open this bar. It is in the title bar now,
+          where an application's name belongs — and where it stays legible with
+          this bar collapsed to icons. */}
 
-      <Separator />
-
-      {/* Refresh, and nothing else. Search moved to the title bar, and the
-          settings / help / theme / fold cluster moved into its menus — what is
-          left here is navigation plus the one action frequent enough to deserve
-          a permanent button, spinner included. */}
+      {/* Refresh, and nothing else. Search and the app's name moved to the
+          title bar, theme and density to Paramètres → Apparence — what is left
+          here is navigation plus the one action frequent enough to deserve a
+          permanent button, spinner included. */}
       <div className="space-y-1 px-2 py-2">
         <button
           type="button"

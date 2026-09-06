@@ -90,33 +90,6 @@ function ReleaseEntry({
         )}
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">{date}</span>
       </button>
-      {/* Outside the toggle button — a button inside a button is invalid, and
-          installing a version is not "expand its notes". */}
-      {!current && !release.installable && (
-        <div className="px-3 pb-2 text-right text-xs text-muted-foreground">
-          Pas de binaire autonome dans cette release — installation impossible
-          depuis ici
-        </div>
-      )}
-      {canInstall && (
-        <div className="flex items-center justify-end gap-2 px-3 pb-2">
-          <Button
-            size="sm"
-            variant={older ? "outline" : "default"}
-            className="h-7 px-2 text-xs"
-            disabled={installing}
-            onClick={() => void installVersion(release.version)}
-            title={
-              older
-                ? `Réinstaller ${release.version} par-dessus la version en cours`
-                : `Installer ${release.version}`
-            }
-          >
-            <Download className="mr-1 h-3 w-3" />
-            {older ? `Revenir à ${release.version}` : `Installer ${release.version}`}
-          </Button>
-        </div>
-      )}
       {open && (
         <div className="border-t px-3 py-3">
           {release.body.trim() ? (
@@ -126,17 +99,50 @@ function ReleaseEntry({
               Cette release n'a pas de description.
             </p>
           )}
-          {release.url && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="mt-2 h-7 px-2 text-xs"
-              onClick={() => openExternal(release.url!)}
-            >
-              <ExternalLink className="mr-1 h-3 w-3" />
-              Ouvrir sur GitHub
-            </Button>
-          )}
+          {/* The actions close the panel, both of them, GitHub on the left and
+              the install on the right: you read what a version contains, then
+              you act on it. Outside the header's toggle button, because a
+              button inside a button is invalid markup — and because installing
+              a version is not "expand its notes". */}
+          <div className="mt-3 flex items-center gap-2 border-t pt-3">
+            {release.url && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => openExternal(release.url!)}
+              >
+                <ExternalLink className="mr-1 h-3 w-3" />
+                Ouvrir sur GitHub
+              </Button>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              {!current && !release.installable && (
+                <span className="text-xs text-muted-foreground">
+                  Pas de binaire autonome — installation impossible depuis ici
+                </span>
+              )}
+              {canInstall && (
+                <Button
+                  size="sm"
+                  variant={older ? "outline" : "default"}
+                  className="h-7 px-2 text-xs"
+                  disabled={installing}
+                  onClick={() => void installVersion(release.version)}
+                  title={
+                    older
+                      ? `Réinstaller ${release.version} par-dessus la version en cours`
+                      : `Installer ${release.version}`
+                  }
+                >
+                  <Download className="mr-1 h-3 w-3" />
+                  {older
+                    ? `Revenir à ${release.version}`
+                    : `Installer ${release.version}`}
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </section>

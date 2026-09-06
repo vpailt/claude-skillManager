@@ -109,11 +109,25 @@ export function TitleBar() {
       // page, and a page is free to position things of its own.
       className="relative z-30 flex h-9 shrink-0 items-stretch gap-0 bg-chrome pl-2 text-sm"
     >
+      {/* The name, where an application's name belongs — and where it survives
+          the sidebar being collapsed to icons, which is where it used to sit.
+          Both children carry the drag attribute: Tauri only acts on the element
+          directly under the pointer, so without it the title would be the one
+          spot of this bar you cannot drag the window by. */}
       <div
         data-tauri-drag-region
-        className="flex shrink-0 items-center gap-2 pr-1"
+        className="flex shrink-0 items-center gap-2 pr-3"
       >
-        <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+        <Sparkles
+          data-tauri-drag-region
+          className="h-4 w-4 shrink-0 text-primary"
+        />
+        <span
+          data-tauri-drag-region
+          className="select-none whitespace-nowrap text-xs font-semibold"
+        >
+          SkillManager
+        </span>
       </div>
 
       {/* The middle stretch is drag surface, with the search field floating in

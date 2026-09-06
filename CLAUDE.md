@@ -656,7 +656,11 @@ of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey.
   `allow-minimize`, `allow-toggle-maximize`, `allow-close`, plus the
   `is-maximized` read) are in `capabilities/default.json` — the bar silently
   does nothing without them.
-  Besides those, it carries exactly two things: the **search field**
+  Besides those, it carries the application's **name** at the far left (moved
+  out of the sidebar's head, where it vanished with every collapse — note that
+  both the mark and the label repeat `data-tauri-drag-region`, or the title
+  would be the one patch of this bar the window cannot be dragged by), and two
+  controls: the **search field**
   (`components/SearchBox.tsx`) — a real input, with its results dropping in a
   panel anchored under it; the panel opens on focus, and an empty query lists
   the pages rather than everything, which is what makes clicking it worth it —
