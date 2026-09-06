@@ -83,6 +83,25 @@
   }
 }
 
+@layer base {
+  /*
+   * Every border in the app follows `--border`.
+   *
+   * Without this, Tailwind's preflight paints *every* element's border
+   * `#e5e7eb` — a near-white grey — and the `border` utility sets only a width.
+   * So every Card, every `rounded-md border` block, was outlined in a hard-coded
+   * light line that no theme token could reach: `--border` could be lowered
+   * three times over with nothing changing, since only `.panel` and a handful of
+   * explicit `border-border` rules ever read it. In light mode the accident was
+   * invisible (near-white on white); in dark mode it drew the wireframe.
+   *
+   * This is the shadcn base rule the project never had.
+   */
+  * {
+    @apply border-border;
+  }
+}
+
 @layer components {
   /*
    * A sub-window: the page, each half of a split, the update banner. `overflow:
