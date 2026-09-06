@@ -93,6 +93,52 @@ export async function checkForUpdate() {
 }
 
 /**
+ * Install one published release by tag — including an older one than what is
+ * running.
+ *
+ * A downgrade is not a special mode: `app_release_info` resolves the release
+ * into the same `AppUpdateInfo` a check produces, and the swap that follows is
+ * the one behind "Installer", Authenticode verification included. What differs
+ * is only that nothing compared version numbers first, which is the point.
+ *
+ * The backend still announces the newest release afterwards, so returning to an
+ * old version means the banner will offer the new one again at the next check —
+ * dismissing it is what silences that.
+ */
+export async function installVersion(tag: string) {
+  const store = useAppUpdate.getState();
+  if (store.installing) return;
+  store.setInstallError(null);
+  // Set before the first await, like `startUpdate`: this flag is what the
+  // status bar reads, and what gates late progress events.
+  store.setInstalling(true);
+  try {
+    const info = await api.appReleaseInfo(tag);
+    if (!info.canSelfUpdate) {
+      throw new Error(
+        "Cette version ne contient pas de binaire autonome, ou le dossier d'installation n'est pas accessible en écriture."
+      );
+    }
+    log.info(`installVersion: applying ${tag} in place`);
+    // `app-update-ready` settles the store and raises the toast, as for any
+    // other install — the result is not needed here.
+    await api.appApplyUpdate(info);
+  } catch (e) {
+    const message = String(e);
+    log.error(`installVersion ${tag} failed`, e);
+    useAppUpdate.getState().setInstallError(message);
+    useNotifications.getState().push({
+      kind: "error",
+      title: `Installation de ${tag} impossible`,
+      body: message,
+    });
+  } finally {
+    useAppUpdate.getState().setInstalling(false);
+    useAppUpdate.getState().setProgress(null);
+  }
+}
+
+/**
  * Download and install the latest release. The single implementation behind
  * every "Installer" button — the banner and the Settings card both call this,
  * and both read the resulting progress from `useAppUpdate`.

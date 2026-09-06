@@ -1,32 +1,10 @@
 import { useEffect, useState } from "react";
-import { Copy, Minus, Sparkles, Square, X } from "lucide-react";
+import { Copy, HelpCircle, Minus, Sparkles, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { createLogger } from "@/lib/logger";
-import { useUi, toggleSidebar } from "@/stores/ui";
 import { useHelpDialog } from "@/stores/helpDialog";
-import { useSettingsDialog } from "@/stores/settingsDialog";
-import { useReleaseNotes } from "@/stores/releaseNotes";
-import { checkForUpdate } from "@/hooks/useAppUpdateEvents";
 import { HelpDialog } from "@/components/HelpDialog";
-import { SearchBox, focusSearch } from "@/components/SearchBox";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import type { ThemePref, UiDensity } from "@/lib/types";
-
-const log = createLogger("titlebar");
+import { SearchBox } from "@/components/SearchBox";
 
 /**
  * The window's own title bar — Windows draws none, `decorations` is off in
@@ -34,51 +12,16 @@ const log = createLogger("titlebar");
  * the drag region, the double-click to maximise, and the three window buttons.
  *
  * It is chrome, like the sidebar and the status bar below it, and it carries
- * what used to sit at the two ends of the sidebar: the application menus
- * (Fichier / Affichage / Aide — settings, theme, density, help, the sidebar
- * fold) and the search field, which takes the typing itself and drops its
- * results under the bar (`components/SearchBox.tsx`).
+ * three things and no more: the search field (which takes the typing itself and
+ * drops its results under the bar, `components/SearchBox.tsx`), the help
+ * button, and the window controls. There is no menu bar — settings live at the
+ * foot of the sidebar, theme and density in Paramètres → Apparence, and the
+ * shortcuts in `App.tsx` work whether or not anything is open.
  *
  * `data-tauri-drag-region` is what makes a bare patch of this bar drag the
  * window: Tauri only acts on the element directly under the pointer, so every
  * gap gets the attribute and no control ever does.
  */
-
-const THEME_LABEL: Record<ThemePref, string> = {
-  light: "Clair",
-  dark: "Sombre",
-  auto: "Auto (suit le système)",
-};
-
-const DENSITY_LABEL: Record<UiDensity, string> = {
-  comfortable: "Confortable",
-  compact: "Compacte",
-};
-
-/** One top-level menu: a label in the bar, a dropdown under it. */
-function Menu({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="flex h-full shrink-0 items-center rounded-sm px-2 text-xs text-foreground/80 outline-none transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
-        >
-          {label}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" sideOffset={2} className="min-w-[14rem]">
-        {children}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 
 /**
  * Minimise / maximise / close. Windows conventions: 46 px wide, no gap, and
@@ -156,14 +99,8 @@ function WindowControls() {
 }
 
 export function TitleBar() {
-  const theme = useUi((s) => s.ui.theme);
-  const density = useUi((s) => s.ui.density);
-  const collapsed = useUi((s) => s.ui.sidebarCollapsed);
-  const patchPersisted = useUi((s) => s.patchPersisted);
-  const openSettings = useSettingsDialog((s) => s.openTo);
   const helpOpen = useHelpDialog((s) => s.open);
   const setHelpOpen = useHelpDialog((s) => s.setOpen);
-  const openNotes = useReleaseNotes((s) => s.setOpen);
 
   return (
     <header
@@ -179,92 +116,6 @@ export function TitleBar() {
         <Sparkles className="h-4 w-4 shrink-0 text-primary" />
       </div>
 
-      <Menu label="Fichier">
-        <DropdownMenuItem onSelect={() => openSettings("general")}>
-          Paramètres…
-          <DropdownMenuShortcut>Ctrl+,</DropdownMenuShortcut>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          destructive
-          // Really quit, tray or not: `app.exit(0)` passes a code, and the
-          // ExitRequested guard in `lib.rs` only holds the process back when
-          // there is none (the last window closing).
-          onSelect={() => {
-            void api.appQuit().catch((e) => log.error("quit failed", e));
-          }}
-        >
-          Quitter
-        </DropdownMenuItem>
-      </Menu>
-
-      <Menu label="Affichage">
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Thème</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-            <DropdownMenuRadioGroup
-              value={theme}
-              onValueChange={(v) =>
-                patchPersisted({ theme: v as ThemePref })
-              }
-            >
-              {(Object.keys(THEME_LABEL) as ThemePref[]).map((t) => (
-                <DropdownMenuRadioItem key={t} value={t}>
-                  {THEME_LABEL[t]}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Densité</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-            <DropdownMenuRadioGroup
-              value={density}
-              onValueChange={(v) =>
-                patchPersisted({ density: v as UiDensity })
-              }
-            >
-              {(Object.keys(DENSITY_LABEL) as UiDensity[]).map((d) => (
-                <DropdownMenuRadioItem key={d} value={d}>
-                  {DENSITY_LABEL[d]}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={toggleSidebar}>
-          {collapsed ? "Déplier la barre latérale" : "Replier la barre latérale"}
-          <DropdownMenuShortcut>Ctrl+B</DropdownMenuShortcut>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          // Deferred: Radix restores the focus to the menu trigger as the menu
-          // unmounts, which would take it straight back off the field.
-          onSelect={() => window.setTimeout(focusSearch, 60)}
-        >
-          Rechercher…
-          <DropdownMenuShortcut>Ctrl+K</DropdownMenuShortcut>
-        </DropdownMenuItem>
-      </Menu>
-
-      <Menu label="Aide">
-        <DropdownMenuItem onSelect={() => setHelpOpen(true)}>
-          Guide & raccourcis
-          <DropdownMenuShortcut>F1</DropdownMenuShortcut>
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openNotes(true)}>
-          Notes de version
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void checkForUpdate()}>
-          Rechercher une mise à jour
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => openSettings("about")}>
-          À propos de SkillManager
-        </DropdownMenuItem>
-      </Menu>
-
       {/* The middle stretch is drag surface, with the search field floating in
           it. The field takes the typing itself and drops its results just under
           the bar (`components/SearchBox.tsx`). */}
@@ -273,6 +124,21 @@ export function TitleBar() {
         className="flex min-w-0 flex-1 items-center justify-center px-2"
       >
         <SearchBox />
+      </div>
+
+      {/* Help sits just left of the window buttons, as a round pill rather
+          than one of their squares: it belongs to the application, not to the
+          window frame, and the shape is what says so. */}
+      <div data-tauri-drag-region className="flex shrink-0 items-center pr-1">
+        <button
+          type="button"
+          onClick={() => setHelpOpen(true)}
+          title="Aide — à quoi sert l'application, connexions, raccourcis (F1)"
+          aria-label="Aide"
+          className="grid h-6 w-6 place-items-center rounded-full bg-accent/60 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+        >
+          <HelpCircle className="h-4 w-4" />
+        </button>
       </div>
 
       <WindowControls />

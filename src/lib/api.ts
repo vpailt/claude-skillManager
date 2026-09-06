@@ -293,6 +293,8 @@ export const api = {
 
   // --- app self-update ---
   appCheckUpdate: () => invoke<AppUpdateInfo>("app_check_update"),
+  /** One published release by tag — feeds `appApplyUpdate` for a reinstall. */
+  appReleaseInfo: (tag: string) => invoke<AppUpdateInfo>("app_release_info", { tag }),
   /** Published releases, newest first — feeds the "Notes de mise à jour" panel. */
   appReleaseNotes: (limit?: number) =>
     invoke<ReleaseNote[]>("app_release_notes", { limit }),

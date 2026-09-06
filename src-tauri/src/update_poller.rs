@@ -38,7 +38,9 @@ pub const EVENT_AVAILABLE: &str = "app-update-available";
 pub const EVENT_PROGRESS: &str = "app-update-progress";
 
 /// Let the first refresh and the PR poller settle before adding network work.
-const STARTUP_DELAY_SECS: u64 = 25;
+/// Short enough that the answer lands while the window is still being read —
+/// the check is meant to happen *at* startup, not merely at some point after.
+const STARTUP_DELAY_SECS: u64 = 8;
 /// Re-read settings this often while auto-update is switched off, so flipping
 /// the toggle in Settings takes effect without a restart.
 const DISABLED_POLL_SECS: u64 = 120;
@@ -154,12 +156,31 @@ pub fn start(app: AppHandle) {
 }
 
 fn worker(app: AppHandle) {
+    // The startup check. It is a check like any other — the loop below would
+    // reach it anyway — but saying so out loud matters: "is there a new
+    // version?" is a question every launch should answer, not one that waits
+    // for an interval to elapse. The short delay is only there to let the first
+    // refresh and the PR poller have the network to themselves.
     std::thread::sleep(Duration::from_secs(STARTUP_DELAY_SECS));
+    let mut first = true;
     loop {
         let settings = config::load_settings();
         if !settings.ui.auto_update_enabled {
+            // Including at startup: switching this off means "do not go and
+            // ask", and a launch is no exception. The Settings page's button
+            // still checks on demand.
+            if first {
+                tracing::info!(
+                    "update_poller: startup check skipped (auto-update disabled)"
+                );
+                first = false;
+            }
             std::thread::sleep(Duration::from_secs(DISABLED_POLL_SECS));
             continue;
+        }
+        if first {
+            tracing::info!("update_poller: startup check");
+            first = false;
         }
         // Already installed this session — the work is done until the user
         // restarts, and re-announcing would just repeat what the banner says.

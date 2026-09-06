@@ -13,6 +13,7 @@ import {
   Bell,
   CheckCircle2,
   ArrowUpCircle,
+  History as HistoryIcon,
   ExternalLink,
   FileText,
   AlertTriangle,
@@ -62,7 +63,7 @@ import { setFrontendLogLevel } from "@/lib/logger";
 import { useAppVersion } from "@/hooks/useAppVersion";
 import { useAppUpdate } from "@/stores/appUpdate";
 import { useReleaseNotes } from "@/stores/releaseNotes";
-import { restartNow, startUpdate } from "@/hooks/useAppUpdateEvents";
+import { installVersion, restartNow, startUpdate } from "@/hooks/useAppUpdateEvents";
 import { GiteaInstancesCard } from "@/components/GiteaInstancesCard";
 import { forceRefresh } from "@/hooks/useRefresh";
 import { UpdateProgressBar } from "@/components/UpdateProgressBar";
@@ -140,6 +141,109 @@ const NOTIFY_KINDS: {
   { key: "notifyWarning", label: "Avertissements", hint: "situations à surveiller" },
   { key: "notifyError", label: "Erreurs", hint: "échecs d'opération" },
 ];
+
+/**
+ * Install a published version other than the one running — an older one
+ * included.
+ *
+ * Same command as everywhere else (`installVersion` → `app_release_info` →
+ * `app_apply_update`): a downgrade is a normal in-place swap, signature check
+ * included, that simply skipped the "is it newer?" question. The release notes
+ * panel offers the same thing per release, where you can read what a version
+ * contains before choosing it; this is the version picker for when you already
+ * know which one you want.
+ */
+function ReinstallCard() {
+  const appVersion = useAppVersion();
+  const installing = useAppUpdate((s) => s.installing);
+  const staged = useAppUpdate((s) => s.staged);
+  const [tag, setTag] = useState("");
+
+  const q = useQuery({
+    queryKey: ["release-notes"],
+    queryFn: () => api.appReleaseNotes(15),
+    staleTime: 30 * 60 * 1000,
+  });
+
+  // Only what can actually be swapped in, and never the running version.
+  const options = (q.data ?? []).filter(
+    (r) =>
+      r.installable &&
+      r.version.replace(/^v/i, "") !== (appVersion ?? "").replace(/^v/i, "")
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <HistoryIcon className="h-4 w-4" />
+          Installer une autre version
+        </CardTitle>
+        <CardDescription>
+          Toute version publiée peut remplacer celle en cours, y compris une plus
+          ancienne — utile pour revenir en arrière après une régression. Le
+          remplacement se fait sur place et prend effet au prochain démarrage ;
+          la signature est vérifiée comme pour une mise à jour.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {q.isPending && (
+          <p className="text-xs text-muted-foreground">
+            Chargement des versions publiées…
+          </p>
+        )}
+        {q.isError && (
+          <p className="text-xs text-red-600 dark:text-red-400">
+            Impossible de lister les versions : {String(q.error)}
+          </p>
+        )}
+        {!q.isPending && !q.isError && options.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            Aucune autre version installable n'est publiée.
+          </p>
+        )}
+        {options.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="h-8 rounded-md border bg-background px-2 text-xs"
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
+              aria-label="Version à installer"
+            >
+              <option value="">Choisir une version…</option>
+              {options.map((r) => (
+                <option key={r.version} value={r.version}>
+                  {r.version}
+                  {r.prerelease ? " (pré-version)" : ""}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!tag || installing || staged !== null}
+              onClick={() => void installVersion(tag)}
+              title={
+                staged
+                  ? "Une version est déjà installée et attend un redémarrage"
+                  : "Installer la version choisie"
+              }
+            >
+              <Download className="mr-1 h-3 w-3" />
+              {installing ? "Installation…" : "Installer"}
+            </Button>
+          </div>
+        )}
+        {staged && (
+          <p className="text-xs text-muted-foreground">
+            {staged.version} est déjà installée et attend un redémarrage — il n'y
+            a qu'un emplacement pour le binaire suivant.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export function SettingsDialog() {
   const open = useSettingsDialog((s) => s.open);
@@ -1012,6 +1116,8 @@ export function SettingsDialog() {
                     markdown included. */}
               </CardContent>
             </Card>
+
+            <ReinstallCard />
 
             {paths && (
               <Card>

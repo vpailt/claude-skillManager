@@ -2667,7 +2667,21 @@ pub async fn app_apply_update(app: AppHandle, info: AppUpdateInfo) -> Result<Sta
     Ok(staged)
 }
 
-/// Leave for good — the Fichier → Quitter entry in the title bar's menu.
+/// Resolve one published release by tag, so the frontend can hand it straight
+/// to [`app_apply_update`].
+///
+/// This is the whole of "reinstall an older version": the install path does not
+/// care whether the version it is given is newer, the swap and the Authenticode
+/// check are the same either way. Downgrading is therefore this lookup plus the
+/// button that already exists, not a second installer.
+#[tauri::command]
+pub async fn app_release_info(tag: String) -> Result<AppUpdateInfo> {
+    tracing::info!("app_release_info: resolving {}", tag);
+    app_updater::release_by_tag(&tag)
+}
+
+/// Leave for good — no longer reachable from the window (the title bar's menus
+/// are gone); the tray's Quit item is the way out for now.
 ///
 /// Not the same thing as closing the window: closing honours
 /// `ui.tray.close.to.tray` and usually just releases the UI to the tray. This

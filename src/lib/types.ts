@@ -619,6 +619,8 @@ export interface ReleaseNote {
   body: string;
   url: string | null;
   prerelease: boolean;
+  /** The release ships a portable binary, so it can be installed from here. */
+  installable: boolean;
 }
 
 export interface UninstallInfo {

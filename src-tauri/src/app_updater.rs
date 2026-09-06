@@ -124,6 +124,10 @@ pub struct ReleaseNote {
     pub body: String,
     pub url: Option<String>,
     pub prerelease: bool,
+    /// True when the release ships a portable binary, i.e. when it can be
+    /// installed in place from here — an older one included. A release with an
+    /// installer only is listed but offers no button.
+    pub installable: bool,
 }
 
 /// An update already written to disk. The running process is still the old
@@ -305,6 +309,19 @@ pub fn check_for_update() -> Result<AppUpdateInfo> {
         )));
     }
     let v: Value = resp.json().map_err(|e| Error::Other(e.to_string()))?;
+    Ok(parse_release(&v))
+}
+
+/// Everything [`AppUpdateInfo`] needs, read out of one GitHub release payload.
+///
+/// Split out of [`check_for_update`] so [`release_by_tag`] can hand the very
+/// same shape to `apply_update` for *any* published release, not only the
+/// latest — which is all "reinstall an older version" amounts to. `has_update`
+/// is computed the same way in both cases and is simply false when the release
+/// is older than what is running; nothing downstream reads it, the asset URLs
+/// do the work.
+fn parse_release(v: &Value) -> AppUpdateInfo {
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
     let tag = v
         .get("tag_name")
         .and_then(|x| x.as_str())
@@ -393,7 +410,7 @@ pub fn check_for_update() -> Result<AppUpdateInfo> {
         can_self_update
     );
 
-    Ok(AppUpdateInfo {
+    AppUpdateInfo {
         current_version,
         latest_version,
         has_update,
@@ -407,7 +424,47 @@ pub fn check_for_update() -> Result<AppUpdateInfo> {
         can_self_update,
         release_notes,
         status: "ok".to_string(),
-    })
+    }
+}
+
+/// One published release, by tag — the door to installing a version other than
+/// the latest, an older one included.
+///
+/// Deliberately the same [`AppUpdateInfo`] `check_for_update` returns, so the
+/// install path is literally the same code: download the portable asset, verify
+/// its signature, swap it in. A downgrade is not a special mode, it is this
+/// function plus the existing swap.
+pub fn release_by_tag(tag: &str) -> Result<AppUpdateInfo> {
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return Err(Error::Invalid("no release tag given".into()));
+    }
+    let url = format!("https://api.github.com/repos/{UPDATE_REPO}/releases/tags/{tag}");
+    let resp = http()?.get(&url).send().map_err(|e| {
+        tracing::warn!("app_updater: GET {} failed: {}", url, e);
+        Error::Other(format!("Network error: {e}"))
+    })?;
+    let status = resp.status();
+    if status.as_u16() == 404 {
+        return Err(Error::NotFound(format!(
+            "aucune release publiée pour le tag {tag}"
+        )));
+    }
+    if !status.is_success() {
+        let text = resp.text().unwrap_or_default();
+        return Err(Error::Other(format!(
+            "GitHub returned {status} for {url}: {text}"
+        )));
+    }
+    let v: Value = resp.json().map_err(|e| Error::Other(e.to_string()))?;
+    let info = parse_release(&v);
+    tracing::info!(
+        "app_updater: release {} resolved (portable={}, self_update={})",
+        tag,
+        info.portable_asset_name.as_deref().unwrap_or("<none>"),
+        info.can_self_update
+    );
+    Ok(info)
 }
 
 /// The published releases, newest first — what the in-app "Notes de mise à
@@ -452,6 +509,21 @@ pub fn fetch_releases(limit: u32) -> Result<Vec<ReleaseNote>> {
                     n
                 }
             };
+            // Whether this release could be installed from here at all: the
+            // in-place swap needs a portable asset, and a release that ships
+            // only an installer must not offer a button that would fail.
+            let installable = r
+                .get("assets")
+                .and_then(|x| x.as_array())
+                .map(|assets| {
+                    assets.iter().any(|a| {
+                        a.get("name")
+                            .and_then(|n| n.as_str())
+                            .and_then(classify)
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
             ReleaseNote {
                 version,
                 name,
@@ -462,6 +534,7 @@ pub fn fetch_releases(limit: u32) -> Result<Vec<ReleaseNote>> {
                     .get("prerelease")
                     .and_then(|x| x.as_bool())
                     .unwrap_or(false),
+                installable,
             }
         })
         .collect();

@@ -444,7 +444,17 @@ falling through published a release whose entire diff was a version bump.
   read behind the in-app release-notes panel: `check_for_update` only ever sees
   `/releases/latest`, so the notes of the version you are *running* were
   otherwise unreachable.
-- `update_poller.rs` — background thread **checking** on a timer
+  `release_by_tag` resolves **any** published release into the same
+  `AppUpdateInfo` a check produces, which is the whole of "reinstall an older
+  version": the swap, the signature check and the events are the ones already
+  there, minus the question of whether the version is newer. `fetch_releases`
+  reports `installable` per release so a release shipping only an installer
+  offers no button it could not honour.
+- `update_poller.rs` — background thread **checking** on a timer, and **once at
+  startup** (`STARTUP_DELAY_SECS`, short enough to land while the window is
+  still being read). The startup check honours `update.auto.enabled` like every
+  other: switching it off means "do not go and ask", and a launch is no
+  exception — the Settings button still checks on demand.
   (`update.auto.enabled`, `update.auto.interval.hours`). It detects and
   announces; it downloads nothing. Release-only: a no-op in debug builds so it
   never offers to swap a binary into `target/debug`. Emits `app-update-available`
@@ -646,27 +656,31 @@ of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey.
   `allow-minimize`, `allow-toggle-maximize`, `allow-close`, plus the
   `is-maximized` read) are in `capabilities/default.json` — the bar silently
   does nothing without them.
-  It also carries what used to sit at the two ends of the sidebar: the **menus**
-  (Fichier — paramètres, quitter; Affichage — thème, densité, repli de la barre,
-  palette; Aide — guide, notes de version, recherche de mise à jour, à propos)
-  and the **search field** (`components/SearchBox.tsx`): a real input, with its
-  results dropping in a panel anchored under it — the centred command-palette
-  dialog is gone. The panel opens on focus, and an empty query lists the pages
-  rather than everything, which is what makes clicking the field worth it.
-  There is one search box in the app, so `focusSearch()` is module-scoped —
-  Ctrl+K and the Affichage menu both call it, the way `forceRefresh` works.
-  Every shortcut a menu advertises is implemented in `App.tsx`'s keydown
-  handler, not here — they must work with no menu open.
-  `Quitter` goes through `app_quit`, which passes an exit code precisely so the
-  tray guard in `lib.rs` lets the process go.
+  Besides those, it carries exactly two things: the **search field**
+  (`components/SearchBox.tsx`) — a real input, with its results dropping in a
+  panel anchored under it; the panel opens on focus, and an empty query lists
+  the pages rather than everything, which is what makes clicking it worth it —
+  and a round **help button** left of the window controls, round precisely
+  because it belongs to the application rather than to the frame. There is one
+  search box in the app, so `focusSearch()` is module-scoped, the way
+  `forceRefresh` works.
+  There is **no menu bar**: Fichier / Affichage / Aide were tried and removed.
+  What they held lives where it is used — Paramètres at the foot of the sidebar,
+  theme and density in Paramètres → Apparence, the release history behind the
+  version in the status bar, the fold on the sidebar's own handle. The shortcuts
+  are implemented in `App.tsx`'s keydown handler and always were: they work with
+  nothing open, which is why removing the menus cost none of them. The one thing
+  that did go is **Quitter** — `app_quit` is still there, still correct (it
+  passes an exit code, which is what lets the tray guard in `lib.rs` release the
+  process), but nothing in the window calls it any more; the tray's Quit item is
+  the way out.
 - `components/Sidebar.tsx` — the nav bar, and the only resizable piece of the
   chrome. What is left in it is navigation, the Rafraîchir button at the top and
   a Paramètres row pinned at the bottom, under a rule and outside the scrolling
-  nav so it stays put however long that list gets; the help / theme / fold
-  cluster and the search box moved to the title bar's menus. Paramètres is a
+  nav so it stays put however long that list gets; the search box moved to the
+  title bar, theme and density to Paramètres → Apparence. Paramètres is a
   button, not a NavLink — settings are a dialog, not a route — wearing the same
-  row as its neighbours, and the Fichier menu offers the same thing for whoever
-  is already up there. Width is free between `SNAP_WIDTH` (180) and `MAX_WIDTH` (380), and
+  row as its neighbours. Width is free between `SNAP_WIDTH` (180) and `MAX_WIDTH` (380), and
   **the handle is the collapse control**: drag under `COLLAPSE_THRESHOLD` (140)
   and releasing folds the bar to icons. The 40 px between the two is a snap zone
   that resolves *upwards* — you cross it deliberately to collapse, you never

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, ExternalLink, FileText, RefreshCw } from "lucide-react";
+import { ChevronRight, Download, ExternalLink, FileText, RefreshCw } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +16,8 @@ import { api } from "@/lib/api";
 import { cn, openExternal } from "@/lib/utils";
 import { useAppVersion } from "@/hooks/useAppVersion";
 import { useReleaseNotes } from "@/stores/releaseNotes";
+import { useAppUpdate } from "@/stores/appUpdate";
+import { installVersion } from "@/hooks/useAppUpdateEvents";
 import type { ReleaseNote } from "@/lib/types";
 
 /** GitHub tags carry a leading `v`, `getVersion()` doesn't. */
@@ -38,14 +40,22 @@ function formatDate(iso: string): string {
 function ReleaseEntry({
   release,
   current,
+  older,
   defaultOpen,
 }: {
   release: ReleaseNote;
   current: boolean;
+  /** Published before the running version — the button then says "revenir à". */
+  older: boolean;
   defaultOpen: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const installing = useAppUpdate((s) => s.installing);
+  const staged = useAppUpdate((s) => s.staged);
   const date = formatDate(release.publishedAt);
+  // Nothing to install on the version already running, nor once a binary is
+  // staged: the swap slot holds one build, and it is taken until a restart.
+  const canInstall = release.installable && !current && !staged;
   return (
     <section
       className={cn(
@@ -80,6 +90,33 @@ function ReleaseEntry({
         )}
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">{date}</span>
       </button>
+      {/* Outside the toggle button — a button inside a button is invalid, and
+          installing a version is not "expand its notes". */}
+      {!current && !release.installable && (
+        <div className="px-3 pb-2 text-right text-xs text-muted-foreground">
+          Pas de binaire autonome dans cette release — installation impossible
+          depuis ici
+        </div>
+      )}
+      {canInstall && (
+        <div className="flex items-center justify-end gap-2 px-3 pb-2">
+          <Button
+            size="sm"
+            variant={older ? "outline" : "default"}
+            className="h-7 px-2 text-xs"
+            disabled={installing}
+            onClick={() => void installVersion(release.version)}
+            title={
+              older
+                ? `Réinstaller ${release.version} par-dessus la version en cours`
+                : `Installer ${release.version}`
+            }
+          >
+            <Download className="mr-1 h-3 w-3" />
+            {older ? `Revenir à ${release.version}` : `Installer ${release.version}`}
+          </Button>
+        </div>
+      )}
       {open && (
         <div className="border-t px-3 py-3">
           {release.body.trim() ? (
@@ -154,7 +191,10 @@ export function ReleaseNotesDialog() {
           </DialogTitle>
           <DialogDescription>
             Les releases publiées sur <code>vpailt/claude-skillManager</code>, de
-            la plus récente à la plus ancienne. Votre version est signalée.
+            la plus récente à la plus ancienne. Votre version est signalée, et
+            chacune des autres peut être installée d'ici — y compris une plus
+            ancienne, pour revenir en arrière. Le remplacement se fait au
+            prochain démarrage.
           </DialogDescription>
         </DialogHeader>
         <ScrollArea className="max-h-[70vh]">
@@ -177,6 +217,10 @@ export function ReleaseNotesDialog() {
                 key={r.version || i}
                 release={r}
                 current={i === currentIndex}
+                // The list is newest-first, so anything below the running
+                // version is a downgrade — and the button says so rather than
+                // calling it an install.
+                older={currentIndex >= 0 && i > currentIndex}
                 // The newest release and the one you are running: the two
                 // anyone opening this panel actually came to read.
                 defaultOpen={i === 0 || i === currentIndex}
