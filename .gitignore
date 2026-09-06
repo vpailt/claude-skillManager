@@ -21,3 +21,6 @@ Thumbs.db
 
 # Build artifacts
 build.log
+
+# Claude Code (état local de session)
+.claude/scheduled_tasks.lock

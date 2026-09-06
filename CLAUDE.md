@@ -20,24 +20,41 @@ There is no test suite, no linter, no formatter configured. Don't add one withou
 
 ## Releasing a new version ("build & push")
 
-When asked to ship a change ("build & push", "fais une nouvelle version", "same as
-last time"), run this exact cycle:
+A release lives on its **own branch cut from `main`**, never directly on `main`.
+The cycle has two halves: opening the round, then shipping it.
 
-1. **Stop the running app** — the running `skillmanager.exe` locks the output file, so
+### Opening the round (as soon as a new version is mentioned)
+
+1. **Ask which bump it is** — majeur / mineur / patch — and **propose one** with a
+   one-line rationale drawn from the change itself: breaking change or refonte
+   d'un flux utilisateur → majeur; nouvelle fonctionnalité ou nouvelle page →
+   mineur; correction, ajustement visuel, réglage de défaut → patch. Ask before
+   creating anything; the answer decides the branch name.
+2. **Cut the branch from an up-to-date `main`**: `git switch main && git pull`,
+   then `git switch -c release/vX.Y.Z`.
+3. **Bump the version on that branch** in **three** files, kept in lockstep:
+   `package.json`, `src-tauri/Cargo.toml` (`[package] version`), and
+   `src-tauri/tauri.conf.json`. `src-tauri/Cargo.lock` updates itself on build.
+4. Develop on the branch. Commit there as the work goes.
+
+### Shipping it (when the user asks to build the release)
+
+5. **Stop the running app** — the running `skillmanager.exe` locks the output file, so
    the build fails with `Accès refusé (os error 5)` if it's open. Kill it first:
    `Get-Process skillmanager -ErrorAction SilentlyContinue | Stop-Process -Force`.
-2. **Bump the version** (patch for fixes/small features) in **three** files, kept in
-   lockstep: `package.json`, `src-tauri/Cargo.toml` (`[package] version`), and
-   `src-tauri/tauri.conf.json`. `src-tauri/Cargo.lock` updates itself on build.
-3. **Build**: `.\build.ps1 -NoBundle` (call it by absolute path —
-   `& "c:\DEV\ProjetAnnexe\claude-skillManager\build.ps1" -NoBundle` — the PowerShell
-   working dir sometimes drifts). Frontend-only changes still need this (it rebundles
-   into the exe); a quick `npx tsc -b` / `cargo check` is a faster pre-flight.
-4. **Commit on `main`** (this is a solo repo; history is linear, no PR). French message
-   `vX.Y.Z: <résumé>` + a body. **No `Co-Authored-By:` trailer and no tool
-   attribution** — the repo owner asked for commit messages that carry neither.
-5. **Push** `origin main` — only with a fresh, explicit user go-ahead for *this* round
-   (the auto-mode classifier blocks an unprompted push to the default branch).
+6. **Build**: `.\build.ps1 -NoBundle` (call it by absolute path —
+   `& "c:\DEV\SkillManager\build.ps1" -NoBundle` — the PowerShell working dir
+   sometimes drifts). Frontend-only changes still need this (it rebundles into the
+   exe); a quick `npx tsc -b` / `cargo check` is a faster pre-flight.
+7. **Commit on the release branch**. French message `vX.Y.Z: <résumé>` + a body.
+   **No `Co-Authored-By:` trailer and no tool attribution** — the repo owner asked
+   for commit messages that carry neither, and `.claude/settings.json` enforces it
+   (`attribution.commit: ""`). Don't re-add one by hand.
+8. **Push the branch** (`git push -u origin release/vX.Y.Z`), then **merge it into
+   `main`** (`git switch main && git merge release/vX.Y.Z`) and push `main`. This is
+   a solo repo — no PR, no review; the merge is local. Both pushes need a fresh,
+   explicit user go-ahead for *this* round (the auto-mode classifier blocks an
+   unprompted push to the default branch).
 
 Builds are **Authenticode-signed**: open a SimplySign Desktop session *before*
 building or `-Package` stops with an explicit error (the key lives in Certum's cloud
