@@ -826,6 +826,9 @@ of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey.
   rather than what is being read. Its parser keeps lines that match no pattern
   (a panic backtrace, a multi-line message) and attaches them to the entry
   above, since a stack trace is exactly what someone opening that page came for.
+  Both tabs read **newest-first**, like Activity — and that is why the parser
+  marks continuations (`cont`): `newestFirst` reverses *entries*, never lines,
+  or a stack trace would print upside down above the error it belongs to.
   It has a second tab, **Appels API**, over the same lines: `github_client`
   writes one `tracing::info!` per forge round trip under the dedicated `api`
   target (`trace_call`, called from `check` — the one place that knows method,

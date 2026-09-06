@@ -12,6 +12,10 @@
 // a question the first cannot without squinting — how much are we asking of
 // GitHub and Gitea, and how much of it is failing.
 //
+// Both tabs read newest-first, like the Activity page: what just happened is
+// what anyone opening a log came for. Entries are reversed, never lines — see
+// `newestFirst`.
+//
 // Parsing is deliberately tolerant. A log line is
 //   <ISO timestamp>  <LEVEL> <target>: <message>
 // but a panic backtrace, or any message containing a newline, produces lines
@@ -50,6 +54,9 @@ interface LogLine {
   message: string;
   /** The line as written, used for search so nothing is unfindable. */
   raw: string;
+  /** A wrapped line belonging to the entry above it, not an entry of its own.
+   *  What makes newest-first possible without shuffling a stack trace. */
+  cont: boolean;
 }
 
 const LINE_RE =
@@ -68,6 +75,7 @@ function parseLog(text: string): LogLine[] {
         target: m[3],
         message: m[4],
         raw,
+        cont: false,
       });
       continue;
     }
@@ -81,9 +89,30 @@ function parseLog(text: string): LogLine[] {
       target: prev?.target ?? "",
       message: raw,
       raw,
+      cont: true,
     });
   }
   return out;
+}
+
+/**
+ * Newest entry first, which is the order anyone opening a log wants: what just
+ * happened is what they came for, and scrolling to the bottom of a week of
+ * history to find it is not a reading order.
+ *
+ * Reversing the *lines* would be wrong — a stack trace would print upside down,
+ * above the error it belongs to. So entries are reversed, and each entry keeps
+ * its continuations in the order they were written. A continuation whose parent
+ * a filter removed stands alone rather than vanishing.
+ */
+function newestFirst(lines: LogLine[]): LogLine[] {
+  const blocks: LogLine[][] = [];
+  for (const l of lines) {
+    if (!l.cont || blocks.length === 0) blocks.push([l]);
+    else blocks[blocks.length - 1].push(l);
+  }
+  blocks.reverse();
+  return blocks.flat();
 }
 
 // ============================================================
@@ -295,24 +324,31 @@ export function LogsPage() {
     // Levels are ordered most severe first, so "at least WARN" is "index <=
     // index of WARN" — the same test the backend's filter makes.
     const maxIdx = LEVELS.indexOf(minLevel);
-    return lines.filter((l) => {
+    const kept = lines.filter((l) => {
       if (l.level && LEVELS.indexOf(l.level) > maxIdx) return false;
       if (fromMs !== null && l.ts !== null && l.ts < fromMs) return false;
       if (toMs !== null && l.ts !== null && l.ts > toMs) return false;
       if (q && !l.raw.toLowerCase().includes(q)) return false;
       return true;
     });
+    // Filter first, then reverse: reversing a filtered list keeps whichever
+    // continuations survived with the entry they belong to.
+    return newestFirst(kept);
   }, [lines, q, minLevel, fromMs, toMs]);
 
   const shownCalls = useMemo(
     () =>
-      calls.filter((c) => {
-        if (failuresOnly && !isFailure(c)) return false;
-        if (fromMs !== null && c.ts !== null && c.ts < fromMs) return false;
-        if (toMs !== null && c.ts !== null && c.ts > toMs) return false;
-        if (q && !c.raw.toLowerCase().includes(q)) return false;
-        return true;
-      }),
+      calls
+        .filter((c) => {
+          if (failuresOnly && !isFailure(c)) return false;
+          if (fromMs !== null && c.ts !== null && c.ts < fromMs) return false;
+          if (toMs !== null && c.ts !== null && c.ts > toMs) return false;
+          if (q && !c.raw.toLowerCase().includes(q)) return false;
+          return true;
+        })
+        // One line per call, so nothing to group: a plain reverse is the whole
+        // of "newest first" here.
+        .reverse(),
     [calls, q, failuresOnly, fromMs, toMs]
   );
 
