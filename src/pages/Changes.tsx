@@ -31,6 +31,7 @@ import { DiffViewToggle, FileDiff } from "@/components/FileDiff";
 import { useBulkRunner, type BulkOp } from "@/hooks/useBulkRunner";
 import { useProgress } from "@/stores/progress";
 import { api } from "@/lib/api";
+import { PAGE_HEADER } from "@/lib/headerStyles";
 import { usePendingChanges, type ChangeGroup } from "@/lib/changes";
 import { openExternal } from "@/lib/utils";
 import { useSkillSync } from "@/stores/skillSync";
@@ -246,7 +247,7 @@ export function ChangesPage() {
 
   return (
     <div className="panel flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 border-b px-4 py-2">
+      <div className={PAGE_HEADER}>
         <UploadCloud className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
           Changements en attente

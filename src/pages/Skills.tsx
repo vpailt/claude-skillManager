@@ -67,6 +67,7 @@ import { withTask } from "@/stores/progress";
 import { useNotifications } from "@/stores/notifications";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { PAGE_HEADER } from "@/lib/headerStyles";
 import { ResizableSplit } from "@/components/ResizableSplit";
 import { SkillMarkdown } from "@/components/SkillMarkdown";
 import {
@@ -1992,7 +1993,7 @@ export function SkillsPage() {
 
   const left = (
     <>
-      <div className="flex items-center gap-2 border-b px-4 py-2">
+      <div className={PAGE_HEADER}>
         <Sparkles className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
           Marketplaces · plugins · skills

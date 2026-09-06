@@ -257,7 +257,7 @@ export function SearchBox() {
     <div ref={rootRef} className="relative w-full max-w-[34rem]">
       <div
         className={cn(
-          "flex h-6 items-center gap-2 rounded-md border px-2 text-xs transition-colors",
+          "flex h-7 items-center gap-2 rounded-md border px-2 text-xs transition-colors",
           open
             ? "border-primary/60 bg-background"
             : "border-border/70 bg-background/60 hover:border-border hover:bg-background"

@@ -12,6 +12,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
+import { PAGE_HEADER } from "@/lib/headerStyles";
 import { cn, openExternal, shortDate } from "@/lib/utils";
 import { useApp } from "@/stores/app";
 import { useTrackingView } from "@/stores/trackingView";
@@ -325,7 +326,7 @@ function TrackingSection() {
 export function AdminPage() {
   return (
     <div className="panel flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
+      <div className={PAGE_HEADER}>
         <Radar className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="shrink-0 text-sm font-semibold">Suivi marketplace</h2>
         <span className="min-w-0 truncate text-xs text-muted-foreground">

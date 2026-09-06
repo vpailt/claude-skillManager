@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { PAGE_HEADER } from "@/lib/headerStyles";
 import { cn, openExternal } from "@/lib/utils";
 import { ScrollFade } from "@/components/ScrollFade";
 import { TH, TH_ROW } from "@/lib/tableStyles";
@@ -177,7 +178,7 @@ export function ActivityPage() {
 
   return (
     <div className="panel flex h-full min-h-0 w-full min-w-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
+      <div className={PAGE_HEADER}>
         <History className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="shrink-0 text-sm font-semibold">Activité récente</h2>
         <Badge variant="outline" className="shrink-0">

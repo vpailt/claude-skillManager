@@ -34,6 +34,7 @@ import { ScrollFade } from "@/components/ScrollFade";
 import { StatTile } from "@/components/StatTile";
 import { TH, TH_ROW } from "@/lib/tableStyles";
 import { api } from "@/lib/api";
+import { PAGE_HEADER } from "@/lib/headerStyles";
 import { withTask } from "@/stores/progress";
 import { cn } from "@/lib/utils";
 import { useNotifications } from "@/stores/notifications";
@@ -177,7 +178,7 @@ export function UsageAuditPage() {
       {/* Header — the same bar the Logs page's tabs sit on: name, counts, and
           the one action, on one line. The filters take the second row, as they
           do there, rather than standing the title block on end. */}
-      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
+      <div className={PAGE_HEADER}>
         <BarChart3 className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="shrink-0 text-sm font-semibold">Audit d'utilisation</h2>
         {data && (
@@ -202,7 +203,7 @@ export function UsageAuditPage() {
           ) : (
             <Download className="mr-1 h-3 w-3" />
           )}
-          Export Excel
+          Export
         </Button>
       </div>
 
@@ -330,12 +331,16 @@ export function UsageAuditPage() {
                     Aucun skill invoqué sur la période.
                   </p>
                 ) : (
-                  // Same table as Logs and Activité récente — shared header
-                  // style, sticky, no Card around it: three pages listing rows
-                  // read from disk should not each invent their own.
-                  <div className="overflow-x-auto">
+                  // Same rows, rules and header style as Logs and Activité
+                  // récente — three pages listing what was read from disk
+                  // should not each invent their own. In a card, unlike the Logs and Activity tables: those two
+                  // *are* their page, this one is the third section of a page
+                  // whose other two are cards, and a bare table between them
+                  // read as content that had lost its container.
+                  <Card className="overflow-hidden">
+                    <div className="overflow-x-auto">
                       <table className="w-full border-collapse text-sm">
-                        <thead className={TH_ROW}>
+                        <thead className={cn(TH_ROW, "bg-card")}>
                           <tr>
                             <th className={TH}>Skill</th>
                             <th className={cn(TH, "w-32 text-right")}>
@@ -421,6 +426,7 @@ export function UsageAuditPage() {
                         </tbody>
                       </table>
                     </div>
+                  </Card>
                 )}
               </section>
 

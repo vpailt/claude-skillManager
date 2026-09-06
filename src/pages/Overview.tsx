@@ -33,6 +33,7 @@ import { withTask } from "@/stores/progress";
 import { useNotifications } from "@/stores/notifications";
 import { useSettingsDialog } from "@/stores/settingsDialog";
 import { api } from "@/lib/api";
+import { PAGE_HEADER } from "@/lib/headerStyles";
 import { cn, openExternal } from "@/lib/utils";
 import { ScrollFade } from "@/components/ScrollFade";
 import type { Plugin } from "@/lib/types";
@@ -840,7 +841,7 @@ export function OverviewPage() {
     // Same bar every page carries: icon, name, badges — a title block twice as
     // tall here said nothing the others do not, and pushed the counters down.
     <div className="panel flex h-full min-h-0 w-full min-w-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
+      <div className={PAGE_HEADER}>
         <LayoutDashboard className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="shrink-0 text-sm font-semibold">Dashboard</h2>
         {version && (
