@@ -10,12 +10,14 @@ import {
   History,
   ScrollText,
   ArrowUpCircle,
+  Settings,
 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/stores/ui";
 import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 import { useTrackingView } from "@/stores/trackingView";
+import { useSettingsDialog } from "@/stores/settingsDialog";
 import { useAppUpdate } from "@/stores/appUpdate";
 import { usePendingChangesCount } from "@/lib/changes";
 import { forceRefresh } from "@/hooks/useRefresh";
@@ -155,6 +157,7 @@ export function Sidebar() {
   const collapsed = useUi((s) => s.ui.sidebarCollapsed);
   const storedWidth = useUi((s) => s.ui.sidebarWidth);
   const patchPersisted = useUi((s) => s.patchPersisted);
+  const openSettings = useSettingsDialog((s) => s.openTo);
   const staged = useAppUpdate((s) => s.staged);
 
   const isRefreshing = useIsFetching({ queryKey: ["refresh"] }) > 0;
@@ -399,6 +402,35 @@ export function Sidebar() {
           </div>
         ))}
       </nav>
+
+      {/* Settings closes the bar, under a rule and after the scrolling nav, so
+          it stays put however long the navigation gets. A button rather than a
+          NavLink: settings are a dialog, not a route — but it wears the same
+          row as its neighbours above, since from here it is one more place to
+          go. The title bar's Fichier menu offers the same thing; this is the
+          one you reach without opening a menu first. */}
+      <Separator />
+      <div className="px-2 py-2">
+        <button
+          type="button"
+          onClick={() => openSettings("general")}
+          title="Paramètres — token, connexions, notifications, mises à jour, logs"
+          className={cn(
+            "flex w-full items-start gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
+            shownCollapsed && "items-center justify-center px-0"
+          )}
+        >
+          <Settings className="h-4 w-4 shrink-0 self-center" />
+          {!shownCollapsed && (
+            <span className="min-w-0 flex-1 text-left leading-tight">
+              <span className="block truncate font-medium">Paramètres</span>
+              <span className="block truncate text-xs text-muted-foreground/80">
+                Connexions, notifications, logs
+              </span>
+            </span>
+          )}
+        </button>
+      </div>
 
       {staged && (
         <button

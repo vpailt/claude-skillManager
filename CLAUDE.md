@@ -660,9 +660,13 @@ of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey.
   `Quitter` goes through `app_quit`, which passes an exit code precisely so the
   tray guard in `lib.rs` lets the process go.
 - `components/Sidebar.tsx` — the nav bar, and the only resizable piece of the
-  chrome. What is left in it is navigation plus the Rafraîchir button; the
-  settings / help / theme / fold cluster and the search box moved to the title
-  bar's menus. Width is free between `SNAP_WIDTH` (180) and `MAX_WIDTH` (380), and
+  chrome. What is left in it is navigation, the Rafraîchir button at the top and
+  a Paramètres row pinned at the bottom, under a rule and outside the scrolling
+  nav so it stays put however long that list gets; the help / theme / fold
+  cluster and the search box moved to the title bar's menus. Paramètres is a
+  button, not a NavLink — settings are a dialog, not a route — wearing the same
+  row as its neighbours, and the Fichier menu offers the same thing for whoever
+  is already up there. Width is free between `SNAP_WIDTH` (180) and `MAX_WIDTH` (380), and
   **the handle is the collapse control**: drag under `COLLAPSE_THRESHOLD` (140)
   and releasing folds the bar to icons. The 40 px between the two is a snap zone
   that resolves *upwards* — you cross it deliberately to collapse, you never
