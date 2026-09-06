@@ -57,36 +57,36 @@
     --panel-border: 240 4% 16%;
     --background: 240 4% 12%;
     --foreground: 210 10% 90%;
-    /* A card is told from the panel by its *surface*, so that surface has to
-       carry the difference on its own: at 15 % it was three points off the
-       panel and read as a faint tint behind a line. Six points is what makes it
-       a raised block, which is the whole point now that the border is a seam.
-       Everything stacked above a card moves with it — `muted`, `secondary` and
-       above all `accent`, which paints every hover: two points above the card
-       is a hover nobody sees. */
-    --card: 240 4% 18%;
+    /* A card is barely lighter than the panel it sits on — three points, no
+       more. Its edge is what draws it, and the edge is *lighter than the card*
+       (see `--border`), which is the arrangement dark editors use: surface for
+       depth, border for outline. Pushing the surface to six points instead made
+       a raised block whose border, being darker, read as a shadow — the
+       opposite reading. */
+    --card: 240 4% 15%;
     --card-foreground: 210 10% 90%;
     --primary: 238 76% 65%;
     --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 240 4% 22%;
+    --secondary: 240 4% 19%;
     --secondary-foreground: 210 10% 90%;
-    --muted: 240 4% 20%;
+    --muted: 240 4% 17%;
     --muted-foreground: 240 5% 63%;
-    --accent: 240 4% 23%;
+    --accent: 240 4% 20%;
     --accent-foreground: 210 10% 90%;
     --destructive: 0 62.8% 50.6%;
     --destructive-foreground: 210 40% 98%;
-    /* Literally the window's own edge, by construction rather than by a value
-       kept in step by hand: every border in dark mode is the one the main
-       window draws. At 24 %, then at 18 %, every card on the dashboard was
-       still outlined in grey and the page read as a wireframe — what separates
-       a card from the panel behind it is its own surface (18 % L), and the
-       border only finishes the edge. Being *darker* than the card it encloses
-       and lighter than the panel under it, it reads as a shadow between two
-       planes rather than as a drawn line. `input` stays far brighter: a control the
-       user is meant to click into has to look like one, which is the opposite
-       requirement. */
-    --border: var(--panel-border);
+    /* Lighter than the card it outlines (15 % L), which is what makes a card
+       *drawn* rather than merely tinted.
+       Deliberately not `--panel-border` any more, and the difference is not an
+       oversight: a panel floats on the near-black chrome and needs almost
+       nothing to be read, while a card sits on a panel three points below it
+       and would otherwise dissolve into it. Two edges, two jobs.
+       Note that the "borders far too heavy" this went through was never this
+       value: Tailwind's preflight was painting every border `#e5e7eb` — 91 % L,
+       near-white — and no token could reach it (see the base rule above). */
+    --border: 240 4% 22%;
+    /* Brighter still: a control the user is meant to click into has to look
+       like one, which is the opposite requirement to an outline. */
     --input: 240 4% 31%;
     --ring: 238 76% 65%;
   }

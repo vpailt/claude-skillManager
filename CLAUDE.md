@@ -620,12 +620,19 @@ carry `panel` on its root, or it will render as bare chrome.
 
 Dark is a neutral near-black with the chrome *darker* than the panels on it —
 that contrast, not a heavy border, is what gives a sub-window its edge. A trace
-of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey. The same
-reasoning makes `--border` *be* `--panel-border` in dark mode (`--border:
-var(--panel-border)`, not a copied value): what separates a card from the panel
-behind it is its own surface, and any brighter border outlined every card on the
-dashboard until the page read as a wireframe. Light keeps its own, slightly
-firmer value — on white surfaces the seam has nothing else to do the work. `--input` stays
+of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey. Inside it, the arrangement is the one dark editors use: **surface for depth,
+border for outline**. A card sits three points above the panel (15 % vs 12 %) and
+its border is *lighter than the card* (22 %), which is what draws it; a panel
+floats on near-black chrome and needs almost nothing, so `--panel-border` stays
+at 16 %. Two edges, two jobs — they are deliberately different values.
+
+The long detour to get there is worth knowing: the "borders far too heavy"
+complaint was never about any of these values. Tailwind's preflight paints every
+element's border `#e5e7eb` (91 % L, near-white) and the `border` utility sets
+only a width, so **no theme token reached a Card at all** until the `*
+{ @apply border-border }` base rule was added. Three successive lowerings of
+`--border` changed nothing, because only `.panel` and a handful of explicit
+`border-border` rules were ever reading it. `--input` stays
 far brighter, and the scrollbar thumb follows *it* rather than `--border` — both
 are controls, and a control has the opposite requirement to a seam.
 
