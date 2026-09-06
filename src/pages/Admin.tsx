@@ -12,7 +12,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
-import { openExternal, shortDate } from "@/lib/utils";
+import { cn, openExternal, shortDate } from "@/lib/utils";
 import { useApp } from "@/stores/app";
 import { useTrackingView } from "@/stores/trackingView";
 import type { TrackedPr } from "@/lib/types";
@@ -129,6 +129,46 @@ function GroupedPrCards({ prs }: { prs: TrackedPr[] }) {
   );
 }
 
+/** One of the page's three blocks: a named, outlined region rather than a bare
+ *  heading — what tells "Mes demandes" apart from "Suivi" is the box, not the
+ *  weight of a word. */
+function Section({
+  icon: Icon,
+  iconClassName,
+  title,
+  count,
+  busy,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  iconClassName?: string;
+  title: string;
+  count?: number;
+  busy?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-lg border bg-card/30">
+      <div className="flex items-center gap-2 border-b bg-muted/30 px-3 py-2">
+        <Icon className={cn("h-4 w-4 shrink-0", iconClassName ?? "text-primary")} />
+        <h3 className="min-w-0 flex-1 truncate text-sm font-semibold">{title}</h3>
+        {busy && (
+          <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Actualisation…
+          </span>
+        )}
+        {count !== undefined && count > 0 && (
+          <Badge variant="secondary" className="shrink-0">
+            {count}
+          </Badge>
+        )}
+      </div>
+      <div className="p-3">{children}</div>
+    </section>
+  );
+}
+
 function TrackingSection() {
   const settingsQuery = useQuery({
     queryKey: ["app-settings"],
@@ -184,96 +224,94 @@ function TrackingSection() {
   const total = all.length;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h3 className="flex items-center gap-2 text-sm font-semibold">
-            <Radar className="h-4 w-4 text-primary" />
-            Suivi marketplace
-            {total > 0 && <Badge variant="secondary">{total}</Badge>}
-          </h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            PR ouvertes sur les marketplaces dont le <strong>Suivi PR</strong> est
-            actif (onglet Skills, en cliquant sur un marketplace) et sur les repos
-            de leurs plugins. Utilisez <strong>Rafraîchir</strong> (barre de gauche)
-            pour actualiser.
-          </p>
-        </div>
-        {tracked.isFetching && (
-          <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Actualisation…
-          </span>
-        )}
-      </div>
-
-      {trackedNames.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
+    <div className="space-y-4">
+      {/* Three sections, three questions: what is being watched, what I asked
+          for, what is waiting on me. They used to run together as one column of
+          headings, and the second and third read as sub-parts of the first. */}
+      <Section
+        icon={Radar}
+        title="Suivi"
+        count={trackedNames.length}
+        busy={tracked.isFetching}
+      >
+        <p className="text-xs text-muted-foreground">
+          PR ouvertes sur les marketplaces dont le <strong>Suivi PR</strong> est
+          actif (onglet Skills, en cliquant sur un marketplace) et sur les repos
+          de leurs plugins. Utilisez <strong>Rafraîchir</strong> (barre de
+          gauche) pour actualiser.
+        </p>
+        {trackedNames.length === 0 ? (
+          <div className="mt-3 flex flex-col items-center gap-2 py-6 text-center text-sm text-muted-foreground">
             <Radar className="h-8 w-8 opacity-40" />
             <span>
-              Aucun marketplace suivi. Activez le toggle <strong>Suivi PR</strong>{" "}
-              sur un marketplace dans l'onglet <strong>Skills</strong>.
+              Aucun marketplace suivi. Activez le toggle{" "}
+              <strong>Suivi PR</strong> sur un marketplace dans l'onglet{" "}
+              <strong>Skills</strong>.
             </span>
-          </CardContent>
-        </Card>
-      ) : tracked.isLoading ? (
-        <Card>
-          <CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+          </div>
+        ) : (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {trackedNames.map((n) => (
+              <Badge key={n} variant="secondary" className="gap-1">
+                <Globe className="h-3 w-3" />
+                {n}
+              </Badge>
+            ))}
+            <Badge variant="outline">
+              {total} PR ouverte{total > 1 ? "s" : ""}
+            </Badge>
+          </div>
+        )}
+        {tracked.isLoading && (
+          <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Récupération des PR en cours…
-          </CardContent>
-        </Card>
-      ) : tracked.error ? (
-        <Card>
-          <CardContent className="p-6 text-sm text-destructive">
+          </div>
+        )}
+        {tracked.error && (
+          <div className="mt-3 text-sm text-destructive">
             {(tracked.error as Error).message}
-          </CardContent>
-        </Card>
-      ) : (
+          </div>
+        )}
+      </Section>
+
+      {trackedNames.length > 0 && !tracked.isLoading && !tracked.error && (
         <>
-          <section className="space-y-3">
-            <h4 className="flex items-center gap-2 text-sm font-semibold">
-              <GitPullRequest className="h-4 w-4 text-sky-500" />
-              Mes demandes
-              {mine.length > 0 && (
-                <Badge variant="secondary">{mine.length}</Badge>
-              )}
-            </h4>
+          <Section
+            icon={GitPullRequest}
+            iconClassName="text-sky-500"
+            title="Mes demandes"
+            count={mine.length}
+          >
             {mine.length === 0 ? (
-              <p className="px-1 text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Vous n'avez aucune PR ouverte sur les marketplaces suivis.
               </p>
             ) : (
               <GroupedPrCards prs={mine} />
             )}
-          </section>
+          </Section>
 
           {hasReviewRights && (
-            <section className="space-y-3">
-              <div>
-                <h4 className="flex items-center gap-2 text-sm font-semibold">
-                  <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                  Demandes à valider
-                  {toValidate.length > 0 && (
-                    <Badge variant="secondary">{toValidate.length}</Badge>
-                  )}
-                </h4>
-                <p className="mt-1 px-1 text-xs text-muted-foreground">
-                  PR ouvertes par d'autres que vous pouvez approuver (selon la
-                  règle de protection de branche, sinon vos droits de push).
-                </p>
-              </div>
+            <Section
+              icon={ShieldCheck}
+              iconClassName="text-emerald-600 dark:text-emerald-400"
+              title="Demandes à valider"
+              count={toValidate.length}
+            >
+              <p className="mb-3 text-xs text-muted-foreground">
+                PR ouvertes par d'autres que vous pouvez approuver (selon la
+                règle de protection de branche, sinon vos droits de push).
+              </p>
               {toValidate.length === 0 ? (
-                <p className="px-1 text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   Aucune PR en attente de votre validation.
                 </p>
               ) : (
                 <GroupedPrCards prs={toValidate} />
               )}
-            </section>
+            </Section>
           )}
-
         </>
       )}
     </div>
@@ -287,18 +325,14 @@ function TrackingSection() {
 export function AdminPage() {
   return (
     <div className="panel flex h-full min-h-0 flex-col">
-      <header className="shrink-0 border-b p-4">
-        <div className="flex items-center gap-2">
-          <Radar className="h-5 w-5 text-primary" />
-          <h1 className="text-xl font-semibold">Suivi marketplace</h1>
-        </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Les Pull Requests ouvertes sur les marketplaces que vous suivez et sur
-          leurs plugins. Pour proposer un changement, passez par l'onglet{" "}
-          <strong>Changements</strong> ; la gestion locale des marketplaces et
-          des plugins se fait dans l'onglet <strong>Skills</strong>.
-        </p>
-      </header>
+      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
+        <Radar className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <h2 className="shrink-0 text-sm font-semibold">Suivi marketplace</h2>
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
+          Les PR ouvertes sur les marketplaces suivis et leurs plugins — pour
+          proposer un changement, passez par l'onglet Changements.
+        </span>
+      </div>
 
       <ScrollFade className="flex-1">
         <div className="p-4">

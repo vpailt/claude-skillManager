@@ -1400,54 +1400,64 @@ function SkillDetailView({
   });
   return (
     <div className="flex h-full min-w-0 flex-col">
-      <header className="flex items-center gap-3 border-b px-6 py-4">
-        <h1 className="flex-1 truncate text-xl font-semibold">{entry.name}</h1>
+      {/* Sticky: the title says *which* skill the panel below belongs to, and a
+          SKILL.md is long enough that scrolling used to leave the reader with
+          an unnamed page of markdown. Only the body moves. */}
+      <header className="sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b bg-background px-6 py-4">
+        <h1 className="min-w-0 flex-1 truncate text-xl font-semibold">
+          {entry.name}
+        </h1>
         {entry.version && (
           <Badge variant="outline" className="shrink-0 font-mono text-xs">
             v{entry.version}
           </Badge>
         )}
-        {/* Open-in-VS-Code and Delete fold into an overflow menu: neither is
-            the thing you came to this panel to do, and one of them deletes a
-            folder — a destructive action one stray click away from the title
-            is worse placed than one behind a menu. */}
+        {/* VS Code is a button of its own — opening the folder is what one
+            actually does from here. Delete stays behind the menu: a destructive
+            action one stray click from the title is worse placed than one
+            behind a menu. */}
         {entry.folder && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-8 w-8 shrink-0"
-                aria-label="Autres actions"
-                title="Autres actions sur cette compétence"
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onSelect={async () => {
-                  try {
-                    await api.openInVsCode(entry.folder as string);
-                  } catch (e) {
-                    useNotifications.getState().push({
-                      kind: "error",
-                      title: "Échec de l'ouverture dans VS Code",
-                      body: errMsg(e),
-                    });
-                  }
-                }}
-              >
-                <Code2 className="h-4 w-4" />
-                Ouvrir dans VS Code
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem destructive onSelect={onDelete}>
-                <Trash2 className="h-4 w-4" />
-                Supprimer en local
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 shrink-0 px-2 text-xs"
+              title="Ouvrir le dossier du skill dans VS Code"
+              onClick={async () => {
+                try {
+                  await api.openInVsCode(entry.folder as string);
+                } catch (e) {
+                  useNotifications.getState().push({
+                    kind: "error",
+                    title: "Échec de l'ouverture dans VS Code",
+                    body: errMsg(e),
+                  });
+                }
+              }}
+            >
+              <Code2 className="mr-1 h-3 w-3" />
+              VS Code
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 shrink-0"
+                  aria-label="Autres actions"
+                  title="Autres actions sur cette compétence"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem destructive onSelect={onDelete}>
+                  <Trash2 className="h-4 w-4" />
+                  Supprimer en local
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
         )}
       </header>
 
@@ -1550,7 +1560,7 @@ function FileDetailView({
   const isMarkdown = /\.(md|markdown)$/i.test(fileName);
   return (
     <div className="flex h-full min-w-0 flex-col">
-      <header className="flex items-center gap-3 border-b px-6 py-4">
+      <header className="sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b bg-background px-6 py-4">
         <FileText className="h-5 w-5 shrink-0 text-violet-400/80" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold">{fileName}</h1>
@@ -1560,8 +1570,8 @@ function FileDetailView({
         </div>
         <Button
           size="sm"
-          variant="ghost"
-          className="h-8 gap-1.5 px-2 text-xs"
+          variant="outline"
+          className="h-8 shrink-0 px-2 text-xs"
           aria-label="Ouvrir dans VS Code"
           title="Ouvrir le dossier du skill dans VS Code"
           onClick={async () => {
@@ -1576,7 +1586,7 @@ function FileDetailView({
             }
           }}
         >
-          <Code2 className="h-4 w-4" />
+          <Code2 className="mr-1 h-3 w-3" />
           VS Code
         </Button>
       </header>
@@ -1982,18 +1992,19 @@ export function SkillsPage() {
 
   const left = (
     <>
-      <div className="flex items-center gap-1 border-b px-3 py-2">
-        <h2 className="flex-1 truncate text-sm font-semibold">
+      <div className="flex items-center gap-2 border-b px-4 py-2">
+        <Sparkles className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
           Marketplaces · plugins · skills
         </h2>
         <Button
           size="sm"
-          variant="ghost"
-          className="h-7 shrink-0 gap-1 px-2 text-xs"
+          variant="outline"
+          className="h-8 shrink-0 px-2 text-xs"
           onClick={() => setAddOpen(true)}
           title="Ajouter un marketplace depuis une URL Git"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Plus className="mr-1 h-3 w-3" />
           Ajouter une Marketplace
         </Button>
       </div>

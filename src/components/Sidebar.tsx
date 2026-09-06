@@ -405,17 +405,14 @@ export function Sidebar() {
           onClick={() => openSettings("general")}
           title="Paramètres — token, connexions, notifications, mises à jour, logs"
           className={cn(
-            "flex w-full items-start gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
-            shownCollapsed && "items-center justify-center px-0"
+            "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
+            shownCollapsed && "justify-center px-0"
           )}
         >
-          <Settings className="h-4 w-4 shrink-0 self-center" />
+          <Settings className="h-4 w-4 shrink-0" />
           {!shownCollapsed && (
-            <span className="min-w-0 flex-1 text-left leading-tight">
-              <span className="block truncate font-medium">Paramètres</span>
-              <span className="block truncate text-xs text-muted-foreground/80">
-                Connexions, notifications, logs
-              </span>
+            <span className="min-w-0 flex-1 truncate text-left font-medium">
+              Paramètres
             </span>
           )}
         </button>

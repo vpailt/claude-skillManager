@@ -415,7 +415,7 @@ export function LogsPage() {
 
         <Button
           size="sm"
-          variant="ghost"
+          variant="outline"
           className="ml-auto h-8 shrink-0 px-2 text-xs"
           onClick={() => {
             void files.refetch();
@@ -433,9 +433,11 @@ export function LogsPage() {
         {/* The archive holds the files *whole*, unlike this page, which reads
             them under a byte budget — an export is what gets attached to a bug
             report, and one missing the part before the cut explains nothing. */}
+        {/* Violet, unlike Recharger next to it: reloading re-reads what is
+            already on screen, exporting produces the archive a bug report is
+            built from — the one action of this bar worth pointing at. */}
         <Button
           size="sm"
-          variant="ghost"
           className="h-8 shrink-0 px-2 text-xs"
           onClick={() => exportMutation.mutate()}
           disabled={exportMutation.isPending || list.length === 0}

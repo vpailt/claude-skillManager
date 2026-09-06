@@ -10,6 +10,7 @@ import {
   Globe,
   History,
   Key,
+  LayoutDashboard,
   Package,
   Pencil,
   Radar,
@@ -55,10 +56,9 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * nowhere: a hover is a promise of a click, and the ones that make it here all
  * keep it.
  *
- * The fill is `accent` at full strength, not the `accent/40` the counter cells
- * use. The same 40 % reads on a cell because its two neighbours stay put and
- * give the eye a reference; across a whole card there is nothing to compare it
- * to, and two points of lightness simply go unseen.
+ * The fill is `accent` at full strength, and the dashboard's counter cells take
+ * the same one: a hover means the same thing wherever it happens on this page,
+ * and a weaker fill on the cells simply read as a second, unexplained state.
  */
 const CLICKABLE_CARD =
   "cursor-pointer transition-colors hover:border-primary/50 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -106,7 +106,7 @@ function CounterCell({
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col items-start gap-0.5 px-5 py-3 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      className="flex flex-col items-start gap-0.5 px-5 py-3 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
       <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
         <Icon className="h-4 w-4" />
@@ -837,22 +837,24 @@ export function OverviewPage() {
     (localOnly?.plugins.length ?? 0);
 
   return (
-    <ScrollFade className="panel h-full w-full">
-      <div className="flex w-full flex-col p-6">
-        <header className="mb-4">
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold">Dashboard</h1>
-            {version && (
-              <Badge variant="outline" className="font-mono text-xs">
-                v{version}
-              </Badge>
-            )}
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Aperçu de vos plugins, skills et marketplaces Claude Code.
-          </p>
-        </header>
+    // Same bar every page carries: icon, name, badges — a title block twice as
+    // tall here said nothing the others do not, and pushed the counters down.
+    <div className="panel flex h-full min-h-0 w-full min-w-0 flex-col">
+      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
+        <LayoutDashboard className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <h2 className="shrink-0 text-sm font-semibold">Dashboard</h2>
+        {version && (
+          <Badge variant="outline" className="shrink-0 font-mono text-xs">
+            v{version}
+          </Badge>
+        )}
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
+          Aperçu de vos plugins, skills et marketplaces Claude Code.
+        </span>
+      </div>
 
+      <ScrollFade className="flex-1">
+      <div className="flex w-full flex-col p-6">
         <GettingStartedCard />
 
         {/* Indicateurs (pleine largeur, en haut). The card is not itself a
@@ -917,6 +919,7 @@ export function OverviewPage() {
           <AcxMarketplaceCard />
         </section>
       </div>
-    </ScrollFade>
+      </ScrollFade>
+    </div>
   );
 }

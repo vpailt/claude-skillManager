@@ -115,7 +115,9 @@ export function NotificationCenter({
           aria-label="Dernières notifications"
           // Anchored to the bar's bottom-right corner and growing upwards —
           // it is the last thing in the window, so there is nowhere else to go.
-          className="absolute bottom-full right-0 z-50 mb-1 w-96 overflow-hidden rounded-md border bg-card shadow-lg"
+          // Held off the window edge by the same gutter every sub-window keeps,
+          // rather than sitting flush against it.
+          className="absolute bottom-full right-gutter z-50 mb-1 w-96 overflow-hidden rounded-md border bg-card shadow-lg"
         >
           <div className="flex items-center gap-2 border-b px-3 py-2">
             <span className="flex-1 text-xs font-semibold text-foreground">

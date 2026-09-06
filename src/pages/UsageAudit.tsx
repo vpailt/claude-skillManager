@@ -174,55 +174,60 @@ export function UsageAuditPage() {
 
   return (
     <div className="panel flex min-w-0 flex-1 flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-3 border-b px-6 py-4">
-        <div className="min-w-0">
-          <h1 className="flex items-center gap-2 text-lg font-semibold">
-            <BarChart3 className="h-5 w-5 text-primary" />
-            Audit d'utilisation
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Usage réel reconstruit depuis les transcripts de session, tous
-            projets confondus.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex items-end gap-2">
-            <CalendarRange className="mb-2 h-4 w-4 shrink-0 text-muted-foreground" />
-            <label className="text-xs text-muted-foreground">
-              <span className="mb-1 block">Du</span>
-              <Input
-                type="date"
-                value={fromDay}
-                max={toDay}
-                onChange={(e) => setFromDay(e.target.value)}
-                className="h-9 w-[9.5rem]"
-              />
-            </label>
-            <label className="text-xs text-muted-foreground">
-              <span className="mb-1 block">Au</span>
-              <Input
-                type="date"
-                value={toDay}
-                min={fromDay}
-                onChange={(e) => setToDay(e.target.value)}
-                className="h-9 w-[9.5rem]"
-              />
-            </label>
-          </div>
-          <Button
-            onClick={() => exportMutation.mutate()}
-            disabled={exportMutation.isPending || !data}
-            title="Télécharger le récapitulatif au format Excel (.xlsx)"
-          >
-            {exportMutation.isPending ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="mr-2 h-4 w-4" />
-            )}
-            Export Excel
-          </Button>
-        </div>
+      {/* Header — the same bar the Logs page's tabs sit on: name, counts, and
+          the one action, on one line. The filters take the second row, as they
+          do there, rather than standing the title block on end. */}
+      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
+        <BarChart3 className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <h2 className="shrink-0 text-sm font-semibold">Audit d'utilisation</h2>
+        {data && (
+          <Badge variant="outline" className="shrink-0">
+            {data.skills.length} skill{data.skills.length > 1 ? "s" : ""} ·{" "}
+            {data.totalEvents} invocation{data.totalEvents > 1 ? "s" : ""}
+          </Badge>
+        )}
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
+          Usage réel reconstruit depuis les transcripts de session, tous projets
+          confondus.
+        </span>
+        <Button
+          size="sm"
+          className="ml-auto h-8 shrink-0 px-2 text-xs"
+          onClick={() => exportMutation.mutate()}
+          disabled={exportMutation.isPending || !data}
+          title="Télécharger le récapitulatif au format Excel (.xlsx)"
+        >
+          {exportMutation.isPending ? (
+            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+          ) : (
+            <Download className="mr-1 h-3 w-3" />
+          )}
+          Export Excel
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
+        <CalendarRange className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          Du
+          <Input
+            type="date"
+            value={fromDay}
+            max={toDay}
+            onChange={(e) => setFromDay(e.target.value)}
+            className="h-8 w-[9.5rem] text-xs"
+          />
+        </label>
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          au
+          <Input
+            type="date"
+            value={toDay}
+            min={fromDay}
+            onChange={(e) => setToDay(e.target.value)}
+            className="h-8 w-[9.5rem] text-xs"
+          />
+        </label>
       </div>
 
       {/* Body */}
@@ -328,7 +333,7 @@ export function UsageAuditPage() {
                   // Same table as Logs and Activité récente — shared header
                   // style, sticky, no Card around it: three pages listing rows
                   // read from disk should not each invent their own.
-                  <div className="overflow-x-auto rounded-md border">
+                  <div className="overflow-x-auto">
                       <table className="w-full border-collapse text-sm">
                         <thead className={TH_ROW}>
                           <tr>
@@ -343,9 +348,9 @@ export function UsageAuditPage() {
                           {data.skills.map((s) => (
                             <tr
                               key={s.skill}
-                              className="border-b border-border/40 align-top last:border-0 hover:bg-accent/30"
+                              className="border-b border-border/40 align-top hover:bg-accent/40"
                             >
-                              <td className="px-4 py-2">
+                              <td className="px-3 py-1.5">
                                 <div className="font-medium">{s.skill}</div>
                                 {s.plugin && (
                                   <div className="text-xs text-muted-foreground">
@@ -353,10 +358,10 @@ export function UsageAuditPage() {
                                   </div>
                                 )}
                               </td>
-                              <td className="px-4 py-2 text-right tabular-nums">
+                              <td className="px-2 py-1.5 text-right tabular-nums">
                                 {s.count}
                               </td>
-                              <td className="px-4 py-2">
+                              <td className="px-2 py-1.5">
                                 <div className="flex flex-wrap gap-1.5">
                                   {s.projects.map((proj) => {
                                     const openable = !!proj.path;
