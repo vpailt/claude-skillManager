@@ -1,7 +1,8 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Sidebar } from "@/components/Sidebar";
 import { TitleBar } from "@/components/TitleBar";
+import { focusSearch } from "@/components/SearchBox";
 import { NotificationStack } from "@/components/NotificationStack";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { StatusBar } from "@/components/StatusBar";
@@ -51,11 +52,6 @@ const SettingsDialog = lazy(() =>
     default: m.SettingsDialog,
   }))
 );
-const CommandPalette = lazy(() =>
-  import("@/components/CommandPalette").then((m) => ({
-    default: m.CommandPalette,
-  }))
-);
 // Renders release bodies through SkillMarkdown, i.e. the whole markdown +
 // highlight.js stack. Mounted only while open so none of it is fetched until
 // someone actually asks for the notes.
@@ -64,7 +60,7 @@ const ReleaseNotesDialog = lazy(() =>
     default: m.ReleaseNotesDialog,
   }))
 );
-// Reached only through the command palette's hidden `sforge-labs` entry, so it
+// Reached only through the search box's hidden `sforge-labs` entry, so it
 // has no business being in any chunk that loads on startup.
 const OrgSyncDialog = lazy(() =>
   import("@/components/OrgSyncDialog").then((m) => ({
@@ -186,7 +182,6 @@ export default function App() {
   const releaseNotesOpen = useReleaseNotes((s) => s.open);
   const orgSyncOpen = useOrgSync((s) => s.open);
 
-  const [paletteOpen, setPaletteOpen] = useState(false);
   useEffect(() => {
     // The shortcuts the title bar's menus advertise. They live here rather than
     // in `TitleBar` because they must work with no menu open, and because a
@@ -195,7 +190,7 @@ export default function App() {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setPaletteOpen((v) => !v);
+        focusSearch();
       } else if (mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleSidebar();
@@ -221,7 +216,7 @@ export default function App() {
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-chrome text-foreground">
       {/* The window has no decorations of its own — this bar is the title bar:
           menus, search, and the three window buttons. */}
-      <TitleBar onOpenPalette={() => setPaletteOpen(true)} />
+      <TitleBar />
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         {/* The gutter lives here: padding on this column is what holds the page
@@ -269,9 +264,6 @@ export default function App() {
       <StatusBar />
       {/* No fallback: both mount hidden and render nothing until opened. */}
       <Suspense fallback={null}>
-        {paletteOpen && (
-          <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
-        )}
         {releaseNotesOpen && <ReleaseNotesDialog />}
         {orgSyncOpen && <OrgSyncDialog />}
         <SettingsDialog />

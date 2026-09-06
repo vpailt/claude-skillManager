@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Copy, Minus, Search, Sparkles, Square, X } from "lucide-react";
+import { Copy, Minus, Sparkles, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,7 @@ import { useSettingsDialog } from "@/stores/settingsDialog";
 import { useReleaseNotes } from "@/stores/releaseNotes";
 import { checkForUpdate } from "@/hooks/useAppUpdateEvents";
 import { HelpDialog } from "@/components/HelpDialog";
+import { SearchBox, focusSearch } from "@/components/SearchBox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,7 +36,8 @@ const log = createLogger("titlebar");
  * It is chrome, like the sidebar and the status bar below it, and it carries
  * what used to sit at the two ends of the sidebar: the application menus
  * (Fichier / Affichage / Aide — settings, theme, density, help, the sidebar
- * fold) and the search field that opens the command palette.
+ * fold) and the search field, which takes the typing itself and drops its
+ * results under the bar (`components/SearchBox.tsx`).
  *
  * `data-tauri-drag-region` is what makes a bare patch of this bar drag the
  * window: Tauri only acts on the element directly under the pointer, so every
@@ -153,7 +155,7 @@ function WindowControls() {
   );
 }
 
-export function TitleBar({ onOpenPalette }: { onOpenPalette: () => void }) {
+export function TitleBar() {
   const theme = useUi((s) => s.ui.theme);
   const density = useUi((s) => s.ui.density);
   const collapsed = useUi((s) => s.ui.sidebarCollapsed);
@@ -166,7 +168,9 @@ export function TitleBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   return (
     <header
       data-tauri-drag-region
-      className="flex h-9 shrink-0 items-stretch gap-0 bg-chrome pl-2 text-sm"
+      // `relative z-30`: the search panel hangs out of this bar and over the
+      // page, and a page is free to position things of its own.
+      className="relative z-30 flex h-9 shrink-0 items-stretch gap-0 bg-chrome pl-2 text-sm"
     >
       <div
         data-tauri-drag-region
@@ -234,8 +238,12 @@ export function TitleBar({ onOpenPalette }: { onOpenPalette: () => void }) {
           {collapsed ? "Déplier la barre latérale" : "Replier la barre latérale"}
           <DropdownMenuShortcut>Ctrl+B</DropdownMenuShortcut>
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onOpenPalette}>
-          Palette de commandes…
+        <DropdownMenuItem
+          // Deferred: Radix restores the focus to the menu trigger as the menu
+          // unmounts, which would take it straight back off the field.
+          onSelect={() => window.setTimeout(focusSearch, 60)}
+        >
+          Rechercher…
           <DropdownMenuShortcut>Ctrl+K</DropdownMenuShortcut>
         </DropdownMenuItem>
       </Menu>
@@ -258,25 +266,13 @@ export function TitleBar({ onOpenPalette }: { onOpenPalette: () => void }) {
       </Menu>
 
       {/* The middle stretch is drag surface, with the search field floating in
-          it — the field is the palette's front door, not an input: typing
-          happens in the palette itself, so this is a button that looks like
-          one. */}
+          it. The field takes the typing itself and drops its results just under
+          the bar (`components/SearchBox.tsx`). */}
       <div
         data-tauri-drag-region
         className="flex min-w-0 flex-1 items-center justify-center px-2"
       >
-        <button
-          type="button"
-          onClick={onOpenPalette}
-          title="Ouvrir la palette de commandes (Ctrl+K) — accédez à tout"
-          className="flex h-6 w-full max-w-[34rem] items-center gap-2 rounded-md border border-border/70 bg-background/60 px-2 text-xs text-muted-foreground transition-colors hover:border-border hover:bg-background"
-        >
-          <Search className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">Rechercher plugins, skills, actions…</span>
-          <kbd className="ml-auto shrink-0 rounded border px-1 text-[10px] leading-4">
-            Ctrl+K
-          </kbd>
-        </button>
+        <SearchBox />
       </div>
 
       <WindowControls />

@@ -527,8 +527,8 @@ falling through published a release whose entire diff was a version bump.
   auto-update, and watching it recursively would make the app wake itself.
 - `org_sync.rs` — incremental mirror of the Gitea `Claude` org into the GitHub
   `sforge-labs` org, behind a **hidden** entry point: typing `sforge-labs` in the
-  command palette matches nothing, and Enter on the empty result list opens the
-  comparison (`CommandPalette.tsx` → `stores/orgSync`). It carries the same two
+  title bar's search field matches nothing, and Enter on the empty result list
+  opens the comparison (`SearchBox.tsx` → `stores/orgSync`). It carries the same two
   rewrite rules the one-shot migration used (`scripts/migrate-gitea-to-github.ps1`):
   `acx-cl` → `cl`, and forge references repointed at `github.com/sforge-labs`.
   Rewriting is **byte-level** — decoding to UTF-8 would mangle non-UTF-8 files and
@@ -649,9 +649,14 @@ of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey.
   It also carries what used to sit at the two ends of the sidebar: the **menus**
   (Fichier — paramètres, quitter; Affichage — thème, densité, repli de la barre,
   palette; Aide — guide, notes de version, recherche de mise à jour, à propos)
-  and the **search field**, which is a button, not an input: typing happens in
-  the palette it opens. Every shortcut a menu advertises is implemented in
-  `App.tsx`'s keydown handler, not here — they must work with no menu open.
+  and the **search field** (`components/SearchBox.tsx`): a real input, with its
+  results dropping in a panel anchored under it — the centred command-palette
+  dialog is gone. The panel opens on focus, and an empty query lists the pages
+  rather than everything, which is what makes clicking the field worth it.
+  There is one search box in the app, so `focusSearch()` is module-scoped —
+  Ctrl+K and the Affichage menu both call it, the way `forceRefresh` works.
+  Every shortcut a menu advertises is implemented in `App.tsx`'s keydown
+  handler, not here — they must work with no menu open.
   `Quitter` goes through `app_quit`, which passes an exit code precisely so the
   tray guard in `lib.rs` lets the process go.
 - `components/Sidebar.tsx` — the nav bar, and the only resizable piece of the
