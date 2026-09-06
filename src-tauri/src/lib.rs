@@ -226,6 +226,8 @@ pub fn run() {
             logging_get_config,
             logging_set_config,
             logging_purge,
+            logging_list_files,
+            logging_read_file,
             logging_tail,
             logging_log,
             admin_prepare_add_plugin,

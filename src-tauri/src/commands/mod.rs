@@ -2263,6 +2263,20 @@ pub async fn logging_purge() -> Result<u32> {
     Ok(removed as u32)
 }
 
+/// Every log file on disk, newest first — what the Logs page lists.
+#[tauri::command]
+pub async fn logging_list_files() -> Vec<logger::LogFileInfo> {
+    logger::list_files()
+}
+
+/// Read one of them. An empty name means the newest, which is what the page
+/// opens on.
+#[tauri::command]
+pub async fn logging_read_file(name: String, max_bytes: Option<usize>) -> Result<String> {
+    logger::read_file(&name, max_bytes.unwrap_or(2 * 1024 * 1024))
+        .map_err(crate::error::Error::from)
+}
+
 #[tauri::command]
 pub async fn logging_tail(max_bytes: Option<usize>) -> Result<String> {
     logger::tail(max_bytes.unwrap_or(64 * 1024))

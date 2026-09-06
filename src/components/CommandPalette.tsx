@@ -59,6 +59,8 @@ const PAGES: Item[] = [
   { kind: "page", label: "Changements", path: "/changes" },
   { kind: "page", label: "Suivi marketplace", path: "/tracking" },
   { kind: "page", label: "Audit d'utilisation", path: "/audit" },
+  { kind: "page", label: "Activité récente", path: "/activity" },
+  { kind: "page", label: "Logs", path: "/logs" },
   { kind: "settings", label: "Paramètres" },
 ];
 

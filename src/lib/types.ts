@@ -549,6 +549,17 @@ export interface AppUpdateInfo {
 }
 
 /** An update already written onto skillmanager.exe; live at the next launch. */
+/** Mirror of `logger::LogFileInfo` — one log file, as the Logs page lists them.
+ *  `name` is a file name and never a path: it is what `loggingReadFile` takes
+ *  back, and keeping paths out of the round trip is what makes traversal
+ *  impossible. */
+export interface LogFileInfo {
+  name: string;
+  size: number;
+  /** Epoch milliseconds. */
+  modified: number;
+}
+
 /** Mirror of `notification_history::StoredNotification`. One notification as it
  *  is kept on disk — the bell's list. `onClick` has no counterpart here: it is
  *  a closure, so a restored entry is text and nothing else. */

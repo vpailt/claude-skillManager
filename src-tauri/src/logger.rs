@@ -191,3 +191,83 @@ fn prune_old_logs(dir: &Path, max_count: u32) {
         let _ = fs::remove_file(&path);
     }
 }
+
+/// One log file on disk, as the in-app viewer lists them.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogFileInfo {
+    /// File name only — never a path. It is what `read_file` takes back, and
+    /// keeping paths out of the round trip is what makes traversal impossible.
+    pub name: String,
+    pub size: u64,
+    /// Epoch milliseconds, so the frontend can render it with `Date`.
+    pub modified: i64,
+}
+
+/// Every log file we wrote, newest first.
+///
+/// The viewer needs the list because `tail()` only ever reaches the *current*
+/// file: the appender rolls daily, so yesterday's session — the one being asked
+/// about, usually — was unreachable from the UI.
+pub fn list_files() -> Vec<LogFileInfo> {
+    let dir = config::logs_dir();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(LogFileInfo, std::time::SystemTime)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if !p.is_file() || !is_our_log_file(&p) {
+                return None;
+            }
+            let meta = e.metadata().ok()?;
+            let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+            let ms = modified
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            Some((
+                LogFileInfo {
+                    name: p.file_name()?.to_str()?.to_string(),
+                    size: meta.len(),
+                    modified: ms,
+                },
+                modified,
+            ))
+        })
+        .collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1));
+    out.into_iter().map(|(info, _)| info).collect()
+}
+
+/// Read one log file by name, tailing it at `max_bytes`.
+///
+/// `name` is resolved against the logs directory and must pass
+/// `is_our_log_file`, so a caller cannot walk out of it — the name arrives from
+/// the frontend, and `logs_dir().join("../../secrets")` would otherwise be a
+/// perfectly ordinary path. An empty name means "the newest one", which is what
+/// the viewer opens on.
+pub fn read_file(name: &str, max_bytes: usize) -> std::io::Result<String> {
+    if name.is_empty() {
+        return tail(max_bytes);
+    }
+    // A name, not a path: anything with a separator or a parent component is
+    // refused outright rather than normalised into something plausible.
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid log file name",
+        ));
+    }
+    let path = config::logs_dir().join(name);
+    if !path.is_file() || !is_our_log_file(&path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no such log file",
+        ));
+    }
+    let bytes = fs::read(&path)?;
+    let start = bytes.len().saturating_sub(max_bytes);
+    Ok(String::from_utf8_lossy(&bytes[start..]).into_owned())
+}

@@ -675,10 +675,29 @@ falling through published a release whose entire diff was a version bump.
   what it said. `unread` is not persisted either: a badge counts what arrived
   while you were not looking *this session*.
 - `pages/` — one file per top-level tab (Overview, Skills, Changes, Suivi
-  marketplace, Audit; Settings is a dialog). `pages/Admin.tsx` is the "Suivi
-  marketplace" tab, on route `/tracking` (`/admin` redirects to it); it holds
-  nothing but the PR tracking view. Every PR on a plugin is built from the Changes
-  tab, so `AdminWizards.tsx` is down to `AddSkillDialog`.
+  marketplace, Audit, Activity, Logs; Settings is a dialog). `pages/Admin.tsx` is
+  the "Suivi marketplace" tab, on route `/tracking` (`/admin` redirects to it);
+  it holds nothing but the PR tracking view. Every PR on a plugin is built from
+  the Changes tab, so `AdminWizards.tsx` is down to `AddSkillDialog`.
+  The sidebar groups these into **four** sections — Dashboard, En local, En
+  ligne, Traçabilité — because the tabs answer four different questions and used
+  to sit in one flat list where "Audit d'utilisation" and "Changements" read as
+  neighbours. Collapsed to icons, the headings become a thin rule rather than a
+  truncated word, so the grouping survives the collapse.
+- `pages/Activity.tsx` + `pages/Logs.tsx` + `lib/activity.ts` — Traçabilité.
+  Both pages read the **log files** and nothing else: every meaningful side
+  effect already writes a `tracing::info!` line, so there is no second store to
+  keep in step and what the page shows is what a bug report would carry.
+  `lib/activity.ts` holds the patterns and is shared with the dashboard's
+  five-row card, so the two cannot label the same event differently. Note the
+  consequence the Activity page states out loud before acting: "vider
+  l'historique" is `logging_purge`, i.e. it deletes the logs — there is nothing
+  else to clear. The Logs page needs `logging_list_files` / `logging_read_file`
+  because `logging_tail` only ever reaches the *current* file, and the appender
+  rolls daily: the session being asked about is usually in yesterday's. Its
+  parser keeps lines that match no pattern (a panic backtrace, a multi-line
+  message) and attaches them to the entry above, since a stack trace is exactly
+  what someone opening that page came for.
 - `stores/treeSelection.ts` + the `RowCheckbox` in `pages/Skills.tsx` — multi-selection
   in the tree, feeding `components/BulkActionBar.tsx`. Keys are `mp:`/`pl:`/`sk:`
   prefixed, and a **skill is keyed on its folder, the same key the sync watcher

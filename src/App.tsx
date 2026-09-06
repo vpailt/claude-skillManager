@@ -35,6 +35,14 @@ const UsageAuditPage = lazy(() =>
 const ChangesPage = lazy(() =>
   import("@/pages/Changes").then((m) => ({ default: m.ChangesPage }))
 );
+// Traçabilité. Both read the log files and nothing else, so neither belongs in
+// the entry chunk — you reach them by asking for them.
+const ActivityPage = lazy(() =>
+  import("@/pages/Activity").then((m) => ({ default: m.ActivityPage }))
+);
+const LogsPage = lazy(() =>
+  import("@/pages/Logs").then((m) => ({ default: m.LogsPage }))
+);
 const SettingsDialog = lazy(() =>
   import("@/components/SettingsDialog").then((m) => ({
     default: m.SettingsDialog,
@@ -209,6 +217,8 @@ export default function App() {
               {/* Ancien onglet Administration, réduit au suivi des PR */}
               <Route path="/admin" element={<Navigate to="/tracking" replace />} />
               <Route path="/audit" element={<UsageAuditPage />} />
+              <Route path="/activity" element={<ActivityPage />} />
+              <Route path="/logs" element={<LogsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>

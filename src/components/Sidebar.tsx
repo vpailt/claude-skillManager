@@ -10,6 +10,8 @@ import {
   Moon,
   MonitorSmartphone,
   RefreshCw,
+  History,
+  ScrollText,
   ChevronsLeft,
   ChevronsRight,
   Search,
@@ -38,41 +40,93 @@ interface NavItem {
   icon: typeof LayoutDashboard;
 }
 
-const NAV: NavItem[] = [
+interface NavGroup {
+  /** Section heading, or null for the lone entry that needs none. */
+  title: string | null;
+  items: NavItem[];
+}
+
+// Four sections, because the tabs answer four different questions and used to
+// sit in one undifferentiated list: where do I stand, what is installed here,
+// what do I owe the forge, and what happened. The headings are what make the
+// last two tell themselves apart — "Audit d'utilisation" and "Changements" read
+// as neighbours in a flat list, and they have nothing to do with each other.
+const NAV: NavGroup[] = [
   {
-    to: "/",
-    label: "Dashboard",
-    subtitle: "Aperçu & état",
-    tooltip: "Dashboard — vue d'ensemble globale, mises à jour récentes, état des plugins",
-    icon: LayoutDashboard,
+    title: null,
+    items: [
+      {
+        to: "/",
+        label: "Dashboard",
+        subtitle: "Aperçu & état",
+        tooltip:
+          "Dashboard — vue d'ensemble globale, mises à jour récentes, état des plugins",
+        icon: LayoutDashboard,
+      },
+    ],
   },
   {
-    to: "/skills",
-    label: "Skills",
-    subtitle: "Installer et parcourir",
-    tooltip: "Skills — vue unifiée Marketplace → Plugin → Skills : installer/activer les plugins, parcourir le contenu SKILL.md, gérer doublons & archivés, filtrer par état d'installation",
-    icon: Sparkles,
+    title: "En local",
+    items: [
+      {
+        to: "/skills",
+        label: "Skills",
+        subtitle: "Installer et parcourir",
+        tooltip:
+          "Skills — vue unifiée Marketplace → Plugin → Skills : installer/activer les plugins, parcourir le contenu SKILL.md, gérer doublons & archivés, filtrer par état d'installation",
+        icon: Sparkles,
+      },
+    ],
   },
   {
-    to: "/changes",
-    label: "Changements",
-    subtitle: "Compétences à publier",
-    tooltip: "Changements — compétences modifiées, ajoutées ou supprimées localement, groupées par plugin : une PR par plugin, diff à l'appui",
-    icon: UploadCloud,
+    title: "En ligne",
+    items: [
+      {
+        to: "/changes",
+        label: "Changements",
+        subtitle: "Compétences à publier",
+        tooltip:
+          "Changements — compétences modifiées, ajoutées ou supprimées localement, groupées par plugin : une PR par plugin, diff à l'appui",
+        icon: UploadCloud,
+      },
+      {
+        to: "/tracking",
+        label: "Suivi marketplace",
+        subtitle: "PR ouvertes à suivre",
+        tooltip:
+          "Suivi marketplace — les Pull Requests ouvertes sur les marketplaces que vous suivez et sur leurs plugins",
+        icon: Radar,
+      },
+    ],
   },
   {
-    to: "/tracking",
-    label: "Suivi marketplace",
-    subtitle: "PR ouvertes à suivre",
-    tooltip: "Suivi marketplace — les Pull Requests ouvertes sur les marketplaces que vous suivez et sur leurs plugins",
-    icon: Radar,
-  },
-  {
-    to: "/audit",
-    label: "Audit d'utilisation",
-    subtitle: "Usage réel des plugins & skills",
-    tooltip: "Audit d'utilisation — top plugins, plugins non utilisés et détail des skills (nb d'utilisations + projets), sur une plage de dates, avec export Excel. Reconstruit depuis les transcripts de session locaux.",
-    icon: BarChart3,
+    title: "Traçabilité",
+    items: [
+      {
+        to: "/audit",
+        label: "Audit d'utilisation",
+        subtitle: "Usage réel des plugins & skills",
+        tooltip:
+          "Audit d'utilisation — top plugins, plugins non utilisés et détail des skills (nb d'utilisations + projets), sur une plage de dates, avec export Excel. Reconstruit depuis les transcripts de session locaux.",
+        icon: BarChart3,
+      },
+      {
+        to: "/activity",
+        label: "Activité récente",
+        subtitle: "Ce que l'app a fait",
+        tooltip:
+          "Activité récente — installations, désinstallations, PR, exports et mises à jour, horodatés, filtrables, avec vidage de l'historique. La version complète de la carte du dashboard.",
+        icon: History,
+      },
+      {
+        to: "/logs",
+        label: "Logs",
+        subtitle: "Journaux de l'application",
+        tooltip:
+          "Logs — le contenu des fichiers de journal de l'application, un par jour : filtre par niveau, par plage horaire et recherche plein texte",
+        icon: ScrollText,
+      },
+    ],
   },
 ];
 
@@ -183,57 +237,70 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
 
       <Separator />
 
-      {/* Navigation */}
-      {!collapsed && (
-        <div className="px-4 pt-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
-          Naviguer
-        </div>
-      )}
-      <nav className={cn("flex-1 space-y-0.5 py-2", collapsed ? "px-2" : "px-2")}>
-        {NAV.map(({ to, label, subtitle, tooltip, icon: Icon }) => {
-          // Only the Changes tab carries a count today; keep the lookup local
-          // so adding a second badge later is a map entry, not a new branch.
-          const badge = to === "/changes" ? pendingChanges : 0;
-          return (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === "/"}
-              title={collapsed ? tooltip : tooltip}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-start gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                  collapsed && "items-center justify-center px-0 py-2",
-                  isActive
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                )
-              }
-            >
-              <div className="relative shrink-0 self-center">
-                <Icon className="h-4 w-4" />
-                {badge > 0 && collapsed && (
-                  <span className="absolute -right-1.5 -top-1.5 h-2 w-2 rounded-full bg-amber-500" />
-                )}
-              </div>
-              {!collapsed && (
-                <div className="min-w-0 flex-1 leading-tight">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate font-medium">{label}</span>
-                    {badge > 0 && (
-                      <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
-                        {badge}
-                      </span>
-                    )}
-                  </div>
-                  <div className="truncate text-xs text-muted-foreground/80">
-                    {subtitle}
-                  </div>
+      {/* Navigation, in four sections. The headings are dropped when the bar
+          is collapsed to icons — a two-letter stub would read as a broken
+          label — and a thin rule stands in for them, so the grouping survives
+          the collapse instead of dissolving into one column of icons. */}
+      <nav className="flex-1 overflow-y-auto px-2 py-2">
+        {NAV.map((group, gi) => (
+          <div key={group.title ?? `g${gi}`} className={cn(gi > 0 && "mt-2")}>
+            {group.title &&
+              (collapsed ? (
+                <div className="mx-2 mb-1 border-t" title={group.title} />
+              ) : (
+                <div className="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">
+                  {group.title}
                 </div>
-              )}
-            </NavLink>
-          );
-        })}
+              ))}
+            <div className="space-y-0.5">
+              {group.items.map(({ to, label, subtitle, tooltip, icon: Icon }) => {
+                // Only the Changes tab carries a count today; keep the lookup
+                // local so adding a second badge later is a map entry, not a
+                // new branch.
+                const badge = to === "/changes" ? pendingChanges : 0;
+                return (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={to === "/"}
+                    title={tooltip}
+                    className={({ isActive }) =>
+                      cn(
+                        "flex items-start gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                        collapsed && "items-center justify-center px-0 py-2",
+                        isActive
+                          ? "bg-primary/10 text-primary"
+                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      )
+                    }
+                  >
+                    <div className="relative shrink-0 self-center">
+                      <Icon className="h-4 w-4" />
+                      {badge > 0 && collapsed && (
+                        <span className="absolute -right-1.5 -top-1.5 h-2 w-2 rounded-full bg-amber-500" />
+                      )}
+                    </div>
+                    {!collapsed && (
+                      <div className="min-w-0 flex-1 leading-tight">
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate font-medium">{label}</span>
+                          {badge > 0 && (
+                            <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                              {badge}
+                            </span>
+                          )}
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground/80">
+                          {subtitle}
+                        </div>
+                      </div>
+                    )}
+                  </NavLink>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
       {/* Forge connection status used to sit here. It is now a segment of the

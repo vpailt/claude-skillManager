@@ -11,6 +11,7 @@ import type {
   ForgeGuess,
   GiteaStatus,
   LocalSkill,
+  LogFileInfo,
   LogLevel,
   LoggingConfig,
   Marketplace,
@@ -66,6 +67,10 @@ export const api = {
   loggingPurge: () => invoke<number>("logging_purge"),
   loggingTail: (maxBytes?: number) =>
     invoke<string>("logging_tail", { maxBytes: maxBytes ?? null }),
+  loggingListFiles: () => invoke<LogFileInfo[]>("logging_list_files"),
+  /** `name` empty means the newest file — what the Logs page opens on. */
+  loggingReadFile: (name: string, maxBytes?: number) =>
+    invoke<string>("logging_read_file", { name, maxBytes: maxBytes ?? null }),
   loggingLog: (level: LogLevel, target: string, message: string) =>
     invoke<void>("logging_log", { level, target, message }),
 

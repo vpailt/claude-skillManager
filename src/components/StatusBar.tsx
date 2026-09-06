@@ -210,7 +210,11 @@ export function StatusBar() {
   const forgeShown = !loading && (github.known || gitea.length > 0);
 
   return (
-    <footer className="flex h-9 shrink-0 items-stretch gap-0 overflow-hidden border-t bg-card/60 text-muted-foreground">
+    // No `overflow-hidden` here, ever: the bell's panel is positioned against
+    // this element and opens *upwards*, out of the bar. Clipping the footer
+    // clipped the panel to nothing — the bell answered the click and nothing
+    // appeared. Overflow is handled by the two inner groups instead.
+    <footer className="flex h-9 shrink-0 items-stretch gap-0 border-t bg-card/60 text-muted-foreground">
       {/* Everything on the left in one clipping group. The segments inside are
           `shrink-0`, so this group is the last thing to give way — after the
           progress slot, and never at the expense of the bell. */}
