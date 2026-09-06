@@ -46,6 +46,18 @@ import {
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/**
+ * How a dashboard card that leads somewhere answers the pointer: a violet
+ * outline *and* a lift of the surface, the two halves that had drifted apart —
+ * one card had the outline, two had the fill.
+ *
+ * Shared rather than repeated, and deliberately absent from the cards that lead
+ * nowhere: a hover is a promise of a click, and the ones that make it here all
+ * keep it.
+ */
+const CLICKABLE_CARD =
+  "cursor-pointer transition-colors hover:border-primary/50 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
 function relativeTime(ms: number): string {
   const diff = Date.now() - ms;
   if (diff < 5_000) return "à l'instant";
@@ -297,7 +309,7 @@ function RecentActivitySection() {
           }
         }}
         title="Ouvrir l'activité complète — tous les événements, horodatés et filtrables"
-        className="group flex-1 cursor-pointer transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn("group flex-1", CLICKABLE_CARD)}
       >
         <CardContent className="py-3">
           {logTail.isLoading && events.length === 0 ? (
@@ -448,7 +460,7 @@ function MarketplaceTrackingSection() {
             navigate("/tracking");
           }
         }}
-        className="flex flex-1 flex-col cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn("flex flex-1 flex-col", CLICKABLE_CARD)}
       >
         <CardContent className="flex flex-1 flex-col justify-center py-4">
           {trackedNames.length === 0 ? (
@@ -752,7 +764,7 @@ function TopSkillsSection() {
             navigate("/audit");
           }
         }}
-        className="flex flex-1 flex-col cursor-pointer transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn("flex flex-1 flex-col", CLICKABLE_CARD)}
       >
         <CardContent className="flex flex-1 flex-col justify-center py-4">
           {report.isLoading ? (
