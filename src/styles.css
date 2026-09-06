@@ -69,10 +69,13 @@
     --accent-foreground: 210 10% 90%;
     --destructive: 0 62.8% 50.6%;
     --destructive-foreground: 210 40% 98%;
-    /* Brighter than the panel (12 % L) so borders — dividers, cards, inputs and
-       outline buttons — stay legible in dark mode. `input` is pushed further so
-       interactive controls read as crisp outlines. */
-    --border: 240 4% 24%;
+    /* A seam, like `--panel-border`, not a drawn line. At 24 % every card on
+       the dashboard was outlined in grey and the page read as a wireframe; the
+       card's own surface (15 % L) is what separates it from the panel behind
+       it, and the border only needs to finish the edge. `input` stays far
+       brighter — a control the user is meant to click into has to look like
+       one, which is the opposite requirement. */
+    --border: 240 4% 18%;
     --input: 240 4% 31%;
     --ring: 238 76% 65%;
   }
@@ -100,7 +103,10 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
 /* Scrollbars */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }
+/* `--input`, not `--border`: the thumb is a control, and it follows the token
+   that stayed bright for controls rather than the one that was dimmed to a
+   seam. On `--border` it all but vanished against a dark panel. */
+::-webkit-scrollbar-thumb { background: hsl(var(--input)); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.6); }
 
 /* Compact density — tighten paddings on common shadcn primitives */
