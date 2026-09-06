@@ -257,7 +257,9 @@ export function SearchBox() {
     <div ref={rootRef} className="relative w-full max-w-[34rem]">
       <div
         className={cn(
-          "flex h-7 items-center gap-2 rounded-md border px-2 text-xs transition-colors",
+          // 32 px in a 36 px title bar: two pixels of chrome above and below,
+          // which is as tall as this field goes without the bar growing too.
+          "flex h-8 items-center gap-2 rounded-md border px-2 text-xs transition-colors",
           open
             ? "border-primary/60 bg-background"
             : "border-border/70 bg-background/60 hover:border-border hover:bg-background"
