@@ -94,8 +94,10 @@ export function NotificationCenter({
         }
         aria-label="Notifications"
         aria-expanded={open}
+        // `my-1` + `rounded-md`, like the status bar's segments: the fill is a
+        // pill inside the bar, not a block spanning its full height.
         className={cn(
-          "flex h-full items-center gap-1.5 px-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
+          "my-1 flex items-center gap-1.5 rounded-md px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
           open && "bg-accent text-accent-foreground"
         )}
       >

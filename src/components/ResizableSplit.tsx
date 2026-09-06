@@ -26,14 +26,14 @@ export function ResizableSplit({
       autoSaveId={`skillmanager.${storageId}`}
       className="h-full w-full"
     >
-      {/* Each half is a sub-window in its own right, not two regions of one:
-          they carry the panel surface and the gutter between them is chrome
-          showing through, which is why the handle draws no rule of its own. */}
+      {/* Two regions of one sub-window, not two sub-windows: the page around
+          them carries the panel, and what separates them here is a rule the
+          handle draws — no gutter, no second frame. */}
       <Panel
         defaultSize={defaultLeftSize}
         minSize={minLeftSize}
         maxSize={maxLeftSize}
-        className="panel flex h-full min-h-0 min-w-0 flex-col"
+        className="flex h-full min-h-0 min-w-0 flex-col"
       >
         {left}
       </Panel>
@@ -42,7 +42,7 @@ export function ResizableSplit({
       </PanelResizeHandle>
       <Panel
         minSize={minRightSize}
-        className="panel flex h-full min-h-0 min-w-0 flex-col"
+        className="flex h-full min-h-0 min-w-0 flex-col"
       >
         {right}
       </Panel>

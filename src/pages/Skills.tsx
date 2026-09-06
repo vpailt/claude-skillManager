@@ -2086,7 +2086,10 @@ export function SkillsPage() {
   );
 
   return (
-    <div className="h-full min-h-0 w-full min-w-0 flex-1">
+    // One sub-window for the whole page: the tree and the detail are two
+    // regions of it, told apart by the split's rule, not two panels floating
+    // side by side.
+    <div className="panel h-full min-h-0 w-full min-w-0 flex-1">
       <ResizableSplit
         storageId="skills"
         left={left}

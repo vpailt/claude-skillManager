@@ -591,12 +591,12 @@ not a grid of bordered regions**. Every layout decision follows from that:
   it in a **single place** — the padding on the column right of the sidebar —
   so nothing else in the tree hard-codes the value.
 
-`<main>` in `App.tsx` is deliberately **not** a panel: a page is one sub-window,
-but a split page is two side by side in the same gutter, so the panel is drawn
-by what the route renders. Each page root carries `panel`; `ResizableSplit` puts
-it on **both halves** instead, and its handle draws no rule at rest — the
-separator between two sub-windows is chrome showing through. A new page must
-therefore carry `panel` on its root, or it will render as bare chrome.
+`<main>` in `App.tsx` is deliberately **not** a panel — the panel is drawn by
+what the route renders, so a page can decide its own surface. Every page root
+carries `panel`, split pages included: the two halves of a `ResizableSplit` are
+**regions of one sub-window**, not two floating side by side, and what divides
+them is the handle's 1 px rule (widened on hover), not a gutter. A new page must
+carry `panel` on its root, or it will render as bare chrome.
 
 Dark is a neutral near-black with the chrome *darker* than the panels on it —
 that contrast, not a heavy border, is what gives a sub-window its edge. A trace
@@ -675,8 +675,11 @@ of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey.
   default.
 - `components/StatusBar.tsx` + `stores/progress.ts` — the permanent bar across
   the bottom (36 px), on the same chrome as the sidebar and with no border of
-  its own. It carries the running version (clicking it opens the
-  release notes), the forge connection segments (GitHub / Gitea mark, green
+  its own. Its segments carry no dividers either — a hover pill (`my-1
+  rounded-md`, never `h-full`, or the fill squares itself off against the bar)
+  is what marks a segment out, and a run of rules through chrome that is meant
+  to read as one surface only chops it up. It carries the running version
+  (clicking it opens the release notes), the forge connection segments (GitHub / Gitea mark, green
   connected, red not), **the one progress slot in the app** — on the right, next
   to `components/NotificationCenter.tsx`, and the one element allowed to give
   way when width runs short, since its label is as long as whatever is running

@@ -57,7 +57,12 @@ function Segment({
     // `shrink-0`: a compressed segment clipped the host name it exists to
     // show. Progress, on the right, is what gives way when width runs short —
     // and past that the left group clips, never the bell.
-    "flex h-full shrink-0 items-center gap-1.5 px-2.5 text-xs leading-none text-muted-foreground",
+    //
+    // `my-1` rather than `h-full`: the bar stretches its children, so the
+    // vertical margin is what pulls the hover fill off the top and bottom
+    // edges and lets a rounded corner read as one. A full-height fill squares
+    // itself off against the bar however round its corners are.
+    "my-1 flex shrink-0 items-center gap-1.5 rounded-md px-2 text-xs leading-none text-muted-foreground",
     onClick && "transition-colors hover:bg-accent hover:text-accent-foreground",
     className
   );
@@ -207,7 +212,6 @@ export function StatusBar() {
   const { github, gitea, loading } = useForgeStatus();
 
   const [bellOpen, setBellOpen] = useState(false);
-  const forgeShown = !loading && (github.known || gitea.length > 0);
 
   return (
     // No `overflow-hidden` here, ever: the bell's panel is positioned against
@@ -247,8 +251,6 @@ export function StatusBar() {
             </span>
           )}
         </Segment>
-
-        <div className="my-1.5 w-px bg-border" />
 
         {/* Forge connection. Green connected, red not — the icon carries it, so
             the state survives the window being narrow enough to clip the text. */}
@@ -315,9 +317,6 @@ export function StatusBar() {
             </Segment>
           ))}
 
-        {/* Closing delimiter, mirroring the one before the forge block, so the
-            connections read as a group rather than as a run of items. */}
-        {forgeShown && <div className="my-1.5 w-px bg-border" />}
       </div>
 
       {/* Progress and the bell close the bar on the right, in that order.
@@ -328,7 +327,6 @@ export function StatusBar() {
         <div className="flex min-w-0 items-stretch overflow-hidden">
           <ProgressSlot />
         </div>
-        <div className="my-1.5 w-px shrink-0 bg-border" />
         <div className="flex shrink-0 items-stretch">
           <NotificationCenter open={bellOpen} onOpenChange={setBellOpen} />
         </div>

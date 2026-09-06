@@ -118,24 +118,27 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
 .compact .space-y-3 > * + * { margin-top: 0.5rem; }
 .compact .space-y-4 > * + * { margin-top: 0.625rem; }
 
-/* Resizable panel handle. Between two sub-windows the separator is the gutter
-   itself — chrome showing through — so the handle draws nothing at rest and
-   only marks itself while it is being pointed at or dragged. */
+/* Resizable panel handle. The two halves of a split are regions of one
+   sub-window, so what divides them is a rule — a 1 px border line, widened to
+   the grab area only by the transparent outer element around it. */
 .PanelResizeHandleOuter { position: relative; outline: none; }
 .PanelResizeHandleOuter[data-panel-resize-handle-enabled="true"]:hover .PanelResizeHandleInner,
 .PanelResizeHandleOuter[data-resize-handle-active] .PanelResizeHandleInner {
   background-color: hsl(var(--primary) / 0.5);
 }
 .PanelResizeHandleInner {
-  background-color: transparent;
-  border-radius: 9999px;
+  background-color: hsl(var(--border));
   transition: background-color 150ms;
 }
 .PanelResizeHandleOuter[data-panel-group-direction="horizontal"] {
-  width: var(--gutter);
+  width: 5px;
 }
 .PanelResizeHandleOuter[data-panel-group-direction="horizontal"] .PanelResizeHandleInner {
-  width: 3px; height: 100%; margin-inline: auto;
+  width: 1px; height: 100%; margin-inline: auto;
+}
+.PanelResizeHandleOuter[data-panel-resize-handle-enabled="true"]:hover .PanelResizeHandleInner,
+.PanelResizeHandleOuter[data-resize-handle-active] .PanelResizeHandleInner {
+  width: 3px;
 }
 
 /* Radix ScrollArea wraps children in a <div style="display:table;min-width:100%"> so
