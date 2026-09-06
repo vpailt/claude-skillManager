@@ -246,11 +246,27 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
                   plugin / skill)
                 </li>
                 <li>
-                  Bouton Rafraîchir dans la barre — re-scanne l'installation
-                  locale + récupère à nouveau les registres distants
+                  <kbd className="rounded border px-1 text-xs">Ctrl</kbd>+
+                  <kbd className="rounded border px-1 text-xs">B</kbd>
+                  &nbsp;— Replier / déplier la barre latérale (la poignée de son
+                  bord droit fait la même chose, à la largeur près)
                 </li>
                 <li>
-                  Bouton Thème dans la barre — bascule clair → sombre → auto
+                  <kbd className="rounded border px-1 text-xs">Ctrl</kbd>+
+                  <kbd className="rounded border px-1 text-xs">,</kbd>
+                  &nbsp;— Paramètres
+                </li>
+                <li>
+                  <kbd className="rounded border px-1 text-xs">F1</kbd>
+                  &nbsp;— Cette aide
+                </li>
+                <li>
+                  Bouton Rafraîchir dans la barre latérale — re-scanne
+                  l'installation locale + récupère à nouveau les registres
+                  distants
+                </li>
+                <li>
+                  Menu Affichage → Thème — clair, sombre ou auto
                 </li>
               </ul>
             </section>

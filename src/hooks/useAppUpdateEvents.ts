@@ -41,6 +41,58 @@ export async function dismissUpdate(version: string) {
 }
 
 /**
+ * Ask the forge whether a newer release exists, and say so. Nothing is
+ * downloaded — that is [`startUpdate`]'s job — so this is safe to hang off a
+ * menu entry: it answers a question the user asked out loud.
+ *
+ * The result is fed into the store rather than only into a toast: the banner
+ * and the status bar read `available` from there, and a toast is gone in eight
+ * seconds.
+ */
+export async function checkForUpdate() {
+  try {
+    const info = await api.appCheckUpdate();
+    if (info.status === "no_release") {
+      useNotifications.getState().push({
+        kind: "info",
+        title: "Aucune release publiée pour le moment",
+        body: "Le dépôt n'a pas encore de release sur GitHub.",
+      });
+      return;
+    }
+    if (!info.hasUpdate) {
+      useAppUpdate.getState().setAvailable(null);
+      useNotifications.getState().push({
+        kind: "info",
+        title: "Aucune mise à jour",
+        body: `Vous utilisez déjà la dernière version (${info.currentVersion}).`,
+      });
+      return;
+    }
+    useAppUpdate.getState().setAvailable({
+      version: info.latestVersion ?? "",
+      runningVersion: info.currentVersion,
+      releaseNotes: info.releaseNotes,
+      releaseUrl: info.releaseUrl,
+      staged: false,
+      canSelfUpdate: info.canSelfUpdate,
+    });
+    useNotifications.getState().push({
+      kind: "info",
+      title: `Mise à jour disponible : ${info.latestVersion}`,
+      body: `Vous êtes en ${info.currentVersion} — le bandeau en haut propose de l'installer.`,
+    });
+  } catch (e) {
+    log.error("checkForUpdate failed", e);
+    useNotifications.getState().push({
+      kind: "error",
+      title: "Vérification impossible",
+      body: String(e),
+    });
+  }
+}
+
+/**
  * Download and install the latest release. The single implementation behind
  * every "Installer" button — the banner and the Settings card both call this,
  * and both read the resulting progress from `useAppUpdate`.

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Sidebar } from "@/components/Sidebar";
+import { TitleBar } from "@/components/TitleBar";
 import { NotificationStack } from "@/components/NotificationStack";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { StatusBar } from "@/components/StatusBar";
@@ -11,7 +12,9 @@ import { useTaskbarBadge } from "@/hooks/useTaskbarBadge";
 import { useSkillWatch } from "@/hooks/useSkillWatch";
 import { useBackendEvents } from "@/hooks/useBackendEvents";
 import { useAppUpdateEvents } from "@/hooks/useAppUpdateEvents";
-import { useUi } from "@/stores/ui";
+import { useUi, toggleSidebar } from "@/stores/ui";
+import { useSettingsDialog } from "@/stores/settingsDialog";
+import { useHelpDialog } from "@/stores/helpDialog";
 import { useNotifications } from "@/stores/notifications";
 import { useReleaseNotes } from "@/stores/releaseNotes";
 import { useOrgSync } from "@/stores/orgSync";
@@ -185,10 +188,23 @@ export default function App() {
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   useEffect(() => {
+    // The shortcuts the title bar's menus advertise. They live here rather than
+    // in `TitleBar` because they must work with no menu open, and because a
+    // menu that names a shortcut nothing implements is worse than no menu.
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+      } else if (mod && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        toggleSidebar();
+      } else if (mod && e.key === ",") {
+        e.preventDefault();
+        useSettingsDialog.getState().openTo("general");
+      } else if (e.key === "F1") {
+        e.preventDefault();
+        useHelpDialog.getState().setOpen(true);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -203,8 +219,11 @@ export default function App() {
     // keeps the row above it scrollable instead of pushing the layout past the
     // viewport.
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-chrome text-foreground">
+      {/* The window has no decorations of its own — this bar is the title bar:
+          menus, search, and the three window buttons. */}
+      <TitleBar onOpenPalette={() => setPaletteOpen(true)} />
       <div className="flex min-h-0 flex-1">
-        <Sidebar onOpenPalette={() => setPaletteOpen(true)} />
+        <Sidebar />
         {/* The gutter lives here: padding on this column is what holds the page
             off the sidebar, the window edge and the status bar. The update
             banner is a sub-window of its own, stacked above the page. */}

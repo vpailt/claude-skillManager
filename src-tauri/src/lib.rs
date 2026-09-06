@@ -257,6 +257,7 @@ pub fn run() {
             app_update_available,
             app_update_dismiss,
             app_apply_update,
+            app_quit,
             app_restart,
             app_install_update,
             app_detect_uninstaller,

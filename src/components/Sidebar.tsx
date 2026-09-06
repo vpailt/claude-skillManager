@@ -6,27 +6,15 @@ import {
   Radar,
   BarChart3,
   UploadCloud,
-  Settings,
-  Sun,
-  Moon,
-  MonitorSmartphone,
   RefreshCw,
   History,
   ScrollText,
-  ChevronsLeft,
-  ChevronsRight,
-  Search,
-  HelpCircle,
   ArrowUpCircle,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/stores/ui";
 import { useIsFetching, useQueryClient } from "@tanstack/react-query";
-import { HelpDialog } from "@/components/HelpDialog";
-import { useHelpDialog } from "@/stores/helpDialog";
-import { useSettingsDialog } from "@/stores/settingsDialog";
 import { useTrackingView } from "@/stores/trackingView";
 import { useAppUpdate } from "@/stores/appUpdate";
 import { usePendingChangesCount } from "@/lib/changes";
@@ -131,18 +119,11 @@ const NAV: NavGroup[] = [
   },
 ];
 
-const THEME_CYCLE = ["light", "dark", "auto"] as const;
-
-const THEME_TOOLTIP: Record<(typeof THEME_CYCLE)[number], string> = {
-  light: "Thème : clair — clic pour sombre",
-  dark: "Thème : sombre — clic pour auto",
-  auto: "Thème : auto (suit l'OS) — clic pour clair",
-};
-
 /** Icon-only width — what the old `w-14` was. */
 const COLLAPSED_WIDTH = 56;
-/** Drag below this and releasing collapses the bar: the handle *is* the
- *  collapse control, the button in the footer is only the shortcut. */
+/** Drag below this and releasing collapses the bar. The handle *is* the collapse
+ *  control now that the footer's button cluster has moved into the title bar's
+ *  menus; Affichage → Replier and Ctrl+B are the other two ways in. */
 const COLLAPSE_THRESHOLD = 140;
 /** Narrowest the bar can be while still showing labels. Between the threshold
  *  and here it snaps up to this, so collapsing takes a deliberate further 40 px
@@ -168,22 +149,13 @@ function resolveWidth(x: number): DragState {
   return { collapsed: false, width: Math.min(Math.round(x), MAX_WIDTH) };
 }
 
-export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
+export function Sidebar() {
   const pendingChanges = usePendingChangesCount();
   const qc = useQueryClient();
   const collapsed = useUi((s) => s.ui.sidebarCollapsed);
   const storedWidth = useUi((s) => s.ui.sidebarWidth);
-  const theme = useUi((s) => s.ui.theme);
-  const patch = useUi((s) => s.patch);
   const patchPersisted = useUi((s) => s.patchPersisted);
-  const helpOpen = useHelpDialog((s) => s.open);
-  const setHelpOpen = useHelpDialog((s) => s.setOpen);
-  const openSettings = useSettingsDialog((s) => s.openTo);
   const staged = useAppUpdate((s) => s.staged);
-  const cycleTheme = () => {
-    const idx = THEME_CYCLE.indexOf(theme);
-    patch({ theme: THEME_CYCLE[(idx + 1) % THEME_CYCLE.length] });
-  };
 
   const isRefreshing = useIsFetching({ queryKey: ["refresh"] }) > 0;
 
@@ -261,7 +233,7 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
     >
       {/* The resize handle, straddling the edge so it is grabbable from the
           gutter as well. Dragging under COLLAPSE_THRESHOLD folds the bar to
-          icons — the footer button and this are the same action. */}
+          icons — the same action as Affichage → Replier, and as Ctrl+B. */}
       <div
         role="separator"
         aria-orientation="vertical"
@@ -321,25 +293,11 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
 
       <Separator />
 
-      {/* Actions: Search + Refresh — separated from navigation */}
+      {/* Refresh, and nothing else. Search moved to the title bar, and the
+          settings / help / theme / fold cluster moved into its menus — what is
+          left here is navigation plus the one action frequent enough to deserve
+          a permanent button, spinner included. */}
       <div className="space-y-1 px-2 py-2">
-        <button
-          type="button"
-          title="Ouvrir la palette de commandes (Ctrl+K) — accédez à tout"
-          onClick={onOpenPalette}
-          className={cn(
-            "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
-            shownCollapsed && "justify-center px-0"
-          )}
-        >
-          <Search className="h-4 w-4 shrink-0" />
-          {!shownCollapsed && (
-            <>
-              <span>Rechercher</span>
-              <kbd className="ml-auto rounded border px-1 text-xs">⌃K</kbd>
-            </>
-          )}
-        </button>
         <button
           type="button"
           title={
@@ -442,72 +400,6 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
         ))}
       </nav>
 
-      {/* Forge connection status used to sit here. It is now a segment of the
-          status bar (`components/StatusBar.tsx`), which is visible on every
-          page *and* independent of this bar being collapsed to icons — the two
-          reasons it was moved out of the dashboard in the first place. */}
-      <Separator />
-
-      {/* Utilities cluster: Settings, Help, Theme, Collapse */}
-      <div
-        className={cn(
-          "flex items-center gap-1 px-2 py-2",
-          shownCollapsed ? "flex-col" : "justify-between px-3"
-        )}
-      >
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => openSettings("general")}
-          title="Paramètres — token, polling, logs, thème"
-          aria-label="Paramètres"
-        >
-          <Settings className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setHelpOpen(true)}
-          title="Aide — guide & raccourcis"
-          aria-label="Aide"
-        >
-          <HelpCircle className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={cycleTheme}
-          title={THEME_TOOLTIP[theme]}
-          aria-label="Changer de thème"
-        >
-          {theme === "dark" ? (
-            <Sun className="h-4 w-4" />
-          ) : theme === "light" ? (
-            <Moon className="h-4 w-4" />
-          ) : (
-            <MonitorSmartphone className="h-4 w-4" />
-          )}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() =>
-            commit(
-              collapsed
-                ? { collapsed: false, width: expandedWidth }
-                : { collapsed: true, width: COLLAPSED_WIDTH }
-            )
-          }
-          title={shownCollapsed ? "Déplier la barre" : "Replier la barre en icônes"}
-          aria-label={shownCollapsed ? "Déplier la barre" : "Replier la barre"}
-        >
-          {shownCollapsed ? (
-            <ChevronsRight className="h-4 w-4" />
-          ) : (
-            <ChevronsLeft className="h-4 w-4" />
-          )}
-        </Button>
-      </div>
       {staged && (
         <button
           type="button"
@@ -529,7 +421,6 @@ export function Sidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
           )}
         </button>
       )}
-      <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </aside>
   );
 }

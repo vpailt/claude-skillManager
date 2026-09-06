@@ -100,3 +100,13 @@ export const useUi = create<UiState>((set, get) => ({
       .catch((e) => log.warn("settingsSetUi failed", e));
   },
 }));
+
+/**
+ * Fold the sidebar to icons, or unfold it. The one implementation behind the
+ * three ways of asking: the resize handle dragged past its threshold, the
+ * Affichage menu, and Ctrl+B.
+ */
+export function toggleSidebar() {
+  const { ui, patchPersisted } = useUi.getState();
+  patchPersisted({ sidebarCollapsed: !ui.sidebarCollapsed });
+}

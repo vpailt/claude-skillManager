@@ -2667,6 +2667,20 @@ pub async fn app_apply_update(app: AppHandle, info: AppUpdateInfo) -> Result<Sta
     Ok(staged)
 }
 
+/// Leave for good — the Fichier → Quitter entry in the title bar's menu.
+///
+/// Not the same thing as closing the window: closing honours
+/// `ui.tray.close.to.tray` and usually just releases the UI to the tray. This
+/// passes an exit code, and the `ExitRequested` guard in `lib.rs` only holds the
+/// process back when there is none (the last window closing), so the tray icon
+/// does not survive this.
+#[tauri::command]
+pub async fn app_quit(app: AppHandle) -> Result<()> {
+    tracing::info!("app_quit: leaving on the user's request");
+    app.exit(0);
+    Ok(())
+}
+
 /// Restart into whatever `skillmanager.exe` now holds — the new build after an
 /// in-place update. The relaunched process waits for this one to exit before it
 /// arms the single-instance guard.

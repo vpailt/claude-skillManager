@@ -573,13 +573,13 @@ falling through published a release whose entire diff was a version bump.
 
 #### The shell: one chrome, panels floating on it
 
-The window is **two surfaces, not a grid of bordered regions**, and every layout
-decision follows from that:
+The window is **undecorated** (`decorations: false`) and made of **two surfaces,
+not a grid of bordered regions**. Every layout decision follows from that:
 
-- `--chrome` is the châssis. The sidebar, the status bar and the gutters between
-  panels are the same continuous sheet, and it is the only surface that touches
-  the window edge. The sidebar draws no right border and the status bar no top
-  border — they read as one because they *are* one.
+- `--chrome` is the châssis. The title bar, the sidebar, the status bar and the
+  gutters between panels are the same continuous sheet, and it is the only
+  surface that touches the window edge. The sidebar draws no right border and
+  the status bar no top border — they read as one because they *are* one.
 - `--background` is a sub-window laid on top: the page, each half of a split,
   the update banner. `.panel` (in `styles.css`) is that surface — background,
   a seam-weight `--panel-border`, `--radius-panel`, and `overflow: hidden`,
@@ -634,8 +634,30 @@ of hue (4 %) is kept so the indigo accent doesn't sit on a dead grey.
   is chrome, identical on every page, read only when something needs fixing.
   The status bar is the first host that is neither in the way of the content
   nor hostage to the sidebar being collapsed.
+- `components/TitleBar.tsx` — **the window's title bar**: `decorations` is off
+  in `tauri.conf.json`, so Windows draws none and everything the frame used to
+  provide lives here. `data-tauri-drag-region` on every *gap* (never on a
+  control — Tauri only acts on the element directly under the pointer) is what
+  drags the window and what makes a double-click maximise it; `WindowControls`
+  is the minimise / maximise / close trio, and the middle one's icon follows
+  `onResized`, since maximising raises no event of its own. Close calls
+  `close()`, not `destroy()`, so `ui.tray.close.to.tray` still decides what
+  closing means. The four permissions this needs (`allow-start-dragging`,
+  `allow-minimize`, `allow-toggle-maximize`, `allow-close`, plus the
+  `is-maximized` read) are in `capabilities/default.json` — the bar silently
+  does nothing without them.
+  It also carries what used to sit at the two ends of the sidebar: the **menus**
+  (Fichier — paramètres, quitter; Affichage — thème, densité, repli de la barre,
+  palette; Aide — guide, notes de version, recherche de mise à jour, à propos)
+  and the **search field**, which is a button, not an input: typing happens in
+  the palette it opens. Every shortcut a menu advertises is implemented in
+  `App.tsx`'s keydown handler, not here — they must work with no menu open.
+  `Quitter` goes through `app_quit`, which passes an exit code precisely so the
+  tray guard in `lib.rs` lets the process go.
 - `components/Sidebar.tsx` — the nav bar, and the only resizable piece of the
-  chrome. Width is free between `SNAP_WIDTH` (180) and `MAX_WIDTH` (380), and
+  chrome. What is left in it is navigation plus the Rafraîchir button; the
+  settings / help / theme / fold cluster and the search box moved to the title
+  bar's menus. Width is free between `SNAP_WIDTH` (180) and `MAX_WIDTH` (380), and
   **the handle is the collapse control**: drag under `COLLAPSE_THRESHOLD` (140)
   and releasing folds the bar to icons. The 40 px between the two is a snap zone
   that resolves *upwards* — you cross it deliberately to collapse, you never

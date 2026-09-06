@@ -308,6 +308,8 @@ export const api = {
     invoke<StagedUpdate>("app_apply_update", { info }),
   /** Relaunch into whatever skillmanager.exe now holds. */
   appRestart: () => invoke<void>("app_restart"),
+  /** Leave for good — unlike closing the window, which honours close-to-tray. */
+  appQuit: () => invoke<void>("app_quit"),
   /** Fallback for read-only installs: run the NSIS installer silently. */
   appInstallUpdate: (assetUrl: string, assetName: string) =>
     invoke<void>("app_install_update", { assetUrl, assetName }),
