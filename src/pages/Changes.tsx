@@ -68,12 +68,17 @@ interface GroupSettings {
    *  registre de sa marketplace ne connaît pas encore. L'app ne crée pas de
    *  dépôt sur la forge : l'utilisateur le crée et colle son URL ici. */
   repoUrl: string;
+  /** Ouvrir la PR qui référence le plugin dans la marketplace. Une case à part
+   *  des skills : l'enregistrement est un changement à lui seul, et un plugin
+   *  neuf sans aucun skill n'a que celui-là à publier. */
+  registerPlugin: boolean;
 }
 
 const DEFAULT_SETTINGS: GroupSettings = {
   bumpLevel: "patch",
   notes: "",
   repoUrl: "",
+  registerPlugin: true,
 };
 
 export function ChangesPage() {
@@ -164,12 +169,18 @@ export function ChangesPage() {
     });
   };
 
+  // Un groupe compte comme sélectionné dès qu'il a quelque chose à publier :
+  // des skills cochés, ou l'enregistrement du plugin — qui se coche séparément.
   const selectedGroups = useMemo(
     () =>
       groups.filter(
-        (g) => g.editable && g.items.some((i) => ticked.has(i.folder))
+        (g) =>
+          g.editable &&
+          (g.items.some((i) => ticked.has(i.folder)) ||
+            (g.needsRegistry &&
+              (settings[g.key] ?? DEFAULT_SETTINGS).registerPlugin))
       ),
-    [groups, ticked]
+    [groups, ticked, settings]
   );
 
   const tickedCount = useMemo(
@@ -193,7 +204,8 @@ export function ChangesPage() {
     (g) => g.needsRegistry && !settingsFor(g.key).repoUrl.trim()
   );
 
-  const ready = Object.keys(drafts).length > 0;
+  const ready =
+    Object.keys(drafts).length > 0 || Object.keys(registryDrafts).length > 0;
 
   const prepare = async () => {
     setPreparing(true);
@@ -241,23 +253,28 @@ export function ChangesPage() {
           }
           pluginRepo = guess.repo;
         }
-        built[g.key] = await api.adminPrepareUploadSkills({
-          marketplace: g.marketplace.name,
-          pluginName: g.plugin.name,
-          items: chosen
-            .filter((i) => i.status !== "deleted")
-            .map((i) => ({
-              localFolder: i.folder,
-              targetName: i.targetName,
-            })),
-          removals: chosen
-            .filter((i) => i.status === "deleted")
-            .map((i) => i.targetName),
-          bumpLevel: cfg.bumpLevel,
-          versionDescription: cfg.notes.trim(),
-          pluginRepo,
-        });
-        if (g.needsRegistry) {
+        // Un lot vide est refusé par le brouillon — et à raison : son seul
+        // contenu serait un bump de manifeste. Un plugin neuf dont rien n'est
+        // coché n'a donc que sa PR de registre à ouvrir.
+        if (chosen.length > 0) {
+          built[g.key] = await api.adminPrepareUploadSkills({
+            marketplace: g.marketplace.name,
+            pluginName: g.plugin.name,
+            items: chosen
+              .filter((i) => i.status !== "deleted")
+              .map((i) => ({
+                localFolder: i.folder,
+                targetName: i.targetName,
+              })),
+            removals: chosen
+              .filter((i) => i.status === "deleted")
+              .map((i) => i.targetName),
+            bumpLevel: cfg.bumpLevel,
+            versionDescription: cfg.notes.trim(),
+            pluginRepo,
+          });
+        }
+        if (g.needsRegistry && cfg.registerPlugin) {
           builtRegistry[g.key] = await api.adminPrepareAddPlugin(
             g.marketplace.name,
             cfg.repoUrl.trim(),
@@ -280,12 +297,15 @@ export function ChangesPage() {
 
   const publish = () => {
     const ops: BulkOp<UploadResult>[] = selectedGroups
-      .filter((g) => drafts[g.key])
+      .filter((g) => drafts[g.key] || registryDrafts[g.key])
       .map((g) => ({
         id: g.key,
         label: `${g.plugin.name} · ${g.marketplace.name}`,
         run: async () => {
-          const res = await api.adminSubmitDraft(drafts[g.key]);
+          const content = drafts[g.key];
+          const res = content
+            ? await api.adminSubmitDraft(content)
+            : await api.adminSubmitDraft(registryDrafts[g.key]);
           // The PR is open: what is on disk now matches what was pushed, so
           // stop nudging. A deleted skill has no folder left — the backend
           // drops its reference instead of marking it.
@@ -300,7 +320,8 @@ export function ChangesPage() {
           // soumise après pour que l'échec le plus probable — un dépôt de
           // plugin qu'on ne peut pas écrire — arrive avant qu'une entrée de
           // registre n'annonce un plugin dont rien n'a été poussé.
-          const registry = registryDrafts[g.key];
+          // Déjà soumise à l'instant si le groupe n'avait qu'elle.
+          const registry = content ? registryDrafts[g.key] : undefined;
           if (registry) {
             const reg = await api.adminSubmitDraft(registry);
             notify({
@@ -361,7 +382,7 @@ export function ChangesPage() {
             return (
               <div key={g.key} className="overflow-hidden rounded-md border">
                 <div className="flex items-center gap-2 border-b bg-muted/30 px-3 py-2">
-                  {g.editable ? (
+                  {g.editable && g.items.length > 0 ? (
                     <Checkbox
                       checked={groupTicked === g.items.length}
                       indeterminate={
@@ -373,6 +394,11 @@ export function ChangesPage() {
                       aria-label={`Tout cocher pour ${g.plugin.name}`}
                       onChange={() => toggleGroup(g)}
                     />
+                  ) : g.editable ? (
+                    // Rien à cocher ici : le groupe n'a aucun skill, et ce qu'il
+                    // reste à publier se coche dans le bandeau ci-dessous. Un
+                    // cadenas dirait « pas de droit de push », ce qui est faux.
+                    <span className="w-4 shrink-0" aria-hidden />
                   ) : (
                     <Lock
                       className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
@@ -386,9 +412,11 @@ export function ChangesPage() {
                       · {g.marketplace.name}
                     </span>
                   </span>
-                  <Badge variant="outline" className="shrink-0 text-xs">
-                    {g.items.length} changement{g.items.length > 1 ? "s" : ""}
-                  </Badge>
+                  {g.items.length > 0 && (
+                    <Badge variant="outline" className="shrink-0 text-xs">
+                      {g.items.length} changement{g.items.length > 1 ? "s" : ""}
+                    </Badge>
+                  )}
                   {/* Le diff ci-dessous est celui du contenu ; la PR de
                       registre porte sur un autre dépôt et n'y apparaît pas. */}
                   {registryDrafts[g.key] && (
@@ -429,15 +457,26 @@ export function ChangesPage() {
                     forge, l'utilisateur le crée et colle son URL ici. */}
                 {g.editable && g.needsRegistry && (
                   <div className="space-y-1.5 border-b border-emerald-500/30 bg-emerald-500/5 px-3 py-2">
-                    <div className="text-xs text-emerald-700 dark:text-emerald-300">
-                      <strong>{g.plugin.name}</strong> n'est pas encore
-                      référencé dans{" "}
-                      <strong>{g.marketplace.name}</strong>. Publier ouvrira{" "}
-                      <strong>deux</strong> PR : le contenu sur le dépôt du
-                      plugin, et son entrée dans{" "}
-                      <code>.claude-plugin/marketplace.json</code> sur le dépôt
-                      de la marketplace.
-                    </div>
+                    <label className="flex items-start gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+                      <Checkbox
+                        className="mt-0.5"
+                        checked={cfg.registerPlugin}
+                        disabled={ready}
+                        aria-label={`Référencer ${g.plugin.name} dans ${g.marketplace.name}`}
+                        onChange={() =>
+                          patchSettings(g.key, {
+                            registerPlugin: !cfg.registerPlugin,
+                          })
+                        }
+                      />
+                      <span>
+                        Référencer <strong>{g.plugin.name}</strong> dans{" "}
+                        <strong>{g.marketplace.name}</strong> — il n'y est pas
+                        encore. C'est une PR à part, sur le dépôt de la
+                        marketplace (<code>.claude-plugin/marketplace.json</code>),
+                        celle du contenu allant sur le dépôt du plugin.
+                      </span>
+                    </label>
                     <label className="block text-xs text-muted-foreground">
                       URL du dépôt du plugin
                     </label>
@@ -454,6 +493,12 @@ export function ChangesPage() {
                 )}
 
                 <div className="divide-y">
+                  {g.items.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-muted-foreground">
+                      Aucun skill à publier — seul l'enregistrement du plugin
+                      dans la marketplace reste à faire.
+                    </p>
+                  )}
                   {g.items.map((i) => {
                     const meta = STATUS_META[i.status];
                     const Icon = meta?.Icon ?? Pencil;

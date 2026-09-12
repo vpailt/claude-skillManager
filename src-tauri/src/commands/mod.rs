@@ -843,6 +843,10 @@ fn feed_skill_watch(
     let mut roots_by_plugin: Vec<(PathBuf, usize, usize)> = Vec::new();
 
     for (mp_idx, mp) in marketplaces.iter_mut().enumerate() {
+        // Lu avant d'emprunter `mp.plugins` : le pseudo-marketplace « Local »
+        // n'a pas de dépôt, et ses skills ne sont donc pas « pas encore
+        // publiés » — ils n'ont simplement nulle part où l'être.
+        let mp_has_repo = !mp.source_repo.is_empty();
         for (pl_idx, plugin) in mp.plugins.iter_mut().enumerate() {
             let Some(install_path) = plugin.install_path.clone() else {
                 continue;
@@ -857,6 +861,11 @@ fn feed_skill_watch(
                 .unwrap_or_default();
 
             let remote_known = plugin.skills_remote_known;
+            // Installé, mais absent du registre de sa marketplace : il n'a pas
+            // de source à lire, pas parce que la forge est muette mais parce
+            // qu'aucun registre ne le référence encore.
+            let plugin_unregistered =
+                mp_has_repo && plugin.install_state == crate::models::InstallState::LocalOnly;
             if remote_known {
                 remote_known_roots.push(root.to_string_lossy().into_owned());
             }
@@ -874,6 +883,7 @@ fn feed_skill_watch(
                     remote_known,
                     remote_present: skill.remote_present,
                     remote_blobs: blobs_by_key.get(key.as_str()).map(|b| (*b).clone()),
+                    plugin_unregistered,
                 });
             }
 
@@ -2919,6 +2929,17 @@ pub async fn add_commit(
         add_flow::commit(kind, &args.staging_dir, &args.fields, &args.target)?;
     if is_plugin_skill {
         watch.mark_new(&app, &outcome.path);
+    }
+    if kind == AddKind::Plugin {
+        // Les skills d'un plugin qu'on vient d'ajouter ne sont chez aucune forge
+        // que l'app sache lire : le plugin n'est pas encore dans le registre de
+        // sa marketplace, donc le balayage ne lui connaît aucune source et
+        // n'ira rien comparer. Sans ce marquage, `resolve` les classe `Unknown`
+        // — ni actionnables, ni visibles dans l'onglet Changements — et le
+        // plugin entier reste invisible jusqu'à ce qu'on le pousse à la main.
+        for folder in add_flow::skill_folders_of(std::path::Path::new(&outcome.path)) {
+            watch.mark_new(&app, &folder.to_string_lossy());
+        }
     }
     Ok(outcome)
 }

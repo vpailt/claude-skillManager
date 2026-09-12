@@ -66,18 +66,24 @@ export function buildChangeGroups(
           status,
         });
       }
-      if (items.length === 0) continue;
+      // Le pseudo-marketplace « Local » n'a pas de registre où s'inscrire.
+      const needsRegistry =
+        p.installState === "local_only" &&
+        !!m.sourceRepo &&
+        m.sourceKind !== "local";
+      // Un plugin que sa marketplace ne référence pas est un changement en
+      // attente *par lui-même* : son entrée de registre reste à publier même
+      // s'il n'apporte aucun skill à pousser — un plugin sans skill est un cas
+      // parfaitement légitime, et c'est précisément celui qui disparaissait de
+      // cet onglet.
+      if (items.length === 0 && !needsRegistry) continue;
       items.sort((a, b) => a.targetName.localeCompare(b.targetName));
       groups.push({
         key: groupKey(m.name, p.name),
         marketplace: m,
         plugin: p,
         editable: !!m.editable && !!m.sourceRepo,
-        // Le pseudo-marketplace « Local » n'a pas de registre où s'inscrire.
-        needsRegistry:
-          p.installState === "local_only" &&
-          !!m.sourceRepo &&
-          m.sourceKind !== "local",
+        needsRegistry,
         items,
       });
     }

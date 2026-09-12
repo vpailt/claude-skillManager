@@ -166,6 +166,15 @@ pub struct SkillInput {
     /// "different", and the first question anyone asks of a skill flagged
     /// `Modified` is *which file*. [`explain`] answers that from this.
     pub remote_blobs: Option<Vec<(String, String)>>,
+    /// Le plugin est installé mais sa marketplace ne le référence pas.
+    ///
+    /// Rien ne peut alors être lu en amont pour ces dossiers — le balayage ne
+    /// lui connaît aucune source — et `remote_known` est faux non pas parce que
+    /// la forge est injoignable, mais parce qu'il n'y a rien à joindre. Un
+    /// dossier jamais confirmé contre une forge est donc *nouveau*, et non
+    /// *inconnu* : c'est ce qui le rend publiable, et c'est vrai qu'on vienne de
+    /// l'ajouter ou qu'on l'ait ajouté la semaine dernière.
+    pub plugin_unregistered: bool,
 }
 
 /// A skill the remote holds at a path where nothing exists locally. Only becomes
@@ -796,7 +805,7 @@ fn resolve(input: &SkillInput, sig: u64, baseline: &Baseline, pending_new: bool)
         return match baseline.synced_sig {
             Some(s) if s == sig => SkillSync::Synced,
             Some(_) => SkillSync::Modified,
-            None if pending_new => SkillSync::New,
+            None if pending_new || input.plugin_unregistered => SkillSync::New,
             None => SkillSync::Unknown,
         };
     }
@@ -1327,6 +1336,7 @@ mod tests {
             folder: "f".into(),
             remote_known: known,
             remote_present: present,
+            plugin_unregistered: false,
             remote_blobs: blobs.map(|b| {
                 b.iter()
                     .map(|(p, s)| (p.to_string(), s.to_string()))
@@ -1415,6 +1425,33 @@ mod tests {
             resolve(&input(false, false, None), 42, &b, true),
             SkillSync::New
         );
+    }
+
+    #[test]
+    fn a_skill_of_an_unregistered_plugin_is_new_not_unknown() {
+        // Un plugin que sa marketplace ne référence pas n'a aucune source à
+        // lire : ses skills ne sont nulle part en amont, ce qui les rend
+        // publiables. `Unknown` les cachait de l'onglet Changements, et le
+        // plugin entier avec eux.
+        let mut i = input(false, false, None);
+        i.plugin_unregistered = true;
+        assert_eq!(resolve(&i, 42, &Baseline::default(), false), SkillSync::New);
+    }
+
+    #[test]
+    fn an_unregistered_plugin_never_overrides_a_confirmed_signature() {
+        // Le drapeau ne vaut que pour un dossier jamais confirmé contre une
+        // forge : un plugin retiré d'un registre, dont le contenu avait été
+        // vérifié, reste jugé sur cette référence.
+        let b = Baseline {
+            meta: 1,
+            sig: 42,
+            synced_sig: Some(42),
+        };
+        let mut i = input(false, false, None);
+        i.plugin_unregistered = true;
+        assert_eq!(resolve(&i, 42, &b, false), SkillSync::Synced);
+        assert_eq!(resolve(&i, 43, &b, false), SkillSync::Modified);
     }
 
     #[test]

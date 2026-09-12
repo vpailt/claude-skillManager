@@ -670,6 +670,25 @@ pub fn commit(
     Ok(outcome)
 }
 
+/// Les dossiers de skills d'un plugin installé (`<racine>/skills/<nom>/`).
+///
+/// Sert à marquer d'un coup tout ce qu'un plugin fraîchement ajouté apporte :
+/// aucun de ces dossiers n'existe chez la forge que l'app sait lire, puisque le
+/// plugin n'est pas encore dans le registre de sa marketplace.
+pub fn skill_folders_of(install_path: &Path) -> Vec<PathBuf> {
+    let root = crate::local_scanner::resolve_plugin_root(install_path).join("skills");
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && skill_md_in(p).is_some())
+        .collect();
+    out.sort();
+    out
+}
+
 fn write_skill_metadata(root: &Path, fields: &Fields) -> Result<()> {
     let path = skill_md_in(root).unwrap_or_else(|| root.join("SKILL.md"));
     let text = fs::read_to_string(&path).unwrap_or_default();
