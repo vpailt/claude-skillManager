@@ -835,7 +835,9 @@ export function OverviewPage() {
     ).length;
   const totalSkills =
     marketplaces.flatMap((m) => m.plugins).reduce((acc, p) => acc + p.skills.length, 0) +
-    (localOnly?.plugins.length ?? 0);
+    // « Sans plugin » est un groupe, pas un plugin par skill : compter ses
+    // skills, pas ses plugins.
+    (localOnly?.plugins.reduce((acc, p) => acc + p.skills.length, 0) ?? 0);
 
   return (
     // Same bar every page carries: icon, name, badges — a title block twice as

@@ -376,7 +376,7 @@ export const api = {
 };
 
 // Marketplace name used by the backend to surface standalone user skills.
-export const LOCAL_MARKETPLACE_NAME = "(local skills)";
+export const LOCAL_MARKETPLACE_NAME = "Local";
 
 // Re-export types for ergonomic imports.
 export type {

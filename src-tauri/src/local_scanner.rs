@@ -13,7 +13,14 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const LOCAL_MARKETPLACE_NAME: &str = "(local skills)";
+/// Le nœud de tête de tout ce qui ne vient d'aucune marketplace. C'est un vrai
+/// nœud de l'arbre, pas une note en bas de liste : « (local skills) » se lisait
+/// comme une annotation, alors que c'est là que vivent les skills que
+/// l'utilisateur écrit lui-même.
+pub const LOCAL_MARKETPLACE_NAME: &str = "Local";
+
+/// Le groupe qui porte les skills n'appartenant à aucun plugin.
+pub const NO_PLUGIN_NAME: &str = "Sans plugin";
 
 fn read_json(path: &Path) -> Value {
     if !path.exists() {
@@ -983,13 +990,17 @@ pub fn list_archived_skills() -> Vec<ArchivedSkill> {
 
 pub fn build_local_only_marketplace() -> Marketplace {
     let skills = scan_user_skills();
-    let mut plugins = Vec::new();
+    // Un skill autonome n'est pas un plugin. On fabriquait pourtant un plugin
+    // fictif *par* skill, ce qui présentait « mon-skill » comme un plugin dont
+    // l'unique contenu était « mon-skill » — une profondeur d'arbre qui n'existe
+    // nulle part. Tous tiennent maintenant dans un seul groupe, « Sans plugin ».
+    let mut local_skills = Vec::new();
     for s in skills {
         let mut skill_md = s.folder.join("SKILL.md");
         if !skill_md.exists() {
             skill_md = s.folder.join("skill.md");
         }
-        let plugin_skill = Skill {
+        local_skills.push(Skill {
             name: s.name.clone(),
             description: s.description.clone(),
             version: s.version.clone(),
@@ -997,21 +1008,27 @@ pub fn build_local_only_marketplace() -> Marketplace {
             watch_folder: Some(s.folder.clone()),
             skill_md_path: if skill_md.exists() { Some(skill_md) } else { None },
             relative_path: String::new(),
-            plugin_name: Some(s.name.clone()),
+            plugin_name: Some(NO_PLUGIN_NAME.to_string()),
             marketplace_name: Some(LOCAL_MARKETPLACE_NAME.to_string()),
             remote_present: false,
-        };
-        plugins.push(Plugin {
-            name: s.name.clone(),
-            marketplace_name: LOCAL_MARKETPLACE_NAME.to_string(),
-            installed_version: Some("local".to_string()),
-            install_path: Some(s.folder.clone()),
-            description: s.description.clone(),
-            skills: vec![plugin_skill],
-            install_state: InstallState::LocalOnly,
-            ..Default::default()
         });
     }
+    let plugins = if local_skills.is_empty() {
+        Vec::new()
+    } else {
+        vec![Plugin {
+            name: NO_PLUGIN_NAME.to_string(),
+            marketplace_name: LOCAL_MARKETPLACE_NAME.to_string(),
+            installed_version: Some("local".to_string()),
+            // Le dossier des skills utilisateur, pas celui d'un skill : ce
+            // groupe n'a pas d'autre racine.
+            install_path: Some(config::claude_user_skills_dir()),
+            description: "Skills locaux, sans plugin d'appartenance".to_string(),
+            skills: local_skills,
+            install_state: InstallState::LocalOnly,
+            ..Default::default()
+        }]
+    };
     Marketplace {
         name: LOCAL_MARKETPLACE_NAME.to_string(),
         source_kind: "local".to_string(),

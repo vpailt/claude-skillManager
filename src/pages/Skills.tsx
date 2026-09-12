@@ -670,8 +670,10 @@ function MarketplaceNode({
   const isSelected =
     selection?.kind === "marketplace" &&
     selection.marketplace === marketplace.name;
-  const title =
-    marketplace.name === localName ? "Compétences personnelles" : marketplace.name;
+  // Le nom du pseudo-marketplace est deja « Local » : le reecrire en
+  // « Competences personnelles » donnait un nom que la recherche ne trouve pas
+  // et que le reste de l'app n'emploie nulle part.
+  const title = marketplace.name;
   // A marketplace box covers itself and its visible plugins — "check the whole
   // marketplace" is what the gesture means. Filtered-out plugins stay out.
   const groupKeys = useMemo(
@@ -1829,7 +1831,7 @@ export function SkillsPage() {
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
 
-  const localName = localOnly?.name ?? "(local skills)";
+  const localName = localOnly?.name ?? "Local";
 
   // Pushing a single skill goes to the Changes tab with that skill alone
   // ticked, rather than opening a draft dialog: one screen builds every PR,
