@@ -2531,6 +2531,18 @@ pub async fn list_duplicate_skills() -> Vec<local_scanner::DuplicateSkill> {
     local_scanner::find_duplicate_skills()
 }
 
+/// Rescan des seuls skills utilisateur (`~/.claude/skills/`).
+///
+/// Le balayage complet (`refresh_all`) est la source d'autorité, mais il lit le
+/// forge : archiver, restaurer ou supprimer un skill local laissait donc l'arbre
+/// afficher l'état précédent pendant toute sa durée. Ce scan-là ne touche que le
+/// disque, répond en millisecondes, et porte exactement le nœud « Local » — le
+/// sweep qui suit réécrit l'arbre entier de toute façon.
+#[tauri::command]
+pub async fn scan_local_skills() -> Marketplace {
+    local_scanner::build_local_only_marketplace()
+}
+
 #[tauri::command]
 pub async fn archive_user_skill(folder: PathBuf) -> Result<PathBuf> {
     tracing::info!("archive_user_skill: {}", folder.display());

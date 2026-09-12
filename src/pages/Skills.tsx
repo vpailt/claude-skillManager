@@ -63,7 +63,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useApp } from "@/stores/app";
+import { refreshLocalSkills, useApp } from "@/stores/app";
 import { withTask } from "@/stores/progress";
 import { useNotifications } from "@/stores/notifications";
 import { cn, openExternal, shortDate } from "@/lib/utils";
@@ -2148,7 +2148,9 @@ export function SkillsPage() {
         setSelection(null);
       }
       // ["refresh"] alone would leave the per-folder caches serving a skill
-      // that no longer exists on disk.
+      // that no longer exists on disk. The local rescan is what makes the row
+      // leave the tree now rather than at the end of the sweep.
+      void refreshLocalSkills();
       forceRefresh(qc);
       for (const key of [
         ["duplicate-skills"],
@@ -2190,6 +2192,10 @@ export function SkillsPage() {
       ),
     onSuccess: (_dest, entry) => {
       setSelection(null);
+      // Le dossier a quitté `~/.claude/skills/` : le dire tout de suite. Le
+      // sweep derrière `forceRefresh` lit le forge, et jusqu'à ce qu'il rende
+      // la main l'arbre montrait encore le skill archivé.
+      void refreshLocalSkills();
       forceRefresh(qc);
       for (const key of [
         ["duplicate-skills"],
@@ -2275,8 +2281,10 @@ export function SkillsPage() {
     if (stateFilter === "archived") {
       // Rien ne vient des marketplaces ici : le nœud « Local » porte les
       // dossiers de `skills_archive`, et il reste seul même s'il n'a aucun
-      // skill vivant.
-      const local = list.find((m) => m.sourceKind === "local");
+      // skill vivant — d'où le repli sur `localOnly`, que `list` écarte
+      // justement quand il ne porte plus rien. Sans lui, archiver le dernier
+      // skill local vidait l'écran du filtre censé le montrer.
+      const local = list.find((m) => m.sourceKind === "local") ?? localOnly;
       return local ? [{ marketplace: local, plugins: [] }] : [];
     }
     return list
@@ -2292,7 +2300,7 @@ export function SkillsPage() {
         return { marketplace: m, plugins };
       })
       .filter(({ plugins }) => !filtersActive || plugins.length > 0);
-  }, [list, skillVisible, filtersActive, stateFilter]);
+  }, [list, localOnly, skillVisible, filtersActive, stateFilter]);
 
   const counts = useMemo(() => {
     let total = 0;

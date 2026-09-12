@@ -33,7 +33,7 @@ import {
 import { api } from "@/lib/api";
 import { installMarketplaceOnce } from "@/hooks/useInstallMarketplace";
 import { useBulkRunner, type BulkOp } from "@/hooks/useBulkRunner";
-import { useApp } from "@/stores/app";
+import { refreshLocalSkills, useApp } from "@/stores/app";
 import { isActionable, useSkillSync } from "@/stores/skillSync";
 import { mpKey, plKey, skKey, useTreeSelection } from "@/stores/treeSelection";
 import type { Marketplace, Plugin, Skill } from "@/lib/types";
@@ -151,7 +151,14 @@ export function BulkActionBar({ onPublishSkills }: Props) {
   const total = selected.size;
 
   const runOps = (ops: BulkOp[]) => {
-    void runner.run(ops).then(() => clear());
+    void runner.run(ops).then(() => {
+      clear();
+      // Archiver ou supprimer en lot vide des dossiers de `~/.claude/skills/`,
+      // et le balayage que déclenche le runner lit le forge avant de rendre la
+      // main : sans ce scan local, les lignes traitées restaient à l'écran.
+      // Une lecture de dossier, donc on ne trie pas les lots qui en ont besoin.
+      void refreshLocalSkills();
+    });
   };
 
   const installOps = (): BulkOp[] => [

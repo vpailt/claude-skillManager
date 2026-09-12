@@ -361,6 +361,11 @@ export const api = {
   deleteSkillLocal: (folder: string) =>
     invoke<boolean>("delete_skill_local", { folder }),
 
+  /** Rescan des seuls skills de `~/.claude/skills/` — pas de forge, pas de
+   *  balayage : le nœud « Local » seul, pour l'afficher sans attendre le sweep
+   *  qui suit une action locale. */
+  scanLocalSkills: () => invoke<Marketplace>("scan_local_skills"),
+
   // --- duplicate skills ---
   listDuplicateSkills: () =>
     invoke<DuplicateSkill[]>("list_duplicate_skills"),

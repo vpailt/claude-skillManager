@@ -1,5 +1,9 @@
 import { create } from "zustand";
+import { api } from "@/lib/api";
+import { createLogger } from "@/lib/logger";
 import type { Marketplace, Plugin, Skill } from "@/lib/types";
+
+const log = createLogger("app-store");
 
 export type Selection =
   | { kind: "marketplace"; marketplace: string }
@@ -14,6 +18,7 @@ interface AppState {
   marketplaces: Marketplace[];
   localOnly: Marketplace | null;
   setMarketplaces: (mps: Marketplace[], localOnly: Marketplace) => void;
+  setLocalOnly: (localOnly: Marketplace) => void;
 
   /**
    * Apply what an install/uninstall/toggle just did, without waiting for the
@@ -57,6 +62,7 @@ export const useApp = create<AppState>((set, get) => ({
   localOnly: null,
   setMarketplaces: (mps, localOnly) =>
     set({ marketplaces: mps, localOnly }),
+  setLocalOnly: (localOnly) => set({ localOnly }),
 
   patchPlugin: (marketplace, plugin, patch) =>
     set((state) => ({
@@ -116,3 +122,24 @@ export const useApp = create<AppState>((set, get) => ({
     return p?.skills.find((s) => s.name === skill);
   },
 }));
+
+/**
+ * Re-read `~/.claude/skills/` and apply it to the `Local` node, now.
+ *
+ * The sweep behind {@link forceRefresh} is the authority, but it reads the
+ * forge — so archiving, restoring or deleting a local skill left the tree
+ * showing the previous state for as long as that took, which reads as a frozen
+ * UI. This asks Rust for the local half alone (a directory walk, no network)
+ * and writes it over the `Local` node; the sweep overwrites everything a moment
+ * later. Module-scoped, like `forceRefresh`, because the callers are
+ * `mutationFn`s rather than components.
+ */
+export async function refreshLocalSkills() {
+  try {
+    useApp.getState().setLocalOnly(await api.scanLocalSkills());
+  } catch (e) {
+    // Nothing to recover: the sweep that follows carries the same answer, only
+    // later. Losing the log line is what would hurt.
+    log.warn("local skills rescan failed:", e);
+  }
+}

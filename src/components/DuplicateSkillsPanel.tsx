@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { forceRefresh } from "@/hooks/useRefresh";
+import { refreshLocalSkills } from "@/stores/app";
 import {
   AlertTriangle,
   Archive,
@@ -159,6 +160,9 @@ export function DuplicateSkillDetail({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["duplicate-skills"] });
       qc.invalidateQueries({ queryKey: ["archived-skills"] });
+      // Le dossier local a disparu : le nœud « Local » le dit maintenant, sans
+      // attendre le sweep.
+      void refreshLocalSkills();
       forceRefresh(qc);
       onArchived();
     },
@@ -253,6 +257,9 @@ export function ArchivedSkillDetail({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["archived-skills"] });
       qc.invalidateQueries({ queryKey: ["duplicate-skills"] });
+      // Le dossier est de retour dans `~/.claude/skills/` : le nœud « Local »
+      // doit le porter à l'instant où le filtre bascule, pas à la fin du sweep.
+      void refreshLocalSkills();
       forceRefresh(qc);
       onRestored();
     },

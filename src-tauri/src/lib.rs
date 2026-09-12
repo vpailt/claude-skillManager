@@ -249,6 +249,7 @@ pub fn run() {
             admin_list_remote_skills,
             admin_suggest_bumps,
             list_duplicate_skills,
+            scan_local_skills,
             archive_user_skill,
             delete_skill_local,
             list_archived_skills,
