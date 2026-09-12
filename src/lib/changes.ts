@@ -25,6 +25,14 @@ export interface ChangeGroup {
   /** Whether a PR can actually be opened (push rights + a known source repo).
    *  Detection never depends on this — only the button does. */
   editable: boolean;
+  /** Le plugin est installé mais absent du registre de sa marketplace : publier
+   *  demande donc **deux** PR, le contenu sur le dépôt du plugin et la fiche de
+   *  registre sur celui de la marketplace.
+   *
+   *  `local_only` est exactement ce signal : `merge_local_remote` ne le pose que
+   *  lorsque le registre a bien été lu et ne liste pas le plugin — une lecture
+   *  ratée laisse l'état local intact, donc jamais de faux positif hors ligne. */
+  needsRegistry: boolean;
   items: ChangeItem[];
 }
 
@@ -65,6 +73,11 @@ export function buildChangeGroups(
         marketplace: m,
         plugin: p,
         editable: !!m.editable && !!m.sourceRepo,
+        // Le pseudo-marketplace « Local » n'a pas de registre où s'inscrire.
+        needsRegistry:
+          p.installState === "local_only" &&
+          !!m.sourceRepo &&
+          m.sourceKind !== "local",
         items,
       });
     }

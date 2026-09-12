@@ -289,6 +289,7 @@ pub fn prepare_add_plugin(
     source_url: &str,
     bump_level: &str,
     version_description: &str,
+    local_plugin_name: &str,
 ) -> Result<AdminDraft> {
     let bump_level = normalize_bump_level(bump_level);
     let version_description = version_description.trim();
@@ -296,17 +297,35 @@ pub fn prepare_add_plugin(
     let plugin_repo = parse_github_marketplace_url(source_url)
         .ok_or_else(|| Error::Invalid(format!("Cannot parse owner/repo from: {source_url}")))?;
 
-    let (manifest_text, _) = gh
-        .get_file(&plugin_repo, "manifest.json", "")
-        // `e` already names its forge and, for a transport failure, the URL —
-        // wrapping it in a second label used to print "github: ... http: ...
-        // https://git.almaviacx.local/..." for a Gitea read.
-        .map_err(|e| Error::Other(format!("Lecture de manifest.json dans {plugin_repo} impossible : {e}")))?;
-    let manifest: Value = serde_json::from_str(&manifest_text)
-        .map_err(|e| gh.forge_err(format!("manifest.json dans {plugin_repo} n'est pas un JSON valide : {e}")))?;
-    let manifest_obj = manifest
-        .as_object()
-        .ok_or_else(|| gh.forge_err("la racine de manifest.json doit être un objet"))?;
+    // Le manifeste distant fait foi… quand il existe. Un plugin neuf enregistre
+    // sa fiche de registre en même temps que son contenu part sur son propre
+    // dépôt (deux PR, ouvertes ensemble) : à cet instant le dépôt du plugin ne
+    // porte pas encore de manifeste, et la copie installée est la seule source
+    // exacte de ce qui sera poussé. Sans ce repli, enregistrer un plugin neuf
+    // supposerait d'attendre la fusion de l'autre PR.
+    let local_fallback = || {
+        let name = local_plugin_name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        crate::local_scanner::installed_plugin_manifest(marketplace, name)
+    };
+    let remote_manifest = gh.get_file(&plugin_repo, "manifest.json", "").ok().and_then(
+        |(text, _)| {
+            serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| v.as_object().cloned())
+        },
+    );
+    let manifest_obj = match remote_manifest {
+        Some(obj) => obj,
+        None => local_fallback().ok_or_else(|| {
+            Error::Other(format!(
+                "Aucun manifest.json lisible pour {plugin_repo}, ni sur le dépôt ni \
+                 dans la copie installée."
+            ))
+        })?,
+    };
 
     let name = manifest_obj
         .get("name")
@@ -321,10 +340,9 @@ pub fn prepare_add_plugin(
                 .unwrap_or("plugin")
                 .to_string()
         });
-    // Le manifeste *distant* est ce qui fait foi ici : compléter la copie locale
-    // ne suffit pas, il faut que le manifeste corrigé soit parti sur le dépôt du
-    // plugin (la PR de contenu). Dire laquelle des deux choses manque, plutôt
-    // que constater l'absence.
+    // Un manifeste sans version ne peut pas être enregistré : le registre
+    // pointe une version, et l'installation range le cache par version. Le dire
+    // avec ce qu'il faut faire, plutôt que constater l'absence.
     let version = manifest_obj
         .get("version")
         .and_then(|v| v.as_str())
@@ -668,6 +686,16 @@ pub struct BulkUploadArgs {
     pub bump_level: String,
     #[serde(default)]
     pub version_description: String,
+    /// `owner/repo` du dépôt du plugin, quand le registre de la marketplace ne
+    /// le connaît pas encore — un plugin ajouté localement, dont la fiche de
+    /// registre part dans la PR jumelle. Vide : résolu depuis le registre, comme
+    /// toujours.
+    ///
+    /// Sans cela, un plugin absent du registre tombait dans la branche
+    /// « monorepo » (dépôt cible = celui de la marketplace) et ses skills
+    /// seraient partis dans le dépôt de la marketplace.
+    #[serde(default)]
+    pub plugin_repo: String,
 }
 
 /// Single-skill upload — a thin wrapper over [`prepare_upload_skills`] so both
@@ -684,6 +712,7 @@ pub fn prepare_upload_skill(gh: &GitHubClient, args: &UploadSkillArgs) -> Result
         removals: Vec::new(),
         bump_level: args.bump_level.clone(),
         version_description: args.version_description.clone(),
+        plugin_repo: String::new(),
     };
     prepare_upload_skills(gh, &bulk)
 }
@@ -708,7 +737,11 @@ pub fn prepare_upload_skills(gh: &GitHubClient, args: &BulkUploadArgs) -> Result
 
     let (mp_repo, mp_branch) = repo_for(&args.marketplace)?;
     let (registry, _registry_path, _) = fetch_marketplace_registry(gh, &mp_repo, &mp_branch)?;
-    let plugin_repo = plugin_source_repo_of(&registry, &args.plugin_name);
+    let plugin_repo = if args.plugin_repo.trim().is_empty() {
+        plugin_source_repo_of(&registry, &args.plugin_name)
+    } else {
+        args.plugin_repo.trim().to_string()
+    };
     // For monorepo marketplaces (target_repo == mp_repo) we drop files at the repo
     // root; the common case (separate plugin repo) is handled cleanly.
     let target_repo = if plugin_repo.is_empty() {

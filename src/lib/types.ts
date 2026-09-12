@@ -441,9 +441,11 @@ export interface BulkUploadArgs {
   removals?: string[];
   bumpLevel?: BumpLevel;
   versionDescription?: string;
+  /** `owner/repo` du dépôt du plugin, quand le registre de la marketplace ne le
+   *  connaît pas encore (plugin neuf). Vide : résolu depuis le registre. */
+  pluginRepo?: string;
 }
 
-/** Args for `add_skill_to_plugin` — scaffold a blank skill or copy one in. */
 // --- Parcours d'ajout unifié (mirrors `add_flow.rs`) ---
 
 export type AddKind = "skill" | "plugin";

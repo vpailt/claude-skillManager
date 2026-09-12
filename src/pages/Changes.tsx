@@ -35,6 +35,7 @@ import { PAGE_HEADER, PAGE_FOOTER } from "@/lib/headerStyles";
 import { usePendingChanges, type ChangeGroup } from "@/lib/changes";
 import { cn, openExternal } from "@/lib/utils";
 import { useSkillSync } from "@/stores/skillSync";
+import { useNotifications } from "@/stores/notifications";
 import type { AdminDraft, BumpLevel, SkillSyncStatus, UploadResult } from "@/lib/types";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -63,18 +64,34 @@ const STATUS_META: Partial<
 interface GroupSettings {
   bumpLevel: BumpLevel;
   notes: string;
+  /** URL du dépôt du plugin — demandée seulement pour un plugin neuf, que le
+   *  registre de sa marketplace ne connaît pas encore. L'app ne crée pas de
+   *  dépôt sur la forge : l'utilisateur le crée et colle son URL ici. */
+  repoUrl: string;
 }
 
-const DEFAULT_SETTINGS: GroupSettings = { bumpLevel: "patch", notes: "" };
+const DEFAULT_SETTINGS: GroupSettings = {
+  bumpLevel: "patch",
+  notes: "",
+  repoUrl: "",
+};
 
 export function ChangesPage() {
   const location = useLocation();
   const groups = usePendingChanges();
   const setSyncOne = useSkillSync((s) => s.setOne);
+  const notify = useNotifications((s) => s.push);
 
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [settings, setSettings] = useState<Record<string, GroupSettings>>({});
   const [drafts, setDrafts] = useState<Record<string, AdminDraft>>({});
+  // Les PR d'enregistrement, une par groupe dont le plugin est neuf. Deux PR
+  // distinctes et non une seule : le contenu va sur le dépôt du plugin, la
+  // fiche de registre sur celui de la marketplace — deux dépôts, donc deux
+  // demandes de fusion, qu'aucune API ne sait réunir.
+  const [registryDrafts, setRegistryDrafts] = useState<
+    Record<string, AdminDraft>
+  >({});
   const [prepareError, setPrepareError] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
   // Which card has its diff expanded (only meaningful once prepared).
@@ -170,6 +187,12 @@ export function ChangesPage() {
     (g) => !settingsFor(g.key).notes.trim()
   );
 
+  // Un plugin neuf ne peut pas être préparé sans le dépôt où pousser son
+  // contenu : le dire avant de lancer la préparation, pas au milieu.
+  const missingRepo = selectedGroups.filter(
+    (g) => g.needsRegistry && !settingsFor(g.key).repoUrl.trim()
+  );
+
   const ready = Object.keys(drafts).length > 0;
 
   const prepare = async () => {
@@ -187,6 +210,7 @@ export function ChangesPage() {
     });
     try {
       const built: Record<string, AdminDraft> = {};
+      const builtRegistry: Record<string, AdminDraft> = {};
       for (const g of selectedGroups) {
         useProgress.getState().update(taskId, {
           detail: `${Object.keys(built).length + 1}/${selectedGroups.length} · ${g.plugin.name}`,
@@ -196,6 +220,27 @@ export function ChangesPage() {
         });
         const chosen = g.items.filter((i) => ticked.has(i.folder));
         const cfg = settingsFor(g.key);
+        // Un plugin neuf n'est dans aucun registre, donc son dépôt ne peut pas
+        // en être déduit : sans ce `pluginRepo`, la préparation retomberait sur
+        // la branche « monorepo » et pousserait les skills dans le dépôt de la
+        // marketplace.
+        let pluginRepo = "";
+        if (g.needsRegistry) {
+          const guess = await api.guessForgeForUrl(cfg.repoUrl.trim());
+          if (!guess.repo) {
+            throw new Error(
+              `${g.plugin.name} : indiquez l'URL du dépôt du plugin.`
+            );
+          }
+          if (!guess.known) {
+            throw new Error(
+              `${g.plugin.name} : hôte inconnu (${guess.host}). Enregistrez ` +
+                `cette instance Gitea dans Paramètres → Connexions, ou utilisez ` +
+                `une URL github.com.`
+            );
+          }
+          pluginRepo = guess.repo;
+        }
         built[g.key] = await api.adminPrepareUploadSkills({
           marketplace: g.marketplace.name,
           pluginName: g.plugin.name,
@@ -210,9 +255,20 @@ export function ChangesPage() {
             .map((i) => i.targetName),
           bumpLevel: cfg.bumpLevel,
           versionDescription: cfg.notes.trim(),
+          pluginRepo,
         });
+        if (g.needsRegistry) {
+          builtRegistry[g.key] = await api.adminPrepareAddPlugin(
+            g.marketplace.name,
+            cfg.repoUrl.trim(),
+            cfg.bumpLevel,
+            cfg.notes.trim(),
+            g.plugin.name
+          );
+        }
       }
       setDrafts(built);
+      setRegistryDrafts(builtRegistry);
       setOpenDiff(selectedGroups[0]?.key ?? null);
     } catch (e) {
       setPrepareError(errMsg(e));
@@ -238,11 +294,30 @@ export function ChangesPage() {
             await api.skillMarkSynced(i.folder).catch(() => {});
             setSyncOne(i.folder, "synced");
           }
+          // La PR d'enregistrement suit celle du contenu : elle ne référence
+          // que la branche par défaut du dépôt du plugin, jamais un commit de
+          // la PR de contenu, donc elle ne dépend pas de sa fusion. Elle est
+          // soumise après pour que l'échec le plus probable — un dépôt de
+          // plugin qu'on ne peut pas écrire — arrive avant qu'une entrée de
+          // registre n'annonce un plugin dont rien n'a été poussé.
+          const registry = registryDrafts[g.key];
+          if (registry) {
+            const reg = await api.adminSubmitDraft(registry);
+            notify({
+              kind: "success",
+              title: "Plugin référencé dans la marketplace",
+              body: `${g.plugin.name} · ${g.marketplace.name}`,
+              onClick: () => openExternal(reg.prUrl),
+            });
+          }
           return res;
         },
       }));
     // The runner already invalidates the refresh once the batch is done.
-    void publisher.run(ops).then(() => setDrafts({}));
+    void publisher.run(ops).then(() => {
+      setDrafts({});
+      setRegistryDrafts({});
+    });
   };
 
   return (
@@ -314,6 +389,16 @@ export function ChangesPage() {
                   <Badge variant="outline" className="shrink-0 text-xs">
                     {g.items.length} changement{g.items.length > 1 ? "s" : ""}
                   </Badge>
+                  {/* Le diff ci-dessous est celui du contenu ; la PR de
+                      registre porte sur un autre dépôt et n'y apparaît pas. */}
+                  {registryDrafts[g.key] && (
+                    <Badge
+                      variant="outline"
+                      className="shrink-0 border-emerald-500/40 text-xs text-emerald-700 dark:text-emerald-300"
+                    >
+                      + PR de registre
+                    </Badge>
+                  )}
                   {draft && (
                     <Button
                       size="sm"
@@ -337,6 +422,35 @@ export function ChangesPage() {
                       ? "Pas de droit de push sur ce dépôt — les changements restent listés, mais aucune PR ne peut être ouverte d'ici."
                       : "Aucun dépôt source connu pour ce marketplace."}
                   </p>
+                )}
+
+                {/* Plugin neuf : deux PR, et l'app ne sait pas encore sur quel
+                    dépôt pousser son contenu — elle ne crée pas de dépôt sur la
+                    forge, l'utilisateur le crée et colle son URL ici. */}
+                {g.editable && g.needsRegistry && (
+                  <div className="space-y-1.5 border-b border-emerald-500/30 bg-emerald-500/5 px-3 py-2">
+                    <div className="text-xs text-emerald-700 dark:text-emerald-300">
+                      <strong>{g.plugin.name}</strong> n'est pas encore
+                      référencé dans{" "}
+                      <strong>{g.marketplace.name}</strong>. Publier ouvrira{" "}
+                      <strong>deux</strong> PR : le contenu sur le dépôt du
+                      plugin, et son entrée dans{" "}
+                      <code>.claude-plugin/marketplace.json</code> sur le dépôt
+                      de la marketplace.
+                    </div>
+                    <label className="block text-xs text-muted-foreground">
+                      URL du dépôt du plugin
+                    </label>
+                    <input
+                      className="h-8 w-full rounded-md border bg-background px-2 text-sm"
+                      placeholder="https://github.com/owner/mon-plugin"
+                      value={cfg.repoUrl}
+                      disabled={ready}
+                      onChange={(e) =>
+                        patchSettings(g.key, { repoUrl: e.target.value })
+                      }
+                    />
+                  </div>
                 )}
 
                 <div className="divide-y">
@@ -584,6 +698,13 @@ export function ChangesPage() {
               {missingNotes.length > 1 ? "s" : ""}.
             </p>
           )}
+          {missingNotes.length === 0 && missingRepo.length > 0 && !ready && (
+            <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+              URL du dépôt manquante pour {missingRepo.length} plugin
+              {missingRepo.length > 1 ? "s" : ""} neuf
+              {missingRepo.length > 1 ? "s" : ""}.
+            </p>
+          )}
           {publisher.running ? (
             <>
               <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
@@ -629,6 +750,7 @@ export function ChangesPage() {
                 disabled={
                   selectedGroups.length === 0 ||
                   missingNotes.length > 0 ||
+                  missingRepo.length > 0 ||
                   preparing
                 }
                 onClick={prepare}

@@ -343,6 +343,36 @@ fn merge_directory_plugins(mut installed: Vec<Plugin>, available: Vec<Plugin>) -
     installed
 }
 
+/// Le `manifest.json` (ou `.claude-plugin/plugin.json`) de la copie **installée**
+/// d'un plugin.
+///
+/// Sert au seul cas où le manifeste distant n'est pas lisible : un plugin qu'on
+/// vient d'ajouter et dont le contenu part dans une PR pas encore fusionnée. Le
+/// dépôt est alors vide ou sans manifeste, mais la copie locale, elle, porte
+/// exactement ce qui sera poussé.
+pub fn installed_plugin_manifest(
+    marketplace_name: &str,
+    plugin_name: &str,
+) -> Option<serde_json::Map<String, Value>> {
+    let installed = load_installed_plugins();
+    let record = installed
+        .get(&format!("{plugin_name}@{marketplace_name}"))?
+        .as_array()
+        .and_then(|a| a.first())?
+        .clone();
+    let install_path = PathBuf::from(record.get("installPath")?.as_str()?);
+    let root = resolve_plugin_root(&install_path);
+    for rel in ["manifest.json", ".claude-plugin/plugin.json"] {
+        let path = root.join(rel);
+        if path.exists() {
+            if let Some(obj) = read_json(&path).as_object() {
+                return Some(obj.clone());
+            }
+        }
+    }
+    None
+}
+
 pub fn installed_plugins_by_marketplace() -> BTreeMap<String, Vec<Plugin>> {
     let installed = load_installed_plugins();
     let enabled_map = plugin_state::load_enabled_plugins();

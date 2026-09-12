@@ -2334,6 +2334,10 @@ pub async fn admin_prepare_add_plugin(
     source_url: String,
     bump_level: Option<String>,
     version_description: Option<String>,
+    // `plugin_name` : le nom dans `installed_plugins.json`, quand il y est déjà.
+    // Sert de repli pour lire son manifeste quand le dépôt distant ne le porte
+    // pas encore (PR de contenu ouverte, pas fusionnée).
+    plugin_name: Option<String>,
 ) -> Result<AdminDraft> {
     let bump_level = bump_level.unwrap_or_default();
     let version_description = version_description.unwrap_or_default();
@@ -2350,6 +2354,7 @@ pub async fn admin_prepare_add_plugin(
             &source_url,
             &bump_level,
             &version_description,
+            plugin_name.as_deref().unwrap_or_default(),
         )
     })
 }

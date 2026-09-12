@@ -244,17 +244,23 @@ export const api = {
     invoke<void>("set_taskbar_badge", { count }),
 
   // --- admin drafts (wizards) ---
+  /** Brouillon de la PR qui référence un plugin dans
+   *  `.claude-plugin/marketplace.json`. `pluginName` sert de repli : le dépôt du
+   *  plugin ne porte pas encore son manifeste tant que la PR de contenu n'est
+   *  pas fusionnée, et la copie installée est alors la seule source exacte. */
   adminPrepareAddPlugin: (
     marketplace: string,
     sourceUrl: string,
     bumpLevel?: string,
-    versionDescription?: string
+    versionDescription?: string,
+    pluginName?: string
   ) =>
     invoke<AdminDraft>("admin_prepare_add_plugin", {
       marketplace,
       sourceUrl,
       bumpLevel: bumpLevel ?? null,
       versionDescription: versionDescription ?? null,
+      pluginName: pluginName ?? null,
     }),
   adminPrepareBumpPlugin: (
     marketplace: string,
