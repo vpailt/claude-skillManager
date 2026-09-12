@@ -2540,7 +2540,10 @@ pub async fn list_duplicate_skills() -> Vec<local_scanner::DuplicateSkill> {
 /// sweep qui suit réécrit l'arbre entier de toute façon.
 #[tauri::command]
 pub async fn scan_local_skills() -> Marketplace {
-    local_scanner::build_local_only_marketplace()
+    let mp = local_scanner::build_local_only_marketplace();
+    let n: usize = mp.plugins.iter().map(|p| p.skills.len()).sum();
+    tracing::info!("scan_local_skills: {n} skill(s)");
+    mp
 }
 
 #[tauri::command]

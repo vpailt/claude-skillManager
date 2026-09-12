@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { forceRefresh } from "@/hooks/useRefresh";
 import { refreshLocalSkills } from "@/stores/app";
+import { useNotifications } from "@/stores/notifications";
 import {
   AlertTriangle,
   Archive,
@@ -244,7 +245,10 @@ export function DuplicateSkillDetail({
 
 interface ArchivedSkillDetailProps {
   skill: ArchivedSkill;
-  onRestored: () => void;
+  /** Reçoit le dossier où le skill vient d'atterrir sous `~/.claude/skills/` —
+   *  le nom peut différer de l'original (suffixe de collision), et c'est ce
+   *  chemin-là que la page sélectionne pour montrer où il est reparti. */
+  onRestored: (folder: string) => void;
 }
 
 export function ArchivedSkillDetail({
@@ -252,16 +256,25 @@ export function ArchivedSkillDetail({
   onRestored,
 }: ArchivedSkillDetailProps) {
   const qc = useQueryClient();
+  const push = useNotifications((s) => s.push);
   const restore = useMutation({
     mutationFn: () => api.restoreArchivedSkill(skill.folder),
-    onSuccess: () => {
+    onSuccess: async (dest) => {
       qc.invalidateQueries({ queryKey: ["archived-skills"] });
       qc.invalidateQueries({ queryKey: ["duplicate-skills"] });
-      // Le dossier est de retour dans `~/.claude/skills/` : le nœud « Local »
-      // doit le porter à l'instant où le filtre bascule, pas à la fin du sweep.
-      void refreshLocalSkills();
+      // Attendu, pas lancé : `onRestored` sélectionne la ligne restaurée, et
+      // elle n'existe dans le store qu'une fois ce scan appliqué. Le balayage
+      // derrière `forceRefresh` dirait la même chose, mais des secondes plus
+      // tard — c'est exactement ce qui faisait paraître la restauration sans
+      // effet.
+      await refreshLocalSkills();
       forceRefresh(qc);
-      onRestored();
+      push({
+        kind: "success",
+        title: "Compétence restaurée",
+        body: `${skill.name} — de retour dans ~/.claude/skills/.`,
+      });
+      onRestored(dest);
     },
   });
   const content = useQuery({

@@ -1931,7 +1931,8 @@ function DetailPanel({
   showDescription: boolean;
   onToggleDescription: () => void;
   onArchived: () => void;
-  onRestored: () => void;
+  /** Reçoit le dossier d'atterrissage sous `~/.claude/skills/`. */
+  onRestored: (folder: string) => void;
   onPushSkill: (entry: SkillEntry) => void;
   onDeleteSkill: (entry: SkillEntry) => void;
   onArchiveSkill: (entry: SkillEntry) => void;
@@ -2519,11 +2520,24 @@ export function SkillsPage() {
         showDescription={showDescription}
         onToggleDescription={() => setShowDescription((v) => !v)}
         onArchived={() => setSelection(null)}
-        onRestored={() => {
-          setSelection(null);
-          // Le skill vient de quitter les archives : rester sur ce filtre le
-          // ferait disparaître de l'écran sans dire où il est parti.
-          if (stateFilter === "archived") setStateFilter("local");
+        onRestored={(folder) => {
+          // Le skill vient de quitter les archives : rester sur le filtre qui
+          // ne montre que celles-ci le ferait disparaître de l'écran sans dire
+          // où il est parti. Sans condition sur le filtre courant — la
+          // sélection d'une archive survit à un changement de filtre, donc la
+          // restauration ne part pas forcément de « Archivés ».
+          setStateFilter("local");
+          // Et on le désigne. `refreshLocalSkills()` a été attendu avant cet
+          // appel, donc le store porte déjà la ligne à sélectionner ; sans
+          // cela, le panneau se vidait et rien ne disait que quelque chose
+          // avait bougé.
+          const local = useApp.getState().localOnly;
+          const found = local?.plugins.flatMap((plugin) =>
+            plugin.skills
+              .filter((sk) => sk.folder === folder)
+              .map((sk) => toEntry(sk, plugin, local.name))
+          )?.[0];
+          setSelection(found ? { kind: "skill", entry: found } : null);
         }}
         onPushSkill={pushSkill}
         onDeleteSkill={(entry) => setDeleteTarget(entry)}
