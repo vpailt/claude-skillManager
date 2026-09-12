@@ -116,6 +116,10 @@ SkillManager/
 ├── update/                    ← self-update scratch: the freshly downloaded binary,
 │                             then the replaced one until the next launch can
 │                             delete it (created on demand, swept at startup)
+├── staging/                   ← add-flow scratch: the source being added (copied
+│                             folder, or extracted zipball) until it is either
+│                             committed to its destination or abandoned; swept
+│                             at startup, so nothing outlives its session
 ├── config/
 │   ├── config.properties      ← token + polling + UI prefs (Java-style key=value)
 │   ├── logging.properties     ← logger config (enabled, level, max files)
@@ -392,6 +396,23 @@ falling through published a release whose entire diff was a version bump.
 
 - `frontmatter.rs` — minimal YAML-frontmatter parser. Only `name`/`description`/`type`
   are used. If you need richer YAML, weigh that against the binary-size constraint.
+  Two writers, and picking the wrong one destroys data: `update_frontmatter`
+  re-renders the whole block from the parsed map, so a nested `metadata:` mapping
+  comes back out as literal `metadata.version:` keys; `set_fields` edits the raw
+  lines and leaves everything it was not asked to change alone. Anything writing
+  into a file the user did not author goes through `set_fields`.
+- `add_flow.rs` — the one add path, for a plugin or a skill, from a repo URL, a
+  local folder, or nothing at all (a blank scaffold). It works in **two** steps,
+  and that is what lets it *propose* completing missing metadata rather than
+  refusing the source: `stage_*` materialises the source under
+  `<exe_dir>/staging/` and `inspect` reports what it found and what is missing;
+  `commit` writes the validated metadata into that copy and only then puts it in
+  place. The user's own folder is never touched — it is the staging copy that
+  gets completed. Required fields are `name`+`description` for a skill (a
+  `version` is offered, never demanded) and `name`+`version`+`description` for a
+  plugin, the same rule `admin::validate_plugin_manifest` applies at publish
+  time. A plugin always names a destination marketplace: the cache is keyed by
+  marketplace, and nothing else makes Claude Code load it.
 - `properties.rs` — minimal Java-style `.properties` parser/serializer used for
   `config.properties` and `logging.properties`. Scalars only; reach for JSON for lists.
 - `config.rs` — paths (`exe_dir`, `app_settings_dir`, `logs_dir`), the `Settings` /
@@ -562,6 +583,12 @@ falling through published a release whose entire diff was a version bump.
 - `local_scanner.rs::build_marketplaces_from_settings` — also surfaces "orphan"
   marketplaces (installed locally but missing from app settings) so the user can still
   see/act on them.
+- `local_scanner.rs::build_local_only_marketplace` — the `Local` pseudo-marketplace,
+  holding one group, `Sans plugin`, with every standalone user skill in it. It
+  used to mint one fake `Plugin` **per skill**, which claimed a tree depth that
+  does not exist (`mon-skill` as a plugin whose only content was `mon-skill`) and
+  made the search box list every local skill twice. Anything counting local
+  skills must count that group's `skills`, not the marketplace's `plugins`.
 - `commands/` — every `#[tauri::command]` handler lives here; register new ones in
   `lib.rs::tauri::generate_handler!`. Wrap meaningful side-effects in
   `tracing::info!` (install/uninstall, PR submission, settings mutations) so they
@@ -818,7 +845,8 @@ are controls, and a control has the opposite requirement to a seam.
   marketplace, Audit, Activity, Logs; Settings is a dialog). `pages/Admin.tsx` is
   the "Suivi marketplace" tab, on route `/tracking` (`/admin` redirects to it);
   it holds nothing but the PR tracking view. Every PR on a plugin is built from
-  the Changes tab, so `AdminWizards.tsx` is down to `AddSkillDialog`.
+  the Changes tab, and adding anything goes through `components/AddDialog.tsx`,
+  so the old `AdminWizards.tsx` is gone entirely.
   The sidebar groups these into **four** sections — Dashboard, En local, En
   ligne, Traçabilité — because the tabs answer four different questions and used
   to sit in one flat list where "Audit d'utilisation" and "Changements" read as
@@ -882,6 +910,18 @@ are controls, and a control has the opposite requirement to a seam.
   gate the button, never the detection. Ticks are seeded once per navigation, not on
   every refresh, and are frozen once drafts are prepared so the PR always matches the
   preview.
+  A group whose plugin is installed but **absent from its marketplace's registry**
+  (`installState: "local_only"`, which `merge_local_remote` only ever sets after
+  actually reading the registry — so never a false positive offline) publishes as
+  **two** PRs: the content on the plugin's own repo, the registry entry on the
+  marketplace's. They are not mergeable into one, and they do not wait for each
+  other — `prepare_add_plugin` pins `source.ref` to the plugin repo's default
+  branch, never to a commit of the content PR. Two things make that work: the
+  content draft takes an explicit `pluginRepo` (without it, a plugin the registry
+  does not know falls into the monorepo branch and its skills go to the
+  *marketplace's* repo), and the registry draft falls back to the installed
+  copy's manifest when the plugin repo does not carry one yet. The app never
+  creates a repo on the forge: the user creates it and pastes its URL here.
 - `components/FileDiff.tsx` — per-file diff + the split/unified toggle, used by the
   Changes tab. It is the only diff renderer left: the single-draft preview dialog
   went with the Admin "Proposer une amélioration" section.
