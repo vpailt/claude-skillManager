@@ -139,6 +139,101 @@ pub fn update_frontmatter(text: &str, updates: &Fields) -> String {
     out
 }
 
+/// Set top-level scalar fields **in place**, touching nothing else.
+///
+/// Unlike [`update_frontmatter`], which re-renders the whole block from the
+/// parsed map, this one edits the raw lines, so a nested `metadata:` mapping
+/// survives untouched. Round-tripping such a file through the parser flattens
+/// it into literal `metadata.version:` keys — valid YAML, different document,
+/// and the skill's own metadata quietly destroyed. The add flow writes
+/// user-supplied `name` / `description` / `version` into files the user did not
+/// author, so it cannot afford that.
+///
+/// A file with no frontmatter gets one prepended. An existing key is replaced
+/// where it stands (its indented block-scalar continuation going with it); a
+/// missing one is appended just before the closing `---`. Empty values are
+/// skipped rather than written as blanks.
+pub fn set_fields(text: &str, updates: &Fields) -> String {
+    let updates: Vec<(&String, &String)> = updates
+        .iter()
+        .filter(|(_, v)| !v.trim().is_empty())
+        .collect();
+    if updates.is_empty() {
+        return text.to_string();
+    }
+    // The parser joins an indented block back into one line, so a value
+    // carrying newlines has to go out as a block scalar to survive a round trip.
+    let render = |k: &str, v: &str| -> String {
+        if v.contains('\n') {
+            let mut out = format!("{k}: >\n");
+            for part in v.split('\n') {
+                out.push_str(&format!("  {}\n", part.trim()));
+            }
+            out
+        } else {
+            format!("{k}: {v}\n")
+        }
+    };
+
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let end = if lines.first().map(|l| l.trim()) == Some("---") {
+        lines
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)
+    } else {
+        None
+    };
+    let Some(end) = end else {
+        // No frontmatter at all — write one and keep the text as the body.
+        let mut out = String::from("---\n");
+        for (k, v) in &updates {
+            out.push_str(&render(k, v.trim()));
+        }
+        out.push_str("---\n");
+        out.push_str(text);
+        return out;
+    };
+
+    let mut out = String::from(lines[0]);
+    let mut written: Vec<&str> = Vec::new();
+    let mut skipping_block = false;
+    for line in &lines[1..end] {
+        let trimmed_eol = line.trim_end_matches(['\n', '\r']);
+        let indented = trimmed_eol
+            .chars()
+            .next()
+            .map(|c| c == ' ' || c == '\t')
+            .unwrap_or(false);
+        if indented {
+            // Continuation of the key just replaced — it goes with its owner.
+            if !skipping_block {
+                out.push_str(line);
+            }
+            continue;
+        }
+        skipping_block = false;
+        let key = trimmed_eol.split(':').next().unwrap_or("").trim();
+        if let Some((k, v)) = updates.iter().find(|(k, _)| k.as_str() == key) {
+            out.push_str(&render(k, v.trim()));
+            written.push(k.as_str());
+            skipping_block = true;
+            continue;
+        }
+        out.push_str(line);
+    }
+    for (k, v) in &updates {
+        if !written.contains(&k.as_str()) {
+            out.push_str(&render(k, v.trim()));
+        }
+    }
+    out.push_str(lines[end]);
+    out.push_str(&lines[end + 1..].concat());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +263,38 @@ mod tests {
             f.get("metadata.last_updated").map(String::as_str),
             Some("2026-04-08")
         );
+    }
+
+    #[test]
+    fn set_fields_preserves_nested_mapping() {
+        let src = "---\nname: foo\nmetadata:\n  version: \"0.5.1\"\n---\nbody\n";
+        let mut up = Fields::new();
+        up.insert("description".into(), "une description".into());
+        let out = set_fields(src, &up);
+        assert!(out.contains("metadata:\n  version: \"0.5.1\"\n"), "{out}");
+        assert!(out.contains("description: une description\n"), "{out}");
+        assert!(out.trim_end().ends_with("body"), "{out}");
+    }
+
+    #[test]
+    fn set_fields_replaces_block_scalar_in_place() {
+        let src = "---\ndescription: >\n  ancienne\n  description\nname: bar\n---\ncorps\n";
+        let mut up = Fields::new();
+        up.insert("description".into(), "nouvelle".into());
+        let out = set_fields(src, &up);
+        assert!(out.contains("description: nouvelle\n"), "{out}");
+        assert!(!out.contains("ancienne"), "{out}");
+        assert!(out.contains("name: bar\n"), "{out}");
+    }
+
+    #[test]
+    fn set_fields_creates_frontmatter_when_absent() {
+        let mut up = Fields::new();
+        up.insert("name".into(), "foo".into());
+        let out = set_fields("# Titre\n", &up);
+        let (f, body) = parse_frontmatter(&out);
+        assert_eq!(f.get("name").map(String::as_str), Some("foo"));
+        assert_eq!(body.trim(), "# Titre");
     }
 
     #[test]

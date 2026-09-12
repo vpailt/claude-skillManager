@@ -1,6 +1,9 @@
 // Typed wrappers around `invoke()` so we never write magic command names twice.
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AddCommitArgs,
+  AddInspection,
+  AddOutcome,
   AddSkillArgs,
   AdminDraft,
   AppUpdateInfo,
@@ -23,6 +26,7 @@ import type {
   RefreshMode,
   RefreshResult,
   ReleaseNote,
+  StageSourceArgs,
   RemoteSkillInfo,
   RepoOutcome,
   Settings,
@@ -334,6 +338,19 @@ export const api = {
   skillSyncList: () => invoke<SkillSyncState[]>("skill_sync_list"),
   addSkillToPlugin: (args: AddSkillArgs) =>
     invoke<string>("add_skill_to_plugin", { args }),
+
+  // --- parcours d'ajout unifié (plugin / skill) ---
+  /** Matérialise une source (dossier local ou dépôt distant) dans le dossier de
+   *  préparation et rend ce qu'on y a trouvé. Rien n'est encore écrit dans
+   *  `~/.claude`, et le dossier d'origine n'est jamais modifié. */
+  addStageSource: (args: StageSourceArgs) =>
+    invoke<AddInspection>("add_stage_source", { args }),
+  /** Écrit les métadonnées validées dans la préparation et la pose à
+   *  destination. */
+  addCommit: (args: AddCommitArgs) => invoke<AddOutcome>("add_commit", { args }),
+  /** Abandonne une préparation (dialogue fermé, source remplacée). */
+  addDiscard: (stagingDir: string) =>
+    invoke<void>("add_discard", { stagingDir }),
 
   /** Delete a skill folder from disk. Resolves to `true` when the removal is
    *  something to push (a plugin skill the remote still holds), `false` for a

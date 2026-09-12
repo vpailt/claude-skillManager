@@ -3,6 +3,7 @@
 //! Every module here is a 1:1 port of one Python file under src/. The split
 //! mirrors that layout so cross-module refactors line up with the legacy code.
 
+pub mod add_flow;
 pub mod admin;
 pub mod admin_drafts;
 pub mod app_uninstaller;
@@ -69,6 +70,10 @@ pub fn run() {
     // locked while its process ran, and this launch is the first that can
     // delete it.
     app_updater::cleanup_stale();
+    // Same idea for <exe_dir>/staging: a dialogue closed mid-way, or a session
+    // that died between staging a source and committing it, leaves a copy there
+    // that nothing will ever claim.
+    add_flow::sweep_staging();
 
     tauri::Builder::default()
         // Single-instance must be registered first so the callback fires before
@@ -251,6 +256,9 @@ pub fn run() {
             skill_mark_synced,
             skill_sync_list,
             add_skill_to_plugin,
+            add_stage_source,
+            add_commit,
+            add_discard,
             usage_audit,
             usage_export_xlsx,
             app_check_update,

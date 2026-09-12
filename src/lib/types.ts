@@ -454,6 +454,59 @@ export interface AddSkillArgs {
   sourceFolder?: string;
 }
 
+// --- Parcours d'ajout unifié (mirrors `add_flow.rs`) ---
+
+export type AddKind = "skill" | "plugin";
+
+/** Un champ de métadonnée pré-rempli depuis la source. `required` vide bloque
+ *  l'ajout ; le reste n'est qu'une suggestion (la `version` d'un skill). */
+export interface MetaField {
+  key: string;
+  label: string;
+  value: string;
+  required: boolean;
+  multiline: boolean;
+}
+
+export interface AddInspection {
+  kind: AddKind;
+  /** À repasser tel quel à `addCommit` / `addDiscard`. */
+  stagingDir: string;
+  suggestedName: string;
+  sourceLabel: string;
+  fields: MetaField[];
+  problems: string[];
+  fileCount: number;
+}
+
+/** Où l'objet ajouté est posé. Un plugin a toujours une marketplace : le cache
+ *  est rangé par marketplace, et c'est ce qui le rend visible à Claude Code. */
+export type AddTarget =
+  | { kind: "userSkills" }
+  | { kind: "plugin"; marketplace: string; plugin: string; installPath: string }
+  | { kind: "marketplace"; marketplace: string };
+
+export interface AddOutcome {
+  path: string;
+  name: string;
+  marketplace: string;
+  plugin: string;
+}
+
+export interface StageSourceArgs {
+  kind: AddKind;
+  origin: "local" | "remote";
+  path?: string;
+  url?: string;
+}
+
+export interface AddCommitArgs {
+  kind: AddKind;
+  stagingDir: string;
+  fields: Record<string, string>;
+  target: AddTarget;
+}
+
 export interface LocalSkill {
   name: string;
   folder: string;

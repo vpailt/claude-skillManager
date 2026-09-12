@@ -210,7 +210,7 @@ pub fn create_skill_in_plugin(
 
 /// Recursively copy `src` into `dest`, skipping [`crate::admin::DEFAULT_SKIP`]
 /// path segments so the copied set matches what an eventual upload would ship.
-fn copy_skill_tree(src: &Path, dest: &Path) -> crate::error::Result<()> {
+pub fn copy_skill_tree(src: &Path, dest: &Path) -> crate::error::Result<()> {
     for entry in walkdir::WalkDir::new(src).sort_by_file_name() {
         let Ok(entry) = entry else { continue };
         let rel = match entry.path().strip_prefix(src) {

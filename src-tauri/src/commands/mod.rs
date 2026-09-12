@@ -4,6 +4,7 @@
 //! the heavy lifting stays in installer/marketplace_*/admin/etc. so it can
 //! be unit-tested without spinning up Tauri.
 
+use crate::add_flow::{self, AddInspection, AddKind, AddOutcome, AddTarget};
 use crate::admin::{self, FileChange, UploadResult};
 use crate::admin_drafts::{
     self, AdminDraft, BulkUploadArgs, BumpSuggestion, LocalSkill, RemoteSkillInfo, UploadSkillArgs,
@@ -2865,6 +2866,114 @@ pub async fn add_skill_to_plugin(
     // Flag it as "new, not yet pushed" so the badge lights up immediately.
     watch.mark_new(&app, &dest.to_string_lossy());
     Ok(dest)
+}
+
+// ---------- Parcours d'ajout unifié (plugin / skill) ----------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageSourceArgs {
+    pub kind: AddKind,
+    /// `"local"` (un dossier du disque) ou `"remote"` (une URL de dépôt).
+    pub origin: String,
+    /// Dossier source, pour `local` — sélection ou glisser-déposer, même chemin
+    /// de code.
+    #[serde(default)]
+    pub path: String,
+    /// URL du dépôt, pour `remote`. La forge s'en déduit, jamais d'un sélecteur.
+    #[serde(default)]
+    pub url: String,
+}
+
+/// Matérialise une source dans le dossier de préparation et rend ce qu'on y a
+/// trouvé : nom proposé, métadonnées lues, ce qui manque. Rien n'est encore
+/// écrit dans `~/.claude`, et le dossier d'origine n'est jamais modifié.
+#[tauri::command]
+pub async fn add_stage_source(args: StageSourceArgs) -> Result<AddInspection> {
+    if args.origin == "local" {
+        let path = args.path.trim();
+        if path.is_empty() {
+            return Err(crate::error::Error::Invalid(
+                "Aucun dossier source fourni.".into(),
+            ));
+        }
+        let path = PathBuf::from(path);
+        return tokio::task::spawn_blocking(move || add_flow::stage_local(args.kind, &path))
+            .await
+            .map_err(|e| crate::error::Error::Other(format!("join: {e}")))?;
+    }
+
+    let url = args.url.trim().to_string();
+    let source = add_flow::parse_source_url(&url).ok_or_else(|| {
+        crate::error::Error::Invalid(format!("Impossible d'extraire owner/repo depuis : {url}"))
+    })?;
+    let s = config::load_settings();
+    // La forge vient de l'URL, comme pour l'ajout d'une marketplace. Un hôte
+    // inconnu n'a ni token ni instance enregistrée : le dire ici, plutôt que de
+    // laisser le téléchargement finir en 404.
+    let client = client_for_source_url(&s, &url, "").ok_or_else(|| {
+        crate::error::Error::Invalid(format!(
+            "Hôte inconnu : {}. Enregistrez cette instance Gitea dans \
+             Paramètres → Connexions, ou utilisez une URL github.com.",
+            host_of(&url)
+        ))
+    })??;
+    tokio::task::spawn_blocking(move || {
+        let r#ref = if source.r#ref.is_empty() {
+            client.get_default_branch(&source.repo)?
+        } else {
+            source.r#ref.clone()
+        };
+        add_flow::stage_remote(
+            args.kind,
+            &client,
+            &source.repo,
+            &r#ref,
+            &source.subpath,
+        )
+    })
+    .await
+    .map_err(|e| crate::error::Error::Other(format!("join: {e}")))?
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddCommitArgs {
+    pub kind: AddKind,
+    pub staging_dir: String,
+    /// Les métadonnées telles que validées dans le dialogue.
+    pub fields: std::collections::BTreeMap<String, String>,
+    pub target: AddTarget,
+}
+
+/// Écrit les métadonnées dans la préparation et la pose à destination. Un skill
+/// ajouté dans un plugin est aussitôt marqué « nouveau » : il porte son badge
+/// et se retrouve dans l'onglet Changements, comme tout ce qui n'est pas encore
+/// chez la forge.
+#[tauri::command]
+pub async fn add_commit(
+    app: AppHandle,
+    watch: State<'_, SkillWatch>,
+    args: AddCommitArgs,
+) -> Result<AddOutcome> {
+    let kind = args.kind;
+    let is_plugin_skill = matches!(
+        (kind, &args.target),
+        (AddKind::Skill, AddTarget::Plugin { .. })
+    );
+    let outcome =
+        add_flow::commit(kind, &args.staging_dir, &args.fields, &args.target)?;
+    if is_plugin_skill {
+        watch.mark_new(&app, &outcome.path);
+    }
+    Ok(outcome)
+}
+
+/// Abandonne une préparation : dialogue fermé, ou source remplacée par une autre.
+#[tauri::command]
+pub async fn add_discard(staging_dir: String) -> Result<()> {
+    add_flow::discard(&staging_dir);
+    Ok(())
 }
 
 /// Re-seed the UI's sync map from the watcher's in-memory state (no rescan).

@@ -219,6 +219,24 @@ fn install_from_directory(
     Ok(install_path)
 }
 
+/// Install a plugin from a directory already prepared on disk (the add flow's
+/// staging copy) into the cache, under `marketplace`, and register it in
+/// `installed_plugins.json` like any other install — which is what makes Claude
+/// Code load it. The source is copied verbatim: filtering `.git` & co. is the
+/// staging step's job, done once, before the metadata are completed.
+pub fn install_plugin_from_directory(
+    source_dir: &Path,
+    marketplace_name: &str,
+    plugin_name: &str,
+    version: &str,
+) -> Result<PathBuf> {
+    tracing::info!(
+        "install_plugin_from_directory: {plugin_name} v{version} (marketplace={marketplace_name}) from {}",
+        source_dir.display()
+    );
+    install_from_directory(source_dir, marketplace_name, plugin_name, version)
+}
+
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {

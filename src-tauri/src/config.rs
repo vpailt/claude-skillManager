@@ -116,6 +116,15 @@ pub fn update_dir() -> PathBuf {
     dir
 }
 
+/// `<exe_dir>/staging` — espace de travail du parcours d'ajout (`add_flow`) :
+/// la source est copiée ici, complétée ici, et posée à destination depuis ici.
+/// Balayé au démarrage, une préparation ne survivant pas à sa session.
+pub fn staging_dir() -> PathBuf {
+    let dir = exe_dir().join("staging");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
 pub fn config_properties_file() -> PathBuf {
     app_settings_dir().join("config.properties")
 }

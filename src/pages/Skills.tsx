@@ -76,6 +76,7 @@ import {
 } from "@/components/DuplicateSkillsPanel";
 import { ArchivedSkillsPanel } from "@/components/ArchivedSkillsPanel";
 import { AddMarketplaceDialog } from "@/components/AddMarketplaceDialog";
+import { AddDialog, type AddDialogTarget } from "@/components/AddDialog";
 import { AddSkillDialog } from "@/components/AdminWizards";
 import { BulkActionBar } from "@/components/BulkActionBar";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -95,6 +96,7 @@ import {
   useSkillSync,
 } from "@/stores/skillSync";
 import type {
+  AddKind,
   ArchivedSkill,
   DuplicateSkill,
   InstallState,
@@ -1808,6 +1810,12 @@ export function SkillsPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [showDescription, setShowDescription] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  // Le parcours d'ajout unifie : le type est ce qui l'ouvre, la destination
+  // est pre-remplie quand l'appelant la connait (menus « … » de l'arbre).
+  const [addFlow, setAddFlow] = useState<{
+    kind: AddKind;
+    preset?: AddDialogTarget;
+  } | null>(null);
   const [addSkillFor, setAddSkillFor] = useState<Plugin | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SkillEntry | null>(null);
   const setSyncOne = useSkillSync((s) => s.setOne);
@@ -2054,11 +2062,11 @@ export function SkillsPage() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>Ajouter…</DropdownMenuLabel>
-            <DropdownMenuItem disabled>
+            <DropdownMenuItem onSelect={() => setAddFlow({ kind: "plugin" })}>
               <Package className="h-3.5 w-3.5" />
               Un plugin
             </DropdownMenuItem>
-            <DropdownMenuItem disabled>
+            <DropdownMenuItem onSelect={() => setAddFlow({ kind: "skill" })}>
               <Sparkles className="h-3.5 w-3.5" />
               Un skill
             </DropdownMenuItem>
@@ -2197,6 +2205,15 @@ export function SkillsPage() {
         defaultLeftSize={32}
       />
       <AddMarketplaceDialog open={addOpen} onOpenChange={setAddOpen} />
+      {addFlow && (
+        <AddDialog
+          open
+          onOpenChange={(v) => !v && setAddFlow(null)}
+          kind={addFlow.kind}
+          marketplaces={list}
+          preset={addFlow.preset}
+        />
+      )}
 
       <Dialog
         open={deleteTarget !== null}
