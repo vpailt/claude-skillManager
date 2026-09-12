@@ -2035,16 +2035,40 @@ export function SkillsPage() {
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
           Marketplaces · plugins · skills
         </h2>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 shrink-0 px-2 text-xs"
-          onClick={() => setAddOpen(true)}
-          title="Ajouter un marketplace depuis une URL Git"
-        >
-          <Plus className="mr-1 h-3 w-3" />
-          Ajouter une Marketplace
-        </Button>
+        {/* Un seul point d'entrée pour les trois objets du modèle. La branche
+            « marketplace » reste exactement l'ancien bouton ; les deux autres
+            ouvrent le parcours d'ajout unifié. Menu Radix (donc porté hors du
+            panneau) plutôt qu'une première étape de dialogue : le choix de
+            l'objet n'a pas besoin d'une fenêtre. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 shrink-0 px-2 text-xs"
+              title="Ajouter un plugin, un skill ou un marketplace"
+            >
+              <Plus className="mr-1 h-3 w-3" />
+              Ajouter
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>Ajouter…</DropdownMenuLabel>
+            <DropdownMenuItem disabled>
+              <Package className="h-3.5 w-3.5" />
+              Un plugin
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled>
+              <Sparkles className="h-3.5 w-3.5" />
+              Un skill
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => setAddOpen(true)}>
+              <Globe className="h-3.5 w-3.5" />
+              Un marketplace
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <div className="space-y-2 border-b p-3">
