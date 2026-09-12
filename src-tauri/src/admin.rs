@@ -597,6 +597,39 @@ pub fn validate_skill_frontmatter(fields: &std::collections::BTreeMap<String, St
     problems
 }
 
+/// Les champs qu'un `manifest.json` de plugin doit porter (Q2) : `name` et
+/// `version` parce que le code en dépend déjà — `prepare_add_plugin` refuse un
+/// manifeste sans version, et l'installation range le cache par version —,
+/// `description` parce que c'est le texte que la marketplace affichera.
+///
+/// Le pendant de [`validate_skill_frontmatter`], et la même règle des deux
+/// côtés : c'est le parcours d'ajout qui l'applique en premier, pour *proposer*
+/// la complétion au lieu d'échouer à la publication.
+pub fn validate_plugin_manifest(obj: &serde_json::Map<String, Value>) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (key, why) in [
+        ("name", "c'est lui qui identifie le plugin dans la marketplace"),
+        (
+            "version",
+            "sans elle, le plugin ne peut être ni installé ni publié",
+        ),
+        (
+            "description",
+            "c'est le texte que la marketplace affichera",
+        ),
+    ] {
+        let empty = obj
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+        if empty {
+            problems.push(format!("Le manifeste n'a pas de `{key}` — {why}."));
+        }
+    }
+    problems
+}
+
 pub fn unified_diff(old: &str, new: &str, path: &str) -> String {
     use similar::TextDiff;
     let label = if path.is_empty() { "file" } else { path };

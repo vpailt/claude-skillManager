@@ -435,39 +435,54 @@ export function AddDialog({
                         <li key={p}>{p}</li>
                       ))}
                     </ul>
+                    <div className="mt-1.5 opacity-80">
+                      Les valeurs ci-dessous seront écrites dans{" "}
+                      <code>
+                        {kind === "plugin" ? "manifest.json" : "SKILL.md"}
+                      </code>{" "}
+                      à la validation — dans la copie ajoutée, jamais dans la
+                      source.
+                    </div>
                   </div>
                 )}
 
-                {inspection.fields.map((f) =>
-                  f.multiline ? (
+                {inspection.fields.map((f) => {
+                  // Un champ requis vide n'est pas une erreur de l'utilisateur :
+                  // c'est ce que la source ne portait pas, et ce que ce
+                  // formulaire est là pour lui faire écrire.
+                  const empty = !(values[f.key] ?? "").trim();
+                  const blocking = f.required && empty;
+                  return (
                     <div key={f.key}>
-                      <label className="mb-1 block text-xs text-muted-foreground">
-                        {f.label}
-                        {f.required && " *"}
+                      <label className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>{f.label}</span>
+                        {f.required ? (
+                          <span className="text-destructive">requis</span>
+                        ) : (
+                          <span className="opacity-70">suggéré</span>
+                        )}
                       </label>
-                      <Textarea
-                        rows={2}
-                        value={values[f.key] ?? ""}
-                        onChange={(e) =>
-                          setValues((v) => ({ ...v, [f.key]: e.target.value }))
-                        }
-                      />
+                      {f.multiline ? (
+                        <Textarea
+                          rows={2}
+                          className={blocking ? "border-destructive/60" : undefined}
+                          value={values[f.key] ?? ""}
+                          onChange={(e) =>
+                            setValues((v) => ({ ...v, [f.key]: e.target.value }))
+                          }
+                        />
+                      ) : (
+                        <Input
+                          className={blocking ? "border-destructive/60" : undefined}
+                          value={values[f.key] ?? ""}
+                          onChange={(e) =>
+                            setValues((v) => ({ ...v, [f.key]: e.target.value }))
+                          }
+                        />
+                      )}
                     </div>
-                  ) : (
-                    <div key={f.key}>
-                      <label className="mb-1 block text-xs text-muted-foreground">
-                        {f.label}
-                        {f.required && " *"}
-                      </label>
-                      <Input
-                        value={values[f.key] ?? ""}
-                        onChange={(e) =>
-                          setValues((v) => ({ ...v, [f.key]: e.target.value }))
-                        }
-                      />
-                    </div>
-                  )
-                )}
+                  );
+                })}
 
                 <div>
                   <label className="mb-1 block text-xs text-muted-foreground">
@@ -526,7 +541,15 @@ export function AddDialog({
           </div>
         </ScrollFade>
 
-        <DialogFooter>
+        <DialogFooter className="items-center gap-2">
+          {/* Un bouton grisé sans raison est une impasse : dire ce qui manque. */}
+          {inspection && !canSubmit && !commit.isPending && (
+            <span className="mr-auto text-xs text-muted-foreground">
+              {missing.length > 0
+                ? `À compléter : ${missing.map((f) => f.label).join(", ")}`
+                : "Choisissez la marketplace de destination."}
+            </span>
+          )}
           <DialogClose asChild>
             <Button variant="outline">Annuler</Button>
           </DialogClose>

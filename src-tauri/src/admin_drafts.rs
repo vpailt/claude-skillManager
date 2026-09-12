@@ -321,13 +321,23 @@ pub fn prepare_add_plugin(
                 .unwrap_or("plugin")
                 .to_string()
         });
+    // Le manifeste *distant* est ce qui fait foi ici : compléter la copie locale
+    // ne suffit pas, il faut que le manifeste corrigé soit parti sur le dépôt du
+    // plugin (la PR de contenu). Dire laquelle des deux choses manque, plutôt
+    // que constater l'absence.
     let version = manifest_obj
         .get("version")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
-        .ok_or_else(|| Error::Invalid(format!("manifest.json in {plugin_repo} has no version.")))?;
+        .ok_or_else(|| {
+            Error::Invalid(format!(
+                "Le manifest.json de {plugin_repo} n'a pas de `version` : \
+                 la marketplace ne peut pas référencer ce plugin. Complétez-le \
+                 et poussez-le sur le dépôt du plugin avant de l'enregistrer."
+            ))
+        })?;
     let description = manifest_obj
         .get("description")
         .and_then(|v| v.as_str())

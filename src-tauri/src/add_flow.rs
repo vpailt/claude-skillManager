@@ -468,25 +468,18 @@ fn plugin_fields(root: &Path, folder_name: &str) -> (Vec<MetaField>, Vec<String>
 
     let mut problems = Vec::new();
     if manifest.is_none() {
+        // Inutile d'énumérer les trois champs derrière : sans fichier, ils
+        // manquent tous, et les champs du dialogue le disent déjà.
         problems.push(
             "Cette source n'a pas de `manifest.json` — il sera créé avec les champs \
              ci-dessous."
                 .into(),
         );
-    }
-    if version.is_empty() {
-        problems.push(
-            "Le manifeste n'a pas de `version` — sans elle, le plugin ne peut être ni \
-             installé ni publié."
-                .into(),
-        );
-    }
-    if description.is_empty() {
-        problems.push(
-            "Le manifeste n'a pas de `description` — c'est le texte que la marketplace \
-             affichera."
-                .into(),
-        );
+    } else {
+        // Même règle qu'à la publication, appliquée ici en premier : c'est tout
+        // l'intérêt de l'étape, proposer la complétion plutôt que laisser
+        // `prepare_add_plugin` échouer une fois le plugin déjà installé.
+        problems.extend(crate::admin::validate_plugin_manifest(&obj));
     }
     (
         vec![
