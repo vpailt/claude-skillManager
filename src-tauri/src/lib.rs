@@ -255,7 +255,6 @@ pub fn run() {
             restore_archived_skill,
             skill_mark_synced,
             skill_sync_list,
-            add_skill_to_plugin,
             add_stage_source,
             add_commit,
             add_discard,

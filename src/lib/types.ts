@@ -444,16 +444,6 @@ export interface BulkUploadArgs {
 }
 
 /** Args for `add_skill_to_plugin` — scaffold a blank skill or copy one in. */
-export interface AddSkillArgs {
-  plugin: Plugin;
-  mode: "blank" | "copy";
-  name: string;
-  description?: string;
-  body?: string;
-  /** Source folder to copy, for mode === "copy". */
-  sourceFolder?: string;
-}
-
 // --- Parcours d'ajout unifié (mirrors `add_flow.rs`) ---
 
 export type AddKind = "skill" | "plugin";
@@ -495,9 +485,13 @@ export interface AddOutcome {
 
 export interface StageSourceArgs {
   kind: AddKind;
-  origin: "local" | "remote";
+  origin: "local" | "remote" | "blank";
   path?: string;
   url?: string;
+  /** Nom de l'ébauche, pour `blank`. */
+  name?: string;
+  /** Corps du SKILL.md de l'ébauche, pour `blank`. Facultatif. */
+  body?: string;
 }
 
 export interface AddCommitArgs {

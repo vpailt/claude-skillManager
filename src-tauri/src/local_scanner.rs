@@ -153,26 +153,24 @@ pub fn resolve_plugin_root(install_path: &Path) -> PathBuf {
     install_path.to_path_buf()
 }
 
-/// How [`create_skill_in_plugin`] fills the new skill folder.
-pub enum NewSkillMode {
-    /// Scaffold a fresh SKILL.md from a description + optional body.
-    Blank { description: String, body: String },
-    /// Copy an existing local skill folder's contents in wholesale.
-    Copy { source: PathBuf },
-}
-
 /// Create a new skill folder inside an installed plugin's cache directory, under
-/// `<plugin_root>/skills/<slug>/`, and return the created folder.
+/// `<plugin_root>/skills/<slug>/`, by copying `source` into it, and return the
+/// created folder.
 ///
-/// Errors if the target already exists (never overwrites) or, in `Copy` mode, if
-/// the source isn't a directory or has no SKILL.md. The new folder is not yet on
-/// the plugin's remote repo, so the caller flags it dirty via
+/// Errors if the target already exists (never overwrites), or if the source
+/// isn't a directory or has no SKILL.md. The new folder is not yet on the
+/// plugin's remote repo, so the caller flags it dirty via
 /// `SkillWatch::mark_new` — it then shows the "modifié" badge and can be pushed
 /// (individually, or via the bulk flow).
+///
+/// It used to also scaffold a blank skill. That branch is gone with the dialog
+/// that fed it: creating from scratch is now one of the add flow's three
+/// provenances (`add_flow::stage_blank`), which lands here through the same
+/// copy as an imported folder — one code path, not two.
 pub fn create_skill_in_plugin(
     install_path: &Path,
     skill_name: &str,
-    mode: NewSkillMode,
+    source: PathBuf,
 ) -> crate::error::Result<PathBuf> {
     use crate::error::Error;
     let name = skill_name.trim();
@@ -190,27 +188,18 @@ pub fn create_skill_in_plugin(
             "A skill folder named '{slug}' already exists in this plugin."
         )));
     }
-    match mode {
-        NewSkillMode::Blank { description, body } => {
-            fs::create_dir_all(&dest)?;
-            let md = crate::admin::build_skill_md(name, &description, &body);
-            fs::write(dest.join("SKILL.md"), md)?;
-        }
-        NewSkillMode::Copy { source } => {
-            if !source.is_dir() {
-                return Err(Error::NotFound(format!(
-                    "Source skill folder not found: {}",
-                    source.display()
-                )));
-            }
-            if !source.join("SKILL.md").exists() && !source.join("skill.md").exists() {
-                return Err(Error::Invalid(
-                    "The source folder has no SKILL.md — it is not a skill.".into(),
-                ));
-            }
-            copy_skill_tree(&source, &dest)?;
-        }
+    if !source.is_dir() {
+        return Err(Error::NotFound(format!(
+            "Source skill folder not found: {}",
+            source.display()
+        )));
     }
+    if !source.join("SKILL.md").exists() && !source.join("skill.md").exists() {
+        return Err(Error::Invalid(
+            "The source folder has no SKILL.md — it is not a skill.".into(),
+        ));
+    }
+    copy_skill_tree(&source, &dest)?;
     tracing::info!("create_skill_in_plugin: created {}", dest.display());
     Ok(dest)
 }

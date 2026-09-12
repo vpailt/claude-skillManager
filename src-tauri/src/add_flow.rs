@@ -248,6 +248,41 @@ pub fn stage_local(kind: AddKind, source: &Path) -> Result<AddInspection> {
     inspect(kind, &content, &source.to_string_lossy())
 }
 
+/// Fabrique une ébauche dans la préparation : un `SKILL.md` (nom + corps
+/// optionnel) ou un squelette de plugin (`manifest.json` + `skills/`). C'est la
+/// troisième provenance, celle qui n'en est pas une — elle emprunte le même
+/// chemin que les deux autres, donc la complétion des métadonnées et le choix
+/// de la destination sont les mêmes.
+pub fn stage_blank(kind: AddKind, name: &str, body: &str) -> Result<AddInspection> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::Invalid("Le nom est requis.".into()));
+    }
+    let slug = crate::admin::safe_slug(name);
+    if slug.is_empty() {
+        return Err(Error::Invalid(format!("Nom invalide : {name:?}")));
+    }
+    let dir = new_staging_dir()?;
+    let content = dir.join("content").join(&slug);
+    fs::create_dir_all(&content)?;
+    match kind {
+        AddKind::Skill => {
+            fs::write(
+                content.join("SKILL.md"),
+                crate::admin::build_skill_md(name, "", body),
+            )?;
+        }
+        AddKind::Plugin => {
+            fs::create_dir_all(content.join("skills"))?;
+            crate::installer::atomic_write_json(
+                &content.join("manifest.json"),
+                &serde_json::json!({ "name": name, "version": "0.1.0", "description": "" }),
+            )?;
+        }
+    }
+    inspect(kind, &content, "nouveau (vierge)")
+}
+
 /// Télécharge le zipball d'un dépôt (au sous-chemin donné), l'extrait dans la
 /// préparation, puis l'inspecte. Pas de `git` : c'est l'archive de l'API REST,
 /// comme pour toute installation.
@@ -582,7 +617,7 @@ pub fn commit(
             let dest = crate::local_scanner::create_skill_in_plugin(
                 Path::new(install_path),
                 &name,
-                crate::local_scanner::NewSkillMode::Copy { source: dir },
+                dir,
             )?;
             tracing::info!(
                 "add_flow: skill « {}» ajouté au plugin {}@{} ({})",

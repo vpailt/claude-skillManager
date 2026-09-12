@@ -4,7 +4,6 @@ import type {
   AddCommitArgs,
   AddInspection,
   AddOutcome,
-  AddSkillArgs,
   AdminDraft,
   AppUpdateInfo,
   ArchivedSkill,
@@ -336,8 +335,6 @@ export const api = {
   /** Re-seed the sync map from the watcher's in-memory state. The statuses are
    *  settled by the refresh sweep in Rust, not by this call. */
   skillSyncList: () => invoke<SkillSyncState[]>("skill_sync_list"),
-  addSkillToPlugin: (args: AddSkillArgs) =>
-    invoke<string>("add_skill_to_plugin", { args }),
 
   // --- parcours d'ajout unifié (plugin / skill) ---
   /** Matérialise une source (dossier local ou dépôt distant) dans le dossier de

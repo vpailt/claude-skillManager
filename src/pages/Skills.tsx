@@ -77,7 +77,6 @@ import {
 import { ArchivedSkillsPanel } from "@/components/ArchivedSkillsPanel";
 import { AddMarketplaceDialog } from "@/components/AddMarketplaceDialog";
 import { AddDialog, type AddDialogTarget } from "@/components/AddDialog";
-import { AddSkillDialog } from "@/components/AdminWizards";
 import { BulkActionBar } from "@/components/BulkActionBar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useInstallMarketplace } from "@/hooks/useInstallMarketplace";
@@ -789,7 +788,13 @@ function MetaItem({ label, value }: { label: string; value: string }) {
 
 // ---------- Detail: marketplace + plugin (mirrors the Plugins tab) ----------
 
-function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
+function MarketplaceDetail({
+  marketplace,
+  onAddPlugin,
+}: {
+  marketplace: Marketplace;
+  onAddPlugin: (m: Marketplace) => void;
+}) {
   const install = useInstallMarketplace();
   const qc = useQueryClient();
   const notify = useNotifications((s) => s.push);
@@ -968,6 +973,18 @@ function MarketplaceDetail({ marketplace }: { marketplace: Marketplace }) {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuLabel>{marketplace.name}</DropdownMenuLabel>
+          {/* Offerte seulement si la marketplace est installee : sans cache
+              local, il n'y a nulle part ou poser le plugin. Les droits de push
+              ne gouvernent que la publication, jamais la creation locale. */}
+          {marketplace.installed && marketplace.sourceKind !== "local" && (
+            <>
+              <DropdownMenuItem onSelect={() => onAddPlugin(marketplace)}>
+                <Plus className="h-4 w-4" />
+                Ajouter un plugin
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
           {marketplace.installed && (
             <DropdownMenuItem
               onSelect={() => setConfirmMode("uninstall")}
@@ -1671,6 +1688,7 @@ function DetailPanel({
   onPushSkill,
   onDeleteSkill,
   onAddSkill,
+  onAddPlugin,
 }: {
   selection: Selection;
   localName: string;
@@ -1681,6 +1699,7 @@ function DetailPanel({
   onPushSkill: (entry: SkillEntry) => void;
   onDeleteSkill: (entry: SkillEntry) => void;
   onAddSkill: (p: Plugin) => void;
+  onAddPlugin: (m: Marketplace) => void;
 }) {
   const findPlugin = useApp((s) => s.findPlugin);
   const findMarketplace = useApp((s) => s.findMarketplace);
@@ -1741,7 +1760,7 @@ function DetailPanel({
   if (selection.kind === "marketplace") {
     const m = findMarketplace(selection.marketplace);
     if (!m) return null;
-    return <MarketplaceDetail marketplace={m} />;
+    return <MarketplaceDetail marketplace={m} onAddPlugin={onAddPlugin} />;
   }
 
   if (selection.kind === "plugin") {
@@ -1818,7 +1837,6 @@ export function SkillsPage() {
     kind: AddKind;
     preset?: AddDialogTarget;
   } | null>(null);
-  const [addSkillFor, setAddSkillFor] = useState<Plugin | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SkillEntry | null>(null);
   const setSyncOne = useSkillSync((s) => s.setOne);
   // A skill still flagged `new` has no counterpart upstream, so deleting it
@@ -2189,7 +2207,26 @@ export function SkillsPage() {
         onRestored={() => setSelection(null)}
         onPushSkill={pushSkill}
         onDeleteSkill={(entry) => setDeleteTarget(entry)}
-        onAddSkill={(p) => setAddSkillFor(p)}
+        onAddSkill={(p) =>
+          // Depuis le groupe « Sans plugin », il n'y a pas de plugin de
+          // destination a pre-remplir : le skill va dans ~/.claude/skills/,
+          // ce qui est justement le choix par defaut du dialogue.
+          setAddFlow(
+            p.marketplaceName === localName
+              ? { kind: "skill" }
+              : {
+                  kind: "skill",
+                  preset: {
+                    marketplace: p.marketplaceName,
+                    plugin: p.name,
+                    installPath: p.installPath ?? "",
+                  },
+                }
+          )
+        }
+        onAddPlugin={(m) =>
+          setAddFlow({ kind: "plugin", preset: { marketplace: m.name } })
+        }
       />
       </ScrollArea>
     </ScrollFade>
@@ -2268,24 +2305,6 @@ export function SkillsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {addSkillFor && (
-        <AddSkillDialog
-          open
-          plugin={addSkillFor}
-          onOpenChange={(v) => !v && setAddSkillFor(null)}
-          onCreated={(folder) => {
-            // The backend already flagged it `new` (skill-sync-changed) and the
-            // dialog invalidated the refresh; keep the plugin selected so the new
-            // skill shows up under it once the tree refreshes.
-            setSyncOne(folder, "new");
-            setSelection({
-              kind: "plugin",
-              marketplace: addSkillFor.marketplaceName,
-              plugin: addSkillFor.name,
-            });
-          }}
-        />
-      )}
     </div>
   );
 }

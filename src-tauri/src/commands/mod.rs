@@ -2807,74 +2807,14 @@ pub async fn skill_mark_synced(state: State<'_, SkillWatch>, folder: String) -> 
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AddSkillArgs {
-    /// The target plugin (only `install_path` is used, to locate its folder).
-    pub plugin: Plugin,
-    /// "blank" (scaffold a SKILL.md) or "copy" (import `source_folder`).
-    pub mode: String,
-    /// Skill name → both the frontmatter `name:` and the (slugged) folder name.
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub body: String,
-    /// Source folder to copy in, for `mode == "copy"`.
-    #[serde(default)]
-    pub source_folder: String,
-}
-
-/// Create a new skill inside an installed plugin's folder (`skills/<slug>/`) and
-/// flag it "modifié" so it surfaces the push nudge / bulk selection. `blank`
-/// scaffolds a SKILL.md from name+description(+body); `copy` imports an existing
-/// local skill folder wholesale.
-#[tauri::command]
-pub async fn add_skill_to_plugin(
-    app: AppHandle,
-    watch: State<'_, SkillWatch>,
-    args: AddSkillArgs,
-) -> Result<PathBuf> {
-    let install_path = args.plugin.install_path.clone().ok_or_else(|| {
-        crate::error::Error::Invalid(
-            "Ce plugin n'est pas installé localement — impossible d'y ajouter un skill.".into(),
-        )
-    })?;
-    let mode = match args.mode.as_str() {
-        "copy" => {
-            if args.source_folder.trim().is_empty() {
-                return Err(crate::error::Error::Invalid(
-                    "Aucun dossier source fourni pour l'import.".into(),
-                ));
-            }
-            local_scanner::NewSkillMode::Copy {
-                source: PathBuf::from(args.source_folder.trim()),
-            }
-        }
-        _ => local_scanner::NewSkillMode::Blank {
-            description: args.description.clone(),
-            body: args.body.clone(),
-        },
-    };
-    let dest = local_scanner::create_skill_in_plugin(&install_path, &args.name, mode)?;
-    tracing::info!(
-        "add_skill_to_plugin: {}@{} -> {}",
-        args.plugin.name,
-        args.plugin.marketplace_name,
-        dest.display()
-    );
-    // Flag it as "new, not yet pushed" so the badge lights up immediately.
-    watch.mark_new(&app, &dest.to_string_lossy());
-    Ok(dest)
-}
-
 // ---------- Parcours d'ajout unifié (plugin / skill) ----------
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageSourceArgs {
     pub kind: AddKind,
-    /// `"local"` (un dossier du disque) ou `"remote"` (une URL de dépôt).
+    /// `"local"` (un dossier du disque), `"remote"` (une URL de dépôt) ou
+    /// `"blank"` (une ébauche créée sur place).
     pub origin: String,
     /// Dossier source, pour `local` — sélection ou glisser-déposer, même chemin
     /// de code.
@@ -2883,6 +2823,12 @@ pub struct StageSourceArgs {
     /// URL du dépôt, pour `remote`. La forge s'en déduit, jamais d'un sélecteur.
     #[serde(default)]
     pub url: String,
+    /// Nom de l'ébauche, pour `blank`.
+    #[serde(default)]
+    pub name: String,
+    /// Corps du SKILL.md de l'ébauche, pour `blank`. Facultatif.
+    #[serde(default)]
+    pub body: String,
 }
 
 /// Matérialise une source dans le dossier de préparation et rend ce qu'on y a
@@ -2890,6 +2836,9 @@ pub struct StageSourceArgs {
 /// écrit dans `~/.claude`, et le dossier d'origine n'est jamais modifié.
 #[tauri::command]
 pub async fn add_stage_source(args: StageSourceArgs) -> Result<AddInspection> {
+    if args.origin == "blank" {
+        return add_flow::stage_blank(args.kind, &args.name, &args.body);
+    }
     if args.origin == "local" {
         let path = args.path.trim();
         if path.is_empty() {

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
+  FilePlus2,
   FolderInput,
   FolderOpen,
   GitBranch,
@@ -72,7 +73,7 @@ interface AddDialogProps {
   preset?: AddDialogTarget;
 }
 
-type Origin = "remote" | "local";
+type Origin = "remote" | "local" | "blank";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -81,6 +82,10 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 function installedPlugins(marketplaces: Marketplace[]) {
   const out: { marketplace: string; plugin: Plugin }[] = [];
   for (const mp of marketplaces) {
+    // « Sans plugin » n'est pas un plugin : le proposer ici doublerait l'option
+    // « Sans plugin (~/.claude/skills/) » et poserait le skill sous un
+    // `skills/skills/` qui n'existe pas.
+    if (mp.sourceKind === "local") continue;
     for (const p of mp.plugins) {
       if (p.installPath) out.push({ marketplace: mp.name, plugin: p });
     }
@@ -101,6 +106,8 @@ export function AddDialog({
   const [origin, setOrigin] = useState<Origin>("remote");
   const [url, setUrl] = useState("");
   const [folder, setFolder] = useState("");
+  const [blankName, setBlankName] = useState("");
+  const [blankBody, setBlankBody] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [inspection, setInspection] = useState<AddInspection | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -124,6 +131,8 @@ export function AddDialog({
     setOrigin("remote");
     setUrl("");
     setFolder("");
+    setBlankName("");
+    setBlankBody("");
     setDragOver(false);
     setInspection(null);
     setValues({});
@@ -152,14 +161,20 @@ export function AddDialog({
   }, [discardStaging, reset, onOpenChange]);
 
   const stage = useMutation({
-    mutationFn: async (args: { origin: Origin; path?: string; url?: string }) => {
+    mutationFn: async (args: {
+      origin: Origin;
+      path?: string;
+      url?: string;
+      name?: string;
+      body?: string;
+    }) => {
       // Une source déjà préparée est abandonnée : on n'en garde jamais deux.
       discardStaging();
       return withTask(
         {
           kind: "install",
           label: kind === "plugin" ? "Analyse du plugin" : "Analyse du skill",
-          detail: args.url || args.path || "",
+          detail: args.url || args.path || args.name || "",
         },
         () =>
           api.addStageSource({
@@ -167,6 +182,8 @@ export function AddDialog({
             origin: args.origin,
             path: args.path ?? "",
             url: args.url ?? "",
+            name: args.name ?? "",
+            body: args.body ?? "",
           })
       );
     },
@@ -346,9 +363,66 @@ export function AddDialog({
                 <FolderInput className="h-3.5 w-3.5" />
                 Depuis un dossier
               </button>
+              <button
+                type="button"
+                onClick={() => setOrigin("blank")}
+                className={`flex items-center gap-1 border-l px-3 py-1.5 transition-colors ${
+                  origin === "blank"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background hover:bg-accent"
+                }`}
+              >
+                <FilePlus2 className="h-3.5 w-3.5" />
+                Créer vierge
+              </button>
             </div>
 
-            {origin === "remote" ? (
+            {origin === "blank" ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-xs text-muted-foreground">
+                    Nom {kind === "plugin" ? "du plugin" : "du skill"}
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder={kind === "plugin" ? "mon-plugin" : "mon-skill"}
+                      value={blankName}
+                      onChange={(e) => setBlankName(e.target.value)}
+                      autoFocus
+                    />
+                    <Button
+                      variant="outline"
+                      disabled={!blankName.trim() || stage.isPending}
+                      onClick={() =>
+                        stage.mutate({
+                          origin: "blank",
+                          name: blankName.trim(),
+                          body: blankBody,
+                        })
+                      }
+                    >
+                      {stage.isPending && (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      )}
+                      Créer
+                    </Button>
+                  </div>
+                </div>
+                {kind === "skill" && (
+                  <div>
+                    <label className="mb-1 block text-xs text-muted-foreground">
+                      Contenu du SKILL.md (facultatif)
+                    </label>
+                    <Textarea
+                      rows={4}
+                      placeholder={"# Mon skill\n\nInstructions…"}
+                      value={blankBody}
+                      onChange={(e) => setBlankBody(e.target.value)}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : origin === "remote" ? (
               <div>
                 <label className="mb-1 block text-xs text-muted-foreground">
                   URL du dépôt
