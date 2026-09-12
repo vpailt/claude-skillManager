@@ -66,7 +66,7 @@ import {
 import { useApp } from "@/stores/app";
 import { withTask } from "@/stores/progress";
 import { useNotifications } from "@/stores/notifications";
-import { cn, openExternal } from "@/lib/utils";
+import { cn, openExternal, shortDate } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { PAGE_HEADER } from "@/lib/headerStyles";
 import { ResizableSplit } from "@/components/ResizableSplit";
@@ -76,7 +76,6 @@ import {
   DuplicateSkillDetail,
   DuplicateSkillsPanel,
 } from "@/components/DuplicateSkillsPanel";
-import { ArchivedSkillsPanel } from "@/components/ArchivedSkillsPanel";
 import { AddMarketplaceDialog } from "@/components/AddMarketplaceDialog";
 import { AddDialog, type AddDialogTarget } from "@/components/AddDialog";
 import { BulkActionBar } from "@/components/BulkActionBar";
@@ -172,12 +171,24 @@ type Selection =
   | { kind: "archived"; value: ArchivedSkill }
   | null;
 
-type StateFilter = "all" | "installed" | "not_installed";
+// « local » et « archivé » ne filtrent pas un état d'installation mais une
+// origine : ils ne gardent que le nœud « Local », avec ses skills pour le
+// premier et le contenu de `~/.claude/skills_archive/` pour le second. Les
+// archivés n'existent que sous ce filtre — c'est lui qui a remplacé le panneau
+// dépliant qu'ils avaient avant.
+type StateFilter =
+  | "all"
+  | "installed"
+  | "not_installed"
+  | "local"
+  | "archived";
 
 const STATE_FILTER_LABELS: Record<StateFilter, string> = {
   all: "Tous",
   installed: "Installés",
   not_installed: "Non installés",
+  local: "Local",
+  archived: "Archivés",
 };
 
 function skillInstalled(s: Skill) {
@@ -636,6 +647,59 @@ function PluginNode({
   );
 }
 
+/** Un skill archivé, rendu comme un skill de l'arbre.
+ *
+ *  Sans case à cocher ni dépliage : il n'a pas de statut de synchronisation, il
+ *  n'est dans aucune sélection de masse, et la seule chose qu'on puisse en faire
+ *  est le restaurer — ce que propose son panneau de détail. Les deux espaces en
+ *  tête remplacent la case et le chevron pour qu'il s'aligne sur ses voisins. */
+function ArchivedSkillRow({
+  skill,
+  selected,
+  onSelect,
+}: {
+  skill: ArchivedSkill;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <div className="group">
+      <div
+        className={`flex items-center gap-1 rounded-md px-1 py-1 ${
+          selected ? "bg-accent text-foreground" : "hover:bg-accent/50"
+        }`}
+      >
+        <span className="inline-block h-3.5 w-3.5 shrink-0" />
+        <span className="inline-block h-5 w-5 shrink-0" />
+        <button
+          onClick={onSelect}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm"
+          title={
+            skill.archivedAt
+              ? `Archivé le ${shortDate(skill.archivedAt)}`
+              : undefined
+          }
+        >
+          <BookOpen className="h-3.5 w-3.5 shrink-0 text-violet-400/80" />
+          <span
+            className={`min-w-0 flex-1 truncate ${selected ? "font-semibold" : ""}`}
+          >
+            {skill.name}
+          </span>
+          {skill.version && (
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {skill.version}
+            </span>
+          )}
+          <Badge variant="outline" className="shrink-0 text-xs">
+            archivé
+          </Badge>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---------- Marketplace node ----------
 
 interface PluginView {
@@ -649,10 +713,14 @@ interface MarketplaceNodeProps {
   forceOpen: boolean;
   selection: Selection;
   localName: string;
+  /** Non nul sous le filtre « Archivés » : ce nœud montre alors ces dossiers
+   *  au lieu de ses skills. */
+  archivedSkills?: ArchivedSkill[];
   onSelectMarketplace: () => void;
   onSelectPlugin: (plugin: string) => void;
   onSelectSkill: (entry: SkillEntry) => void;
   onSelectFile: (entry: SkillEntry, relativePath: string) => void;
+  onSelectArchived: (skill: ArchivedSkill) => void;
 }
 
 function MarketplaceNode({
@@ -661,10 +729,12 @@ function MarketplaceNode({
   forceOpen,
   selection,
   localName,
+  archivedSkills,
   onSelectMarketplace,
   onSelectPlugin,
   onSelectSkill,
   onSelectFile,
+  onSelectArchived,
 }: MarketplaceNodeProps) {
   const [open, setOpen] = useState(true);
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set());
@@ -771,34 +841,51 @@ function MarketplaceNode({
             // ces skills s'alignent exactement sur ceux d'un plugin.
             <div className="ml-4">
               <div className="ml-2 border-l border-border/60 pl-2">
-                {flatSkills.map(({ plugin, skill }) => {
-                  const entry = toEntry(skill, plugin, marketplace.name);
-                  const key = entryKey(entry);
-                  const isSel =
-                    (selection?.kind === "skill" &&
-                      entryKey(selection.entry) === key) ||
-                    (selection?.kind === "file" &&
-                      entryKey(selection.entry) === key);
-                  const selectedFileForRow =
-                    selection?.kind === "file" &&
-                    entryKey(selection.entry) === key
-                      ? selection.relativePath
-                      : null;
-                  return (
-                    <SkillTreeRow
-                      key={key}
-                      entry={entry}
-                      selected={isSel}
-                      expanded={expandedSkills.has(key)}
-                      onSelect={() => onSelectSkill(entry)}
-                      onToggle={() => toggleSkill(key)}
-                      onSelectFile={(rel) => onSelectFile(entry, rel)}
-                      selectedFilePath={selectedFileForRow}
-                      localName={localName}
-                    />
-                  );
-                })}
-                {flatSkills.length === 0 && (
+                {archivedSkills?.map((a) => (
+                  <ArchivedSkillRow
+                    key={a.folder}
+                    skill={a}
+                    selected={
+                      selection?.kind === "archived" &&
+                      selection.value.folder === a.folder
+                    }
+                    onSelect={() => onSelectArchived(a)}
+                  />
+                ))}
+                {archivedSkills && archivedSkills.length === 0 && (
+                  <div className="px-3 py-1.5 text-xs text-muted-foreground">
+                    Aucun skill archivé.
+                  </div>
+                )}
+                {!archivedSkills &&
+                  flatSkills.map(({ plugin, skill }) => {
+                    const entry = toEntry(skill, plugin, marketplace.name);
+                    const key = entryKey(entry);
+                    const isSel =
+                      (selection?.kind === "skill" &&
+                        entryKey(selection.entry) === key) ||
+                      (selection?.kind === "file" &&
+                        entryKey(selection.entry) === key);
+                    const selectedFileForRow =
+                      selection?.kind === "file" &&
+                      entryKey(selection.entry) === key
+                        ? selection.relativePath
+                        : null;
+                    return (
+                      <SkillTreeRow
+                        key={key}
+                        entry={entry}
+                        selected={isSel}
+                        expanded={expandedSkills.has(key)}
+                        onSelect={() => onSelectSkill(entry)}
+                        onToggle={() => toggleSkill(key)}
+                        onSelectFile={(rel) => onSelectFile(entry, rel)}
+                        selectedFilePath={selectedFileForRow}
+                        localName={localName}
+                      />
+                    );
+                  })}
+                {!archivedSkills && flatSkills.length === 0 && (
                   <div className="px-3 py-1.5 text-xs text-muted-foreground">
                     Aucun skill local.
                   </div>
@@ -1584,9 +1671,9 @@ interface SkillDetailProps {
   onPush: () => void;
   onDelete: () => void;
   /** Archiver : propre aux skills locaux, qui n'ont pas de dépôt d'où revenir.
-   *  Le dossier part dans `~/.claude/skills_archive/` et se restaure depuis le
-   *  panneau des archives — c'est la sortie réversible, là où « supprimer » ne
-   *  l'est pas. */
+   *  Le dossier part dans `~/.claude/skills_archive/`, d'où le filtre
+   *  « Archivés » le montre et le restaure — c'est la sortie réversible, là où
+   *  « supprimer » ne l'est pas. */
   onArchive: () => void;
 }
 
@@ -2001,6 +2088,14 @@ export function SkillsPage() {
   const notify = useNotifications((s) => s.push);
 
   const localName = localOnly?.name ?? "Local";
+  // Les archives ne sont pas dans l'arbre des marketplaces : elles vivent dans
+  // `~/.claude/skills_archive/` et se lisent à part. La requête est la même que
+  // celle qu'invalident l'archivage et la restauration.
+  const archivedQuery = useQuery({
+    queryKey: ["archived-skills"],
+    queryFn: api.listArchivedSkills,
+    staleTime: 60_000,
+  });
 
   // Pushing a single skill goes to the Changes tab with that skill alone
   // ticked, rather than opening a draft dialog: one screen builds every PR,
@@ -2081,8 +2176,8 @@ export function SkillsPage() {
   });
 
   // Archiver un skill local : le dossier part dans `~/.claude/skills_archive/`
-  // et se restaure depuis le panneau des archives. C'est la sortie réversible
-  // d'un skill sans dépôt — la suppression, elle, ne l'est pas.
+  // et se retrouve sous le filtre « Archivés », d'où il se restaure. C'est la
+  // sortie réversible d'un skill sans dépôt — la suppression, elle, ne l'est pas.
   const archiveSkill = useMutation({
     mutationFn: async (entry: SkillEntry) =>
       withTask(
@@ -2107,7 +2202,7 @@ export function SkillsPage() {
       notify({
         kind: "success",
         title: "Compétence archivée",
-        body: `${entry.name} — restaurable depuis le panneau des archives.`,
+        body: `${entry.name} — visible sous le filtre « Archivés », d'où il se restaure.`,
       });
     },
     onError: (e, entry) =>
@@ -2166,12 +2261,24 @@ export function SkillsPage() {
     return (s: Skill): boolean => {
       if (stateFilter === "installed" && !skillInstalled(s)) return false;
       if (stateFilter === "not_installed" && skillInstalled(s)) return false;
+      if (stateFilter === "local" && s.marketplaceName !== localName) return false;
+      // Un skill archivé n'est plus un skill du modèle : il n'a plus de plugin,
+      // plus de marketplace, et vit dans un autre dossier. Aucun de ceux-ci
+      // n'est donc visible sous ce filtre — ils sont rendus à part.
+      if (stateFilter === "archived") return false;
       return true;
     };
-  }, [stateFilter]);
+  }, [stateFilter, localName]);
 
   // Build the filtered tree: marketplaces → plugins → visible skills.
   const tree = useMemo(() => {
+    if (stateFilter === "archived") {
+      // Rien ne vient des marketplaces ici : le nœud « Local » porte les
+      // dossiers de `skills_archive`, et il reste seul même s'il n'a aucun
+      // skill vivant.
+      const local = list.find((m) => m.sourceKind === "local");
+      return local ? [{ marketplace: local, plugins: [] }] : [];
+    }
     return list
       .map((m) => {
         const plugins = m.plugins
@@ -2185,7 +2292,7 @@ export function SkillsPage() {
         return { marketplace: m, plugins };
       })
       .filter(({ plugins }) => !filtersActive || plugins.length > 0);
-  }, [list, skillVisible, filtersActive]);
+  }, [list, skillVisible, filtersActive, stateFilter]);
 
   const counts = useMemo(() => {
     let total = 0;
@@ -2198,8 +2305,15 @@ export function SkillsPage() {
         }
       }
     }
+    // Les archivés ne sont pas dans `list` : ils ont leur propre dénombrement,
+    // et « 0 sur 42 » sous le filtre archivé ne dirait rien de ce qui est à
+    // l'écran.
+    if (stateFilter === "archived") {
+      const n = archivedQuery.data?.length ?? 0;
+      return { total: n, visible: n };
+    }
     return { total, visible };
-  }, [list, skillVisible]);
+  }, [list, skillVisible, stateFilter, archivedQuery.data]);
 
   // Feed the multi-selection store: `ordered` is the visible rows in tree order
   // (the axis shift-click walks along), `prune` runs against *every* key so a
@@ -2293,10 +2407,6 @@ export function SkillsPage() {
           selectedFolder={selectedDuplicateFolder}
           onSelect={(d) => setSelection({ kind: "duplicate", value: d })}
         />
-        <ArchivedSkillsPanel
-          selectedFolder={selectedArchivedFolder}
-          onSelect={(s) => setSelection({ kind: "archived", value: s })}
-        />
         {/* The tree's own search box used to sit here. Finding a skill by name
             is the title bar's job now (`components/SearchBox.tsx`), which
             reaches every marketplace, plugin and skill from any page — this
@@ -2370,6 +2480,14 @@ export function SkillsPage() {
               onSelectFile={(entry, relativePath) =>
                 setSelection({ kind: "file", entry, relativePath })
               }
+              archivedSkills={
+                stateFilter === "archived" && marketplace.sourceKind === "local"
+                  ? archivedQuery.data ?? []
+                  : undefined
+              }
+              onSelectArchived={(skill) =>
+                setSelection({ kind: "archived", value: skill })
+              }
             />
           ))}
         </div>
@@ -2393,7 +2511,12 @@ export function SkillsPage() {
         showDescription={showDescription}
         onToggleDescription={() => setShowDescription((v) => !v)}
         onArchived={() => setSelection(null)}
-        onRestored={() => setSelection(null)}
+        onRestored={() => {
+          setSelection(null);
+          // Le skill vient de quitter les archives : rester sur ce filtre le
+          // ferait disparaître de l'écran sans dire où il est parti.
+          if (stateFilter === "archived") setStateFilter("local");
+        }}
         onPushSkill={pushSkill}
         onDeleteSkill={(entry) => setDeleteTarget(entry)}
         onArchiveSkill={(entry) => archiveSkill.mutate(entry)}
