@@ -147,21 +147,27 @@ export function SearchBox() {
           c.navigate("/skills");
         },
       });
+      // Le groupe qui porte les skills sans plugin n'est pas un plugin et n'a
+      // pas de ligne dans l'arbre : l'indexer proposerait un résultat qui mène
+      // à un panneau sans rien à faire.
+      const flat = m.sourceKind === "local";
       for (const p of m.plugins) {
-        all.push({
-          group: "plugin",
-          label: p.name,
-          hint: m.name,
-          run: (c) => {
-            c.select({ kind: "plugin", marketplace: m.name, plugin: p.name });
-            c.navigate("/skills");
-          },
-        });
+        if (!flat) {
+          all.push({
+            group: "plugin",
+            label: p.name,
+            hint: m.name,
+            run: (c) => {
+              c.select({ kind: "plugin", marketplace: m.name, plugin: p.name });
+              c.navigate("/skills");
+            },
+          });
+        }
         for (const s of p.skills) {
           all.push({
             group: "skill",
             label: s.name,
-            hint: `${p.name} · ${m.name}`,
+            hint: flat ? m.name : `${p.name} · ${m.name}`,
             search: s.description ?? undefined,
             run: (c) => {
               c.select({

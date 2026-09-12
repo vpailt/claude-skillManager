@@ -16,7 +16,9 @@ import {
   Download,
   FileText,
   Filter,
+  Archive,
   Folder,
+  FolderOpen,
   Globe,
   Info,
   Loader2,
@@ -64,7 +66,7 @@ import {
 import { useApp } from "@/stores/app";
 import { withTask } from "@/stores/progress";
 import { useNotifications } from "@/stores/notifications";
-import { cn } from "@/lib/utils";
+import { cn, openExternal } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { PAGE_HEADER } from "@/lib/headerStyles";
 import { ResizableSplit } from "@/components/ResizableSplit";
@@ -665,6 +667,7 @@ function MarketplaceNode({
   onSelectFile,
 }: MarketplaceNodeProps) {
   const [open, setOpen] = useState(true);
+  const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set());
   const effectiveOpen = open || forceOpen;
   const isSelected =
     selection?.kind === "marketplace" &&
@@ -673,14 +676,49 @@ function MarketplaceNode({
   // « Competences personnelles » donnait un nom que la recherche ne trouve pas
   // et que le reste de l'app n'emploie nulle part.
   const title = marketplace.name;
+  // « Local » se lit d'un seul tenant : une ligne, puis ses skills. Le groupe
+  // qui les porte côté données n'est pas un plugin — on ne l'installe pas, on
+  // ne l'active pas — et l'afficher comme tel annonçait une profondeur d'arbre
+  // qui n'existe pas. Les skills gardent en revanche l'indentation du niveau
+  // skill, pour s'aligner sur ceux d'un plugin.
+  const flat = marketplace.sourceKind === "local";
+  const flatSkills = useMemo(
+    () =>
+      flat
+        ? plugins.flatMap(({ plugin, visibleSkills }) =>
+            visibleSkills.map((skill) => ({ plugin, skill }))
+          )
+        : [],
+    [flat, plugins]
+  );
+
+  const toggleSkill = (key: string) =>
+    setExpandedSkills((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
   // A marketplace box covers itself and its visible plugins — "check the whole
   // marketplace" is what the gesture means. Filtered-out plugins stay out.
+  // Aplati, il n'y a pas de plugin à cocher : la case couvre les skills, qui
+  // sont ce que la ligne montre.
   const groupKeys = useMemo(
-    () => [
-      mpKey(marketplace.name),
-      ...plugins.map(({ plugin }) => plKey(marketplace.name, plugin.name)),
-    ],
-    [marketplace.name, plugins]
+    () =>
+      flat
+        ? [
+            mpKey(marketplace.name),
+            ...flatSkills
+              .map(({ skill }) => skill.watchFolder ?? skill.folder)
+              .filter((f): f is string => !!f)
+              .map(skKey),
+          ]
+        : [
+            mpKey(marketplace.name),
+            ...plugins.map(({ plugin }) => plKey(marketplace.name, plugin.name)),
+          ],
+    [flat, flatSkills, marketplace.name, plugins]
   );
   const groupState = useGroupState(groupKeys);
 
@@ -696,7 +734,7 @@ function MarketplaceNode({
         <RowCheckbox
           keys={groupKeys}
           state={groupState}
-          label={`Sélectionner ${title} et ses plugins`}
+          label={`Sélectionner ${title} et son contenu`}
         />
         <Button
           variant="ghost"
@@ -713,7 +751,12 @@ function MarketplaceNode({
             <ChevronRight className="h-3 w-3" />
           )}
         </Button>
-        <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />
+        {/* Un globe annonce un dépôt distant ; « Local » est un dossier. */}
+        {flat ? (
+          <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />
+        )}
         {marketplace.installed && (
           <Badge variant="success" className="shrink-0">
             installé
@@ -723,24 +766,67 @@ function MarketplaceNode({
       </div>
       {effectiveOpen && (
         <div className="ml-2 border-l border-border/60 pl-2">
-          {plugins.map(({ plugin, visibleSkills }) => (
-            <PluginNode
-              key={plugin.name}
-              plugin={plugin}
-              marketplace={marketplace.name}
-              visibleSkills={visibleSkills}
-              forceOpen={forceOpen}
-              selection={selection}
-              localName={localName}
-              onSelectPlugin={() => onSelectPlugin(plugin.name)}
-              onSelectSkill={onSelectSkill}
-              onSelectFile={onSelectFile}
-            />
-          ))}
-          {plugins.length === 0 && (
-            <div className="px-3 py-2 text-xs text-muted-foreground">
-              Aucun plugin listé.
+          {flat ? (
+            // Même enveloppe que sous un plugin (`ml-4` puis le filet), pour que
+            // ces skills s'alignent exactement sur ceux d'un plugin.
+            <div className="ml-4">
+              <div className="ml-2 border-l border-border/60 pl-2">
+                {flatSkills.map(({ plugin, skill }) => {
+                  const entry = toEntry(skill, plugin, marketplace.name);
+                  const key = entryKey(entry);
+                  const isSel =
+                    (selection?.kind === "skill" &&
+                      entryKey(selection.entry) === key) ||
+                    (selection?.kind === "file" &&
+                      entryKey(selection.entry) === key);
+                  const selectedFileForRow =
+                    selection?.kind === "file" &&
+                    entryKey(selection.entry) === key
+                      ? selection.relativePath
+                      : null;
+                  return (
+                    <SkillTreeRow
+                      key={key}
+                      entry={entry}
+                      selected={isSel}
+                      expanded={expandedSkills.has(key)}
+                      onSelect={() => onSelectSkill(entry)}
+                      onToggle={() => toggleSkill(key)}
+                      onSelectFile={(rel) => onSelectFile(entry, rel)}
+                      selectedFilePath={selectedFileForRow}
+                      localName={localName}
+                    />
+                  );
+                })}
+                {flatSkills.length === 0 && (
+                  <div className="px-3 py-1.5 text-xs text-muted-foreground">
+                    Aucun skill local.
+                  </div>
+                )}
+              </div>
             </div>
+          ) : (
+            <>
+              {plugins.map(({ plugin, visibleSkills }) => (
+                <PluginNode
+                  key={plugin.name}
+                  plugin={plugin}
+                  marketplace={marketplace.name}
+                  visibleSkills={visibleSkills}
+                  forceOpen={forceOpen}
+                  selection={selection}
+                  localName={localName}
+                  onSelectPlugin={() => onSelectPlugin(plugin.name)}
+                  onSelectSkill={onSelectSkill}
+                  onSelectFile={onSelectFile}
+                />
+              ))}
+              {plugins.length === 0 && (
+                <div className="px-3 py-2 text-xs text-muted-foreground">
+                  Aucun plugin listé.
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -801,6 +887,12 @@ function MarketplaceDetail({
   const [confirmMode, setConfirmMode] = useState<null | "uninstall" | "delete">(
     null
   );
+  // « Local » est le dossier des skills de l'utilisateur exposé comme une
+  // marketplace : il n'a ni dépôt, ni installation, ni rien à désinstaller.
+  const isLocalMarketplace = marketplace.sourceKind === "local";
+  // Le répertoire à ouvrir : celui de l'installation quand il y en a une, sinon
+  // la source (c'est ce que porte « Local »).
+  const folderPath = marketplace.installLocation || marketplace.sourcePath;
 
   const settingsQuery = useQuery({
     queryKey: ["app-settings"],
@@ -938,9 +1030,11 @@ function MarketplaceDetail({
   const actions = (
     <>
       {marketplace.installed ? (
-        <Badge variant="success" className="shrink-0">
-          installé
-        </Badge>
+        isLocalMarketplace ? null : (
+          <Badge variant="success" className="shrink-0">
+            installé
+          </Badge>
+        )
       ) : (
         marketplace.sourceRepo && (
           <Button
@@ -973,37 +1067,51 @@ function MarketplaceDetail({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuLabel>{marketplace.name}</DropdownMenuLabel>
+          {folderPath && (
+            <DropdownMenuItem onSelect={() => openExternal(folderPath)}>
+              <FolderOpen className="h-4 w-4" />
+              Ouvrir le répertoire
+            </DropdownMenuItem>
+          )}
           {/* Offerte seulement si la marketplace est installee : sans cache
               local, il n'y a nulle part ou poser le plugin. Les droits de push
               ne gouvernent que la publication, jamais la creation locale. */}
-          {marketplace.installed && marketplace.sourceKind !== "local" && (
+          {marketplace.installed && !isLocalMarketplace && (
             <>
+              <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => onAddPlugin(marketplace)}>
                 <Plus className="h-4 w-4" />
                 Ajouter un plugin
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
             </>
           )}
-          {marketplace.installed && (
-            <DropdownMenuItem
-              onSelect={() => setConfirmMode("uninstall")}
-              title="Supprime les fichiers locaux mais garde ce marketplace dans la liste."
-            >
-              <PackageMinus className="h-4 w-4" />
-              Désinstaller (garder dans la liste)
-            </DropdownMenuItem>
+          {/* « Local » n'est pas une marketplace qu'on installe : c'est le
+              dossier des skills de l'utilisateur. Le désinstaller ou le
+              « retirer de la liste » n'a aucun sens, et supprimerait des
+              fichiers que rien ne pourrait restaurer. */}
+          {!isLocalMarketplace && (
+            <>
+              <DropdownMenuSeparator />
+              {marketplace.installed && (
+                <DropdownMenuItem
+                  onSelect={() => setConfirmMode("uninstall")}
+                  title="Supprime les fichiers locaux mais garde ce marketplace dans la liste."
+                >
+                  <PackageMinus className="h-4 w-4" />
+                  Désinstaller (garder dans la liste)
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                destructive
+                onSelect={() => setConfirmMode("delete")}
+              >
+                <Trash2 className="h-4 w-4" />
+                {marketplace.installed
+                  ? "Supprimer définitivement (fichiers + liste)"
+                  : "Retirer de la liste"}
+              </DropdownMenuItem>
+            </>
           )}
-          {marketplace.installed && <DropdownMenuSeparator />}
-          <DropdownMenuItem
-            destructive
-            onSelect={() => setConfirmMode("delete")}
-          >
-            <Trash2 className="h-4 w-4" />
-            {marketplace.installed
-              ? "Supprimer définitivement (fichiers + liste)"
-              : "Retirer de la liste"}
-          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </>
@@ -1020,17 +1128,27 @@ function MarketplaceDetail({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        <div>
-          <span className="text-muted-foreground">Plugins :</span>{" "}
-          {marketplace.plugins.length}
-        </div>
+        {/* « Local » ne compte pas des plugins mais des skills : son unique
+            groupe n'en est pas un, et afficher « Plugins : 1 » pour dix skills
+            personnels ne décrit rien. */}
+        {isLocalMarketplace ? (
+          <div>
+            <span className="text-muted-foreground">Skills :</span>{" "}
+            {marketplace.plugins.reduce((n, p) => n + p.skills.length, 0)}
+          </div>
+        ) : (
+          <div>
+            <span className="text-muted-foreground">Plugins :</span>{" "}
+            {marketplace.plugins.length}
+          </div>
+        )}
         <div>
           <span className="text-muted-foreground">Dernière mise à jour :</span>{" "}
           {marketplace.lastUpdated || "—"}
         </div>
-        {marketplace.installLocation && (
+        {folderPath && (
           <div className="break-all text-xs text-muted-foreground">
-            {marketplace.installLocation}
+            {folderPath}
           </div>
         )}
 
@@ -1155,6 +1273,12 @@ function PluginDetail({
   const markUninstalled = useApp((s) => s.markPluginUninstalled);
   const markEnabled = useApp((s) => s.markPluginEnabled);
   const installMarketplace = useInstallMarketplace();
+  // Le groupe qui porte les skills sans plugin n'est pas un plugin : rien à
+  // installer, rien à désinstaller, rien à activer. Il n'a plus de ligne dans
+  // l'arbre, mais un lien profond (tableau de bord, recherche) peut encore
+  // amener ici — et ces boutons agiraient sur ~/.claude/skills.
+  const isLocalGroup =
+    findMarketplace(plugin.marketplaceName)?.sourceKind === "local";
   const installed =
     plugin.installState === "installed" ||
     plugin.installState === "outdated" ||
@@ -1275,7 +1399,8 @@ function PluginDetail({
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
         <div className="flex flex-wrap items-center gap-2">
-          {(plugin.installState === "not_installed" ||
+          {!isLocalGroup &&
+            (plugin.installState === "not_installed" ||
             plugin.installState === "outdated") && (
             <Button
               size="sm"
@@ -1286,7 +1411,7 @@ function PluginDetail({
               {plugin.installState === "outdated" ? "Mettre à jour" : "Installer"}
             </Button>
           )}
-          {installed && (
+          {installed && !isLocalGroup && (
             <Button
               size="sm"
               variant="outline"
@@ -1297,7 +1422,7 @@ function PluginDetail({
               Désinstaller
             </Button>
           )}
-          {installed && (
+          {installed && !isLocalGroup && (
             <Button
               size="sm"
               onClick={() => onAddSkill(plugin)}
@@ -1314,7 +1439,7 @@ function PluginDetail({
               {plugin.skills.length === 1 ? "" : "s"} — dépliez le plugin à gauche
             </span>
           )}
-          {plugin.installState !== "not_installed" && (
+          {plugin.installState !== "not_installed" && !isLocalGroup && (
             <div className="ml-auto flex items-center gap-2">
               <span className="text-xs text-muted-foreground">Activé</span>
               <Switch
@@ -1458,6 +1583,11 @@ interface SkillDetailProps {
   canPush: boolean;
   onPush: () => void;
   onDelete: () => void;
+  /** Archiver : propre aux skills locaux, qui n'ont pas de dépôt d'où revenir.
+   *  Le dossier part dans `~/.claude/skills_archive/` et se restaure depuis le
+   *  panneau des archives — c'est la sortie réversible, là où « supprimer » ne
+   *  l'est pas. */
+  onArchive: () => void;
 }
 
 function SkillDetailView({
@@ -1470,6 +1600,7 @@ function SkillDetailView({
   canPush,
   onPush,
   onDelete,
+  onArchive,
 }: SkillDetailProps) {
   const mdPath =
     entry.skillMdPath ||
@@ -1512,6 +1643,23 @@ function SkillDetailView({
                 <Code2 className="h-4 w-4" />
                 Ouvrir dans VS Code
               </DropdownMenuItem>
+              {entry.folder && (
+                <DropdownMenuItem
+                  onSelect={() => openExternal(entry.folder as string)}
+                >
+                  <FolderOpen className="h-4 w-4" />
+                  Ouvrir le répertoire
+                </DropdownMenuItem>
+              )}
+              {isLocal(entry, localName) && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={onArchive}>
+                    <Archive className="h-4 w-4" />
+                    Archiver
+                  </DropdownMenuItem>
+                </>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem destructive onSelect={onDelete}>
                 <Trash2 className="h-4 w-4" />
@@ -1687,6 +1835,7 @@ function DetailPanel({
   onRestored,
   onPushSkill,
   onDeleteSkill,
+  onArchiveSkill,
   onAddSkill,
   onAddPlugin,
 }: {
@@ -1698,6 +1847,7 @@ function DetailPanel({
   onRestored: () => void;
   onPushSkill: (entry: SkillEntry) => void;
   onDeleteSkill: (entry: SkillEntry) => void;
+  onArchiveSkill: (entry: SkillEntry) => void;
   onAddSkill: (p: Plugin) => void;
   onAddPlugin: (m: Marketplace) => void;
 }) {
@@ -1797,6 +1947,7 @@ function DetailPanel({
         canPush={canPushSkill}
         onPush={() => onPushSkill(selection.entry)}
         onDelete={() => onDeleteSkill(selection.entry)}
+        onArchive={() => onArchiveSkill(selection.entry)}
       />
     );
   }
@@ -1925,6 +2076,44 @@ export function SkillsPage() {
       notify({
         kind: "error",
         title: `Échec de la suppression : ${entry.name}`,
+        body: errMsg(e),
+      }),
+  });
+
+  // Archiver un skill local : le dossier part dans `~/.claude/skills_archive/`
+  // et se restaure depuis le panneau des archives. C'est la sortie réversible
+  // d'un skill sans dépôt — la suppression, elle, ne l'est pas.
+  const archiveSkill = useMutation({
+    mutationFn: async (entry: SkillEntry) =>
+      withTask(
+        {
+          kind: "uninstall",
+          label: "Archivage de la compétence",
+          detail: entry.name,
+        },
+        () => api.archiveUserSkill(entry.folder as string)
+      ),
+    onSuccess: (_dest, entry) => {
+      setSelection(null);
+      forceRefresh(qc);
+      for (const key of [
+        ["duplicate-skills"],
+        ["archived-skills"],
+        ["skill-files"],
+        ["skill-mtime"],
+      ]) {
+        qc.invalidateQueries({ queryKey: key });
+      }
+      notify({
+        kind: "success",
+        title: "Compétence archivée",
+        body: `${entry.name} — restaurable depuis le panneau des archives.`,
+      });
+    },
+    onError: (e, entry) =>
+      notify({
+        kind: "error",
+        title: `Échec de l'archivage : ${entry.name}`,
         body: errMsg(e),
       }),
   });
@@ -2207,6 +2396,7 @@ export function SkillsPage() {
         onRestored={() => setSelection(null)}
         onPushSkill={pushSkill}
         onDeleteSkill={(entry) => setDeleteTarget(entry)}
+        onArchiveSkill={(entry) => archiveSkill.mutate(entry)}
         onAddSkill={(p) =>
           // Depuis le groupe « Sans plugin », il n'y a pas de plugin de
           // destination a pre-remplir : le skill va dans ~/.claude/skills/,
