@@ -1,6 +1,6 @@
 [package]
 name = "skillmanager"
-version = "4.1.0"
+version = "4.2.0"
 description = "GUI for managing Claude Code plugins, marketplaces and skills"
 authors = ["Valentin Pitel"]
 license = "MIT"
@@ -47,6 +47,10 @@ notify = "6"
 # the graph via `sha2`, so this costs almost nothing in the size-tuned profile.
 sha1 = "0.10"
 rust_xlsxwriter = { version = "0.92.0", default-features = false }
+# Read-only access to ~/.claude/usage/usage.db, written by the token-usage hook.
+# `bundled` compiles SQLite from C and links it statically: nothing to install on
+# the user's machine, at the cost of a C build step (MSVC is already required).
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

@@ -26,6 +26,33 @@ fn read_all() -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+/// Like `read_all`, but an unreadable or malformed file is an error, not an
+/// empty map. Use it before any rewrite that is not a pure `enabledPlugins`
+/// toggle: writing back an empty map would wipe the user's hooks, theme and
+/// permissions.
+pub fn read_settings_strict() -> Result<Map<String, Value>> {
+    let p = settings_path();
+    if !p.exists() {
+        return Ok(Map::new());
+    }
+    let text = fs::read_to_string(&p)?;
+    match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Object(map)) => Ok(map),
+        Ok(_) => Err(Error::Invalid(format!(
+            "{} n'est pas un objet JSON",
+            p.display()
+        ))),
+        Err(e) => Err(Error::Invalid(format!(
+            "{} illisible, rien n'a été modifié : {e}",
+            p.display()
+        ))),
+    }
+}
+
+pub fn write_settings(data: &Map<String, Value>) -> Result<()> {
+    atomic_write(data)
+}
+
 fn atomic_write(data: &Map<String, Value>) -> Result<()> {
     let p = settings_path();
     if let Some(parent) = p.parent() {

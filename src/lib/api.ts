@@ -41,6 +41,9 @@ import type {
   UploadResult,
   UploadSkillArgs,
   UsageReport,
+  HookStatus,
+  TokenReport,
+  TokenUsageStatus,
 } from "./types";
 
 export const api = {
@@ -381,6 +384,21 @@ export const api = {
     invoke<UsageReport>("usage_audit", { from, to }),
   usageExportXlsx: (path: string, from: string, to: string) =>
     invoke<string>("usage_export_xlsx", { path, from, to }),
+
+  // --- token consumption ---
+  // `from` / `to` are local days (`YYYY-MM-DD`, "" = unbounded), `project` an
+  // exact project label ("" = all).
+  tokenUsageStatus: () => invoke<TokenUsageStatus>("token_usage_status"),
+  tokenHookInstall: () => invoke<HookStatus>("token_hook_install"),
+  /** Runs the hook's script to build or update usage.db; progress arrives on
+   *  the `token-usage-progress` event. Resolves to the number of files read. */
+  tokenUsageIngest: () => invoke<number>("token_usage_ingest"),
+  tokenUsageReport: (from: string, to: string, project: string) =>
+    invoke<TokenReport>("token_usage_report", { from, to, project }),
+  tokenExportHtml: (path: string, from: string, to: string, project: string) =>
+    invoke<string>("token_export_html", { path, from, to, project }),
+  tokenExportXlsx: (path: string, from: string, to: string, project: string) =>
+    invoke<string>("token_export_xlsx", { path, from, to, project }),
 };
 
 // Marketplace name used by the backend to surface standalone user skills.

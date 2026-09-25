@@ -83,6 +83,11 @@ on the Claude install go through Rust stdlib + `walkdir`/`zip`. Never add a code
 that shells out to `git`/`gh`/`claude`, and never add a runtime dep that the Tauri
 bundler can't pack into the single .exe.
 
+One deliberate exception: the token-consumption tab runs the `token-usage.py` hook's
+own interpreter and script (`token_usage::run_ingest`) to build or update
+`~/.claude/usage/usage.db`. Python is a prerequisite of that hook, not of the app —
+without it the tab still reads an existing database and exports it.
+
 `Cargo.toml`'s release profile (`opt-level = "s"`, `lto = true`, `codegen-units = 1`,
 `strip = true`, `panic = "abort"`) is tuned for binary size — keep it that way.
 `reqwest` uses `rustls-tls` (no OpenSSL dep). If you add a crate, prefer ones that
@@ -580,6 +585,19 @@ falling through published a release whose entire diff was a version bump.
   that offset instead of whole. `line_may_hold_event` skips the JSON parse for the
   ~99 % of lines that carry no invocation. Changing the cached shape requires
   bumping `INDEX_VERSION`.
+- `token_usage.rs` / `token_hook.rs` / `token_export.rs` — token consumption, the
+  Audit page's second tab (`?tab=tokens`, `pages/TokenUsageTab.tsx`). **`usage.db`
+  has one writer, the SessionEnd hook script** (`src-tauri/assets/token-usage.py`,
+  embedded and installed by `token_hook::install`); the app opens it read-only
+  (`rusqlite`, `bundled`) and, for the first generation or "Actualiser", runs that
+  same script's `ingest` rather than re-implementing ingestion. The table layout is
+  a contract between the script and `token_usage.rs`: change both, and bump the
+  `# skillmanager-token-usage vN` marker (first line of the script, `MARKER` in
+  `token_hook.rs`) so installed copies show up as `Legacy`. `install` refuses to
+  touch a `settings.json` that does not parse (`plugin_state::read_settings_strict`)
+  and backs up any foreign `token-usage.py` before replacing it. The HTML export
+  reads the AlmaviaCX charter from the installed `acx-cr-html` skill (highest semver
+  version) and fails explicitly when it is missing.
 - `local_scanner.rs::build_marketplaces_from_settings` — also surfaces "orphan"
   marketplaces (installed locally but missing from app settings) so the user can still
   see/act on them.

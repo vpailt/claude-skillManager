@@ -33,7 +33,10 @@ pub mod properties;
 pub mod registry;
 pub mod skill_watch;
 pub mod taskbar;
+pub mod token_export;
+pub mod token_hook;
 pub mod token_store;
+pub mod token_usage;
 pub mod tray;
 pub mod update_poller;
 pub mod usage_audit;
@@ -261,6 +264,12 @@ pub fn run() {
             add_discard,
             usage_audit,
             usage_export_xlsx,
+            token_usage_status,
+            token_hook_install,
+            token_usage_ingest,
+            token_usage_report,
+            token_export_html,
+            token_export_xlsx,
             app_check_update,
             app_release_notes,
             app_update_staged,

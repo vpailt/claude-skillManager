@@ -2993,3 +2993,87 @@ pub async fn usage_export_xlsx(path: String, from: String, to: String) -> Result
         .await
         .map_err(|e| crate::error::Error::Other(format!("join: {e}")))?
 }
+
+// ============================================================
+// Token consumption (usage.db, fed by the token-usage hook)
+// ============================================================
+
+pub const TOKEN_USAGE_PROGRESS_EVENT: &str = "token-usage-progress";
+
+/// `from` / `to` are local calendar days (`YYYY-MM-DD`, empty = unbounded);
+/// `project` an exact project label, empty for all.
+fn token_filter(from: String, to: String, project: String) -> crate::token_usage::Filter {
+    crate::token_usage::Filter { from, to, project }
+}
+
+/// Database presence and hook state — what the tab needs before anything else.
+#[tauri::command]
+pub async fn token_usage_status() -> Result<crate::token_usage::TokenUsageStatus> {
+    joined(tauri::async_runtime::spawn_blocking(crate::token_usage::status).await)?
+}
+
+/// Install, update or repair the SessionEnd hook. Rewrites `settings.json`
+/// (partial update) and `~/.claude/hooks/scripts/token-usage.py`.
+#[tauri::command]
+pub async fn token_hook_install() -> Result<crate::token_hook::HookStatus> {
+    tracing::info!("token_hook_install");
+    joined(tauri::async_runtime::spawn_blocking(crate::token_hook::install).await)?
+}
+
+/// Build or bring `usage.db` up to date by running the hook's own script.
+/// Emits `token-usage-progress` (`{done, total}`) while it runs.
+#[tauri::command]
+pub async fn token_usage_ingest(app: AppHandle) -> Result<u64> {
+    joined(
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::token_usage::run_ingest(|p| {
+                if let Err(e) = app.emit(TOKEN_USAGE_PROGRESS_EVENT, &p) {
+                    tracing::debug!("emit {TOKEN_USAGE_PROGRESS_EVENT} failed (ignored): {e}");
+                }
+            })
+        })
+        .await,
+    )?
+}
+
+#[tauri::command]
+pub async fn token_usage_report(
+    from: String,
+    to: String,
+    project: String,
+) -> Result<crate::token_usage::TokenReport> {
+    let filter = token_filter(from, to, project);
+    joined(tauri::async_runtime::spawn_blocking(move || crate::token_usage::report(&filter)).await)?
+}
+
+#[tauri::command]
+pub async fn token_export_html(
+    path: String,
+    from: String,
+    to: String,
+    project: String,
+) -> Result<String> {
+    let filter = token_filter(from, to, project);
+    joined(
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::token_export::export_html(&path, &filter)
+        })
+        .await,
+    )?
+}
+
+#[tauri::command]
+pub async fn token_export_xlsx(
+    path: String,
+    from: String,
+    to: String,
+    project: String,
+) -> Result<String> {
+    let filter = token_filter(from, to, project);
+    joined(
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::token_export::export_xlsx(&path, &filter)
+        })
+        .await,
+    )?
+}

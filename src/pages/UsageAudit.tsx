@@ -4,7 +4,11 @@
 // (défaut : J-30 → aujourd'hui) : top 3 des plugins, plugins installés non
 // utilisés, détail des skills (nb d'utilisations + projets). Un bouton exporte
 // le tout en .xlsx multi-onglets.
-import { useMemo, useState } from "react";
+//
+// Second onglet, « Consommation de tokens » (`?tab=tokens`) : voir
+// TokenUsageTab, chargé à part pour rester hors du chunk de cet onglet-ci.
+import { lazy, Suspense, useMemo, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   BarChart3,
   Bot,
@@ -112,7 +116,71 @@ function TopPluginCard({ rank, p }: { rank: number; p: PluginUsage }) {
   );
 }
 
+const TokenUsageTab = lazy(() =>
+  import("@/pages/TokenUsageTab").then((m) => ({ default: m.TokenUsageTab }))
+);
+
+type AuditTab = "plugins" | "tokens";
+
+function AuditTabs({ tab, onChange }: { tab: AuditTab; onChange: (t: AuditTab) => void }) {
+  return (
+    <div role="tablist" className="ml-2 flex shrink-0 items-center gap-1">
+      {(
+        [
+          ["plugins", "Plugins & skills"],
+          ["tokens", "Consommation de tokens"],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={tab === id}
+          onClick={() => onChange(id)}
+          className={cn(
+            "rounded-md px-2.5 py-1 text-xs transition-colors",
+            tab === id
+              ? "bg-primary/10 font-medium text-primary"
+              : "text-muted-foreground hover:bg-accent"
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function UsageAuditPage() {
+  // In the URL, so a link (or the command palette) can land on either tab and
+  // the choice survives the page being unmounted.
+  const [params, setParams] = useSearchParams();
+  const tab: AuditTab = params.get("tab") === "tokens" ? "tokens" : "plugins";
+  const tabs = (
+    <AuditTabs
+      tab={tab}
+      onChange={(t) => setParams(t === "tokens" ? { tab: "tokens" } : {}, { replace: true })}
+    />
+  );
+
+  if (tab === "tokens") {
+    return (
+      <Suspense
+        fallback={
+          <div className="panel flex flex-1 items-center gap-2 px-6 py-5 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Chargement…
+          </div>
+        }
+      >
+        <TokenUsageTab tabs={tabs} />
+      </Suspense>
+    );
+  }
+  return <PluginsAudit tabs={tabs} />;
+}
+
+function PluginsAudit({ tabs }: { tabs: ReactNode }) {
   const push = useNotifications((s) => s.push);
   const qc = useQueryClient();
 
@@ -181,6 +249,7 @@ export function UsageAuditPage() {
       <div className={PAGE_HEADER}>
         <BarChart3 className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="shrink-0 text-sm font-semibold">Audit d'utilisation</h2>
+        {tabs}
         {data && (
           <Badge variant="outline" className="shrink-0">
             {data.skills.length} skill{data.skills.length > 1 ? "s" : ""} ·{" "}

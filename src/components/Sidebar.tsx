@@ -96,9 +96,9 @@ const NAV: NavGroup[] = [
       {
         to: "/audit",
         label: "Audit d'utilisation",
-        subtitle: "Usage réel des plugins & skills",
+        subtitle: "Plugins, skills & tokens",
         tooltip:
-          "Audit d'utilisation — top plugins, plugins non utilisés et détail des skills (nb d'utilisations + projets), sur une plage de dates, avec export Excel. Reconstruit depuis les transcripts de session locaux.",
+          "Audit d'utilisation — top plugins, plugins non utilisés et détail des skills (nb d'utilisations + projets), et consommation de tokens par projet / jour / semaine / mois avec les limites atteintes. Exports Excel et HTML. Reconstruit depuis les transcripts de session locaux.",
         icon: BarChart3,
       },
       {
@@ -313,6 +313,9 @@ export function Sidebar() {
             // Recompute the usage audit (dashboard top-3 skills + audit page)
             // from the transcripts — the index re-parses only changed files.
             qc.invalidateQueries({ queryKey: ["usage-audit"] });
+            // Re-read usage.db (cheap, read-only); feeding it stays the hook's
+            // job or the tab's own Actualiser button.
+            qc.invalidateQueries({ queryKey: ["token-usage"] });
             // On the Suivi Marketplace tab, also refresh the (network-heavy) PR
             // tracking — this button replaces the tab's own refresh button.
             if (useTrackingView.getState().active) {

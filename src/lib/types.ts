@@ -755,3 +755,92 @@ export interface UsageReport {
   /** Skill usage grouped by project, ranked by total desc. */
   projects: ProjectAggregate[];
 }
+
+// --- Token consumption (usage.db, fed by the token-usage hook) ---
+
+export type HookState = "missing" | "installed" | "legacy" | "broken";
+
+export interface HookStatus {
+  state: HookState;
+  /** Registered SessionEnd command line, verbatim. */
+  command: string | null;
+  python: string | null;
+  script: string | null;
+  /** Interpreter the app would use to install the hook, if one was found. */
+  pythonFound: string | null;
+  detail: string | null;
+}
+
+export interface TokenUsageStatus {
+  usageDirExists: boolean;
+  dbExists: boolean;
+  dbPath: string;
+  messageCount: number | null;
+  /** `DD/MM/YYYY HH:MM`, local. */
+  lastMessageAt: string | null;
+  /** Set when the file exists but could not be read. */
+  dbError: string | null;
+  hook: HookStatus;
+}
+
+export interface IngestProgress {
+  done: number;
+  total: number;
+}
+
+export interface TokenBucket {
+  /** Month (`YYYY-MM`), ISO week (`YYYY-Sxx`), day (`YYYY-MM-DD`) or session
+   *  id; empty for the per-project view. */
+  period: string;
+  label: string;
+  calls: number;
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+  limits: number;
+  /** `DD/MM/YYYY HH:MM` of the first and last call. */
+  start: string;
+  end: string;
+  durationMin: number;
+  /** First user prompt, sessions only. */
+  title: string;
+}
+
+export interface TokenLimitEvent {
+  at: string;
+  label: string;
+  sessionId: string;
+  title: string;
+  text: string;
+}
+
+export interface TokenTotals {
+  calls: number;
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+}
+
+export interface TokenReport {
+  generatedAt: string;
+  firstAt: string | null;
+  lastAt: string | null;
+  totals: TokenTotals;
+  sessionCount: number;
+  /** `YYYY-MM` of today, and "output + cache écrit" within it. */
+  currentMonth: string;
+  currentMonthWeight: number;
+  projects: TokenBucket[];
+  months: TokenBucket[];
+  weeks: TokenBucket[];
+  days: TokenBucket[];
+  /** Newest first, capped; `sessionsTotal` is the full count. */
+  sessions: TokenBucket[];
+  sessionsTotal: number;
+  /** Newest first. */
+  limits: TokenLimitEvent[];
+  /** Every project in the database, whatever the filter. */
+  projectLabels: string[];
+}
