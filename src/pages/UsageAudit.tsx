@@ -250,16 +250,6 @@ function PluginsAudit({ tabs }: { tabs: ReactNode }) {
         <BarChart3 className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="shrink-0 text-sm font-semibold">Audit d'utilisation</h2>
         {tabs}
-        {data && (
-          <Badge variant="outline" className="shrink-0">
-            {data.skills.length} skill{data.skills.length > 1 ? "s" : ""} ·{" "}
-            {data.totalEvents} invocation{data.totalEvents > 1 ? "s" : ""}
-          </Badge>
-        )}
-        <span className="min-w-0 truncate text-xs text-muted-foreground">
-          Usage réel reconstruit depuis les transcripts de session, tous projets
-          confondus.
-        </span>
         <Button
           size="sm"
           className="ml-auto h-8 shrink-0 px-2 text-xs"

@@ -98,7 +98,7 @@ const NAV: NavGroup[] = [
         label: "Audit d'utilisation",
         subtitle: "Plugins, skills & tokens",
         tooltip:
-          "Audit d'utilisation — top plugins, plugins non utilisés et détail des skills (nb d'utilisations + projets), et consommation de tokens par projet / jour / semaine / mois avec les limites atteintes. Exports Excel et HTML. Reconstruit depuis les transcripts de session locaux.",
+          "Audit d'utilisation — top plugins, plugins non utilisés et détail des skills (nb d'utilisations + projets), et consommation de tokens par projet et par session avec les limites atteintes. Exports Excel et HTML. Reconstruit depuis les transcripts de session locaux.",
         icon: BarChart3,
       },
       {

@@ -3,7 +3,7 @@
 // Lit ~/.claude/usage/usage.db, alimentée par le hook SessionEnd
 // `token-usage.py`. L'app n'écrit jamais dans la base : quand il faut la créer
 // (première ouverture) ou la mettre à jour (« Actualiser »), elle lance le même
-// script que le hook. Vues par projet, mois, semaine, jour et session, limites
+// script que le hook. Vues par projet et par session, limites
 // atteintes, et deux exports (HTML charte AlmaviaCX, Excel).
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -19,7 +19,6 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -71,13 +70,12 @@ const PRESETS = [
   { id: "all", label: "Tout", days: null },
 ] as const;
 
-type View = "projects" | "months" | "weeks" | "days" | "sessions" | "limits";
+// No month / week / day views: the period filter above already narrows the
+// range, and those tables only re-sliced it.
+type View = "projects" | "sessions" | "limits";
 
 const VIEWS: { id: View; label: string }[] = [
   { id: "projects", label: "Projets" },
-  { id: "months", label: "Mois" },
-  { id: "weeks", label: "Semaines" },
-  { id: "days", label: "Jours" },
   { id: "sessions", label: "Sessions" },
   { id: "limits", label: "Limites" },
 ];
@@ -212,8 +210,6 @@ function UsageTable({
   rows: TokenBucket[];
 }) {
   const peak = rows.reduce((m, b) => Math.max(m, weight(b)), 0);
-  const periodHeader =
-    view === "months" ? "Mois" : view === "weeks" ? "Semaine" : view === "days" ? "Jour" : null;
 
   if (rows.length === 0) {
     return <p className="text-sm text-muted-foreground">Aucune consommation sur la période.</p>;
@@ -231,7 +227,6 @@ function UsageTable({
                   <th className={cn(TH, "text-right")}>Durée</th>
                 </>
               )}
-              {periodHeader && <th className={TH}>{periodHeader}</th>}
               <th className={TH}>Projet</th>
               {view === "sessions" && <th className={TH}>Première demande</th>}
               <th className={cn(TH, "text-right")}>Appels</th>
@@ -259,9 +254,6 @@ function UsageTable({
                     <td className="whitespace-nowrap px-3 py-1.5 tabular-nums">{b.start}</td>
                     <td className={NUM}>{b.durationMin} min</td>
                   </>
-                )}
-                {periodHeader && (
-                  <td className="whitespace-nowrap px-3 py-1.5 tabular-nums">{b.period}</td>
                 )}
                 <td className="whitespace-nowrap px-3 py-1.5 font-medium">{b.label}</td>
                 {view === "sessions" && (
@@ -470,12 +462,6 @@ export function TokenUsageTab({ tabs }: { tabs: ReactNode }) {
     switch (view) {
       case "projects":
         return data.projects;
-      case "months":
-        return data.months;
-      case "weeks":
-        return data.weeks;
-      case "days":
-        return data.days;
       case "sessions":
         return data.sessions;
       default:
@@ -502,12 +488,6 @@ export function TokenUsageTab({ tabs }: { tabs: ReactNode }) {
         <Coins className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h2 className="shrink-0 text-sm font-semibold">Audit d'utilisation</h2>
         {tabs}
-        {data && (
-          <Badge variant="outline" className="shrink-0">
-            {fmtInt(data.totals.calls)} appel{data.totals.calls > 1 ? "s" : ""} ·{" "}
-            {data.sessionCount} session{data.sessionCount > 1 ? "s" : ""}
-          </Badge>
-        )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <Button
             size="sm"
